@@ -1,5 +1,8 @@
-export const BASE_URL = 'http://192.168.0.9:5000/api';
-export const MEDIA_BASE = 'http://192.168.0.9:5000';
+// export const BASE_URL = 'https://api.raralive.in/api';
+// export const MEDIA_BASE = 'https://api.raralive.in';
+
+export const BASE_URL = 'http://192.168.0.6:5000/api';
+export const MEDIA_BASE = 'http://192.168.0.6:5000';
 
 export type ApiResult<T = unknown> =
   | { ok: true; data: T }
@@ -14,9 +17,15 @@ export function register401Handler(fn: () => void, getToken: () => string | null
 }
 // GET requests are background fetches — a 401 means "no access", not "session expired"
 // Only log out on 401 for mutating requests (POST/PUT/PATCH/DELETE)
-function handle401(path: string, method: string) {
+const TOKEN_ERROR_MSGS = ['invalid or expired token', 'invalid token', 'expired token', 'token expired', 'jwt expired', 'unauthorized'];
+
+function isTokenError(status: number, message: string): boolean {
+  if (status === 401) return true;
+  return TOKEN_ERROR_MSGS.some(m => message.toLowerCase().includes(m));
+}
+
+function handle401(path: string) {
   if (path.startsWith('/auth/')) return;
-  if (method === 'GET') return;
   if (!_getToken()) return;
   _on401?.();
 }
@@ -25,16 +34,16 @@ async function request<T>(
   path: string,
   options: RequestInit = {},
 ): Promise<ApiResult<T>> {
-  const method = (options.method ?? 'GET').toUpperCase();
   try {
     const res = await fetch(`${BASE_URL}${path}`, {
       headers: { 'Content-Type': 'application/json', ...options.headers },
       ...options,
     });
     const json = await res.json().catch(() => ({}));
-    if (res.status === 401) { handle401(path, method); return { ok: false, message: json.message || 'Invalid credentials.' }; }
+    const msg = json.message || '';
+    if (isTokenError(res.status, msg)) { handle401(path); return { ok: false, message: msg || 'Session expired. Please log in again.' }; }
     if (!res.ok || !json.success) {
-      return { ok: false, message: json.message || 'Something went wrong.' };
+      return { ok: false, message: msg || 'Something went wrong.' };
     }
     return { ok: true, data: json.data };
   } catch {
@@ -54,7 +63,7 @@ async function requestMultipart<T>(
       body: formData,
     });
     const json = await res.json().catch(() => ({}));
-    if (res.status === 401) { handle401(path, 'PATCH'); return { ok: false, message: json.message || 'Session expired. Please log in again.' }; }
+    if (isTokenError(res.status, json.message || '')) { handle401(path); return { ok: false, message: json.message || 'Session expired. Please log in again.' }; }
     if (!res.ok || !json.success) {
       return { ok: false, message: json.message || 'Something went wrong.' };
     }
@@ -136,8 +145,10 @@ export type ProfilePayload = {
   username?: string;
   gender?: string;
   dateOfBirth?: string;
-  avatarUri?: string; // local file URI
+  avatarUri?: string;
   avatarMimeType?: string;
+  bio?: string;
+  location?: string;
 };
 
 export async function apiCompleteProfile(payload: ProfilePayload, token: string) {
@@ -146,10 +157,11 @@ export async function apiCompleteProfile(payload: ProfilePayload, token: string)
   if (payload.username) form.append('username', payload.username);
   if (payload.gender) form.append('gender', payload.gender);
   if (payload.dateOfBirth) form.append('dateOfBirth', payload.dateOfBirth);
+  if (payload.bio !== undefined) form.append('bio', payload.bio);
+  if (payload.location !== undefined) form.append('location', payload.location);
   if (payload.avatarUri) {
     const filename = payload.avatarUri.split('/').pop() ?? 'avatar.jpg';
     const mime = payload.avatarMimeType ?? 'image/jpeg';
-    // React Native FormData accepts this shape for files
     form.append('avatar', { uri: payload.avatarUri, name: filename, type: mime } as unknown as Blob);
   }
   return requestMultipart('/auth/profile', form, token);

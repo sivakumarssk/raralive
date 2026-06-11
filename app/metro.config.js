@@ -3,8 +3,13 @@ const path = require('path');
 
 const config = getDefaultConfig(__dirname);
 
+// Keep SVG as regular assets so expo-image can render them natively
+const { resolver } = config;
+if (!resolver.assetExts.includes('svg')) {
+  config.resolver = { ...resolver, assetExts: [...resolver.assetExts, 'svg'] };
+}
+
 // Only mock Agora in Expo Go (detected by EXPO_PUBLIC_USE_AGORA_MOCK=true)
-// Dev builds and production builds use the real native module
 const USE_AGORA_MOCK = process.env.EXPO_PUBLIC_USE_AGORA_MOCK === 'true';
 
 if (USE_AGORA_MOCK) {

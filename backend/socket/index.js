@@ -223,6 +223,34 @@ function setupSocket(httpServer) {
 
       io.to(roomId).emit('online_count', { roomId, count: onlineCount(roomId) });
 
+      // Send active reward to the joining user (so BG applies immediately on join/re-join)
+      try {
+        const rewardRow = await db.query(
+          `SELECT t.reward_bg_url, t.reward_frame_url
+           FROM task_progress tp
+           JOIN tasks t ON t.id = tp.task_id
+           WHERE tp.reward_claimed = TRUE
+             AND tp.completed_at >= NOW() - INTERVAL '24 hours'
+             AND (t.reward_bg_url IS NOT NULL OR t.reward_frame_url IS NOT NULL)
+             AND (
+               tp.room_id = $1
+               OR EXISTS (
+                 SELECT 1 FROM room_gift_events rge
+                 WHERE rge.room_id = $1
+                   AND rge.sender_id = tp.user_id
+                   AND rge.created_at >= NOW() - INTERVAL '24 hours'
+               )
+             )
+           ORDER BY tp.completed_at DESC LIMIT 1`,
+          [roomId]
+        );
+        if (rewardRow.rows.length) {
+          const { reward_bg_url, reward_frame_url } = rewardRow.rows[0];
+          console.log(`[SOCKET] sending active reward on join to ${userId}: bg=${reward_bg_url}`);
+          socket.emit('reward_applied', { reward_bg_url, reward_frame_url });
+        }
+      } catch (e) { /* non-fatal */ }
+
       // Join notice
       const joinMsg = {
         id: `join_${socket.id}_${Date.now()}`,
@@ -283,6 +311,7 @@ function setupSocket(httpServer) {
       const giftPayload = parseGiftPayload(trimmed);
       if (giftPayload) {
         const { giftName, toName, imgUrl, bgColor, giftId, coins, qty, senderId, recipientId } = giftPayload;
+        const totalCoins = coins * qty;
 
         // Process wallet transaction
         const result = await processGift({
@@ -333,28 +362,45 @@ function setupSocket(httpServer) {
 
         // Update task progress for sender (coin target + gift-specific tasks)
         try {
+          const todayDow = new Date().getDay();
           const activeTasks = await taskModel.listTasks({ activeOnly: true });
-          for (const task of activeTasks) {
-            // Coin-target task: count total coins gifted
+          const todayTasks = activeTasks.filter(t => (t.day_of_week ?? [0,1,2,3,4,5,6]).includes(todayDow));
+          console.log(`[TASK] gift received: senderId=${senderId} roomId=${roomId} giftId=${giftId} coins=${totalCoins}`);
+          console.log(`[TASK] active tasks today (dow=${todayDow}): ${todayTasks.length} tasks`);
+          todayTasks.forEach(t => console.log(`[TASK]   task id=${t.id} title="${t.title}" target_coins=${t.target_coins} target_gift_id=${t.target_gift_id} reward_bg=${t.reward_bg_url} reward_frame=${t.reward_frame_url}`));
+
+          for (const task of todayTasks) {
+            let updated = null;
             if (task.target_coins) {
-              const updated = await taskModel.incrementProgress(
-                senderId, task.id, task.type, totalCoins, task.target_coins
-              );
-              if (updated.completed && !updated.reward_claimed) {
-                socket.emit('task_completed', { task_id: task.id, title: task.title, reward_gems: task.reward_gems });
-              }
+              updated = await taskModel.incrementProgress(senderId, task.id, totalCoins, task.target_coins, roomId);
+              console.log(`[TASK] incrementProgress(coins) task=${task.id}: progress=${updated?.progress}/${task.target_coins} completed=${updated?.completed} just_completed=${updated?.just_completed} reward_claimed=${updated?.reward_claimed}`);
             }
-            // Gift-specific task: count gifts of that specific type
             if (task.target_gift_id && task.target_gift_id === giftId) {
-              const updated = await taskModel.incrementProgress(
-                senderId, task.id, task.type, qty, task.target_count
-              );
-              if (updated.completed && !updated.reward_claimed) {
-                socket.emit('task_completed', { task_id: task.id, title: task.title, reward_gems: task.reward_gems });
+              updated = await taskModel.incrementProgress(senderId, task.id, qty, task.target_count, roomId);
+              console.log(`[TASK] incrementProgress(gift) task=${task.id}: progress=${updated?.progress}/${task.target_count} completed=${updated?.completed} just_completed=${updated?.just_completed} reward_claimed=${updated?.reward_claimed}`);
+            }
+            if (updated && updated.just_completed) {
+              console.log(`[TASK] task JUST COMPLETED: emitting task_completed to sender and reward_applied to room ${roomId}`);
+              socket.emit('task_completed', {
+                task_id: task.id,
+                title: task.title,
+                reward_bg_url: task.reward_bg_url,
+                reward_frame_url: task.reward_frame_url,
+              });
+              if (task.reward_bg_url || task.reward_frame_url) {
+                console.log(`[TASK] emitting reward_applied to room ${roomId}: bg=${task.reward_bg_url} frame=${task.reward_frame_url}`);
+                io.to(roomId).emit('reward_applied', {
+                  reward_bg_url: task.reward_bg_url,
+                  reward_frame_url: task.reward_frame_url,
+                });
+              } else {
+                console.log(`[TASK] task completed but NO reward visuals (bg/frame both null) — skipping reward_applied`);
               }
+            } else if (updated) {
+              console.log(`[TASK] task NOT just_completed (already was completed or not done yet)`);
             }
           }
-        } catch (e) { console.error('task progress error:', e.message); }
+        } catch (e) { console.error('[TASK] task progress error:', e.message, e.stack); }
 
         // Save to DB
         await saveMessage(roomId, senderId, 'gift', trimmed);

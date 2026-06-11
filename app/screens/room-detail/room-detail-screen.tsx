@@ -1,10 +1,12 @@
 import { Ionicons } from '@expo/vector-icons';
 import { LinearGradient } from 'expo-linear-gradient';
+import { StatusBar } from 'expo-status-bar';
 import { router, useFocusEffect } from 'expo-router';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import {
   BackHandler,
   Image,
+  ImageBackground,
   Keyboard,
   Modal,
   Platform,
@@ -15,11 +17,11 @@ import {
   TouchableOpacity,
   View,
 } from 'react-native';
-import { SafeAreaView } from 'react-native-safe-area-context';
+import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { useAgoraVoice } from '@/hooks/useAgoraVoice';
 import { agoraStore } from '@/store/agora-store';
-import { socketStore, onGiftError, onLevelUp, subscribeSocket, getSocketState } from '@/store/socket-store';
+import { socketStore, onGiftError, onLevelUp, onTaskCompleted, onRewardApplied, subscribeSocket, getSocketState } from '@/store/socket-store';
 import { type IncomingSeatRequest, useRoomSocket } from '@/hooks/useRoomSocket';
 import { BASE_URL, MEDIA_BASE } from '@/services/api';
 import { authStore } from '@/store/auth-store';
@@ -31,9 +33,8 @@ import { CoinBoxModal } from './components/coinbox-modal';
 import { DailyTaskModal } from './components/daily-task-modal';
 import { GiftShopModal } from './components/gift-shop-modal';
 import { GiftFullscreenAnim } from './components/gift-fullscreen-anim';
-import { GiftBar } from './components/gift-tray';
-import { GiftTargetPicker, type GiftTarget } from './components/gift-target-picker';
-import { GiftFlyAnimation, type SlotPosition } from './components/gift-fly-animation';
+import { GiftBar, GiftPickerBar, type GiftTarget } from './components/gift-tray';
+import { GiftFlyAnimation, type FlyItem, type SlotPosition } from './components/gift-fly-animation';
 import { BattleBanner } from './components/battle-banner';
 import { RoomHeader } from './components/room-header';
 import { RoomStage, type HostInfo, type BattleStageInfo } from './components/room-stage';
@@ -70,6 +71,7 @@ function resolveAvatar(url: string | null | undefined): string | undefined {
 }
 
 export function RoomDetailScreen({ roomId = '', onBack }: RoomDetailScreenProps) {
+  const insets = useSafeAreaInsets();
   const scrollRef = useRef<ScrollView>(null);
   const [showDailyTask, setShowDailyTask] = useState(false);
   const [showCoinBox, setShowCoinBox] = useState(false);
@@ -93,8 +95,8 @@ export function RoomDetailScreen({ roomId = '', onBack }: RoomDetailScreenProps)
   const [pendingGift, setPendingGift] = useState<GiftItem | null>(null);
   const [showGiftPicker, setShowGiftPicker] = useState(false);
   const [selectedTargetId, setSelectedTargetId] = useState<string | null>(null);
-  const [flyGift, setFlyGift] = useState<GiftItem | null>(null);
-  const [flyTarget, setFlyTarget] = useState<SlotPosition | null>(null);
+  const [allGifts, setAllGifts] = useState<GiftItem[]>([]);
+  const [flyItems, setFlyItems] = useState<FlyItem[]>([]);
   const slotPositions = useRef<Map<string, SlotPosition>>(new Map());
 
   // Gift shop fullscreen animation
@@ -103,8 +105,38 @@ export function RoomDetailScreen({ roomId = '', onBack }: RoomDetailScreenProps)
   // Room level-up animation
   const [levelUpData, setLevelUpData] = useState<{ level: number } | null>(null);
 
+  // Active reward visuals for this room's host (background + frame, 24h TTL)
+  const [rewardBgUrl, setRewardBgUrl] = useState<string | null>(null);
+  const [rewardFrameUrl, setRewardFrameUrl] = useState<string | null>(null);
+  // Increments to trigger DailyTaskModal task list refresh
+  const [taskRefreshKey, setTaskRefreshKey] = useState(0);
+
   useEffect(() => {
-    const unsub = onLevelUp(level => setLevelUpData({ level }));
+    const unsub = onLevelUp(level => {
+      setLevelUpData({ level });
+      setRoomInfo(prev => prev ? { ...prev, current_level: level } : prev);
+    });
+    return unsub;
+  }, []);
+
+  // Real-time reward visuals — applied immediately when host completes task or claims reward
+  useEffect(() => {
+    const unsub = onRewardApplied(({ reward_bg_url, reward_frame_url }) => {
+      console.log('[ROOM] onRewardApplied triggered: bg=', reward_bg_url, 'frame=', reward_frame_url);
+      const bg = reward_bg_url ? `${MEDIA_BASE}/${reward_bg_url.replace(/^\//, '')}` : null;
+      const frame = reward_frame_url ? `${MEDIA_BASE}/${reward_frame_url.replace(/^\//, '')}` : null;
+      console.log('[ROOM] setting rewardBgUrl=', bg, 'rewardFrameUrl=', frame);
+      setRewardBgUrl(bg);
+      setRewardFrameUrl(frame);
+    });
+    return unsub;
+  }, []);
+
+  // When a task completes, refresh the task list in the modal
+  useEffect(() => {
+    const unsub = onTaskCompleted(() => {
+      setTaskRefreshKey(k => k + 1);
+    });
     return unsub;
   }, []);
 
@@ -189,12 +221,20 @@ export function RoomDetailScreen({ roomId = '', onBack }: RoomDetailScreenProps)
       const endsAtMs = battleEndsAtRef.current;
       if (!endsAtMs) return;
       const secsLeft = Math.max(0, Math.floor((endsAtMs - Date.now()) / 1000));
+      if (secsLeft === 0) {
+        // Battle ended — clear all battle UI and coin counts
+        battleEndsAtRef.current = null;
+        setBattleStageInfo(null);
+        setCoinsByUserId(new Map());
+        seenGiftIds.current.clear();
+        return;
+      }
       const m = Math.floor(secsLeft / 60);
       const s = secsLeft % 60;
       setBattleStageInfo(prev => prev ? {
         ...prev,
         timeDisplay: `${String(m).padStart(2, '0')}:${String(s).padStart(2, '0')}`,
-        isFinished: secsLeft === 0,
+        isFinished: false,
       } : prev);
     };
     const id = setInterval(tick, 1000);
@@ -221,20 +261,31 @@ export function RoomDetailScreen({ roomId = '', onBack }: RoomDetailScreenProps)
     return unsub;
   }, []);
 
-  // Insufficient coins on gift → navigate to wallet AFTER any fly animation finishes
-  const pendingWalletNav = useRef(false);
+  // Fetch all gifts for the inline picker
+  useEffect(() => {
+    fetch(`${BASE_URL}/gifts/public`)
+      .then(r => r.json())
+      .then(j => { if (j.success) setAllGifts(j.data); })
+      .catch(() => {});
+  }, []);
+
+  // Cached coin balance — fetched on mount and refreshed after each gift send
+  const coinBalanceRef = useRef<number>(9999);
+  useEffect(() => {
+    const token = authStore.getToken();
+    if (!token) return;
+    fetch(`${BASE_URL}/wallet/me`, { headers: { Authorization: `Bearer ${token}` } })
+      .then(r => r.json())
+      .then(j => { if (j.success) coinBalanceRef.current = j.data.coins ?? 0; })
+      .catch(() => {});
+  }, []);
 
   useEffect(() => {
     const unsub = onGiftError(() => {
-      if (flyGift) {
-        // Animation is active — defer navigation until onDone fires
-        pendingWalletNav.current = true;
-      } else {
-        router.push('/wallet' as any);
-      }
+      router.push('/wallet' as any);
     });
     return unsub;
-  }, [flyGift]);
+  }, []);
 
   const {
     messages, onlineCount,
@@ -276,6 +327,32 @@ export function RoomDetailScreen({ roomId = '', onBack }: RoomDetailScreenProps)
       .then(r => r.json())
       .then(json => { if (json.success) setRoomInfo(json.data); })
       .catch(() => {});
+  }, [roomId]);
+
+  // Fetch active reward visuals for this room's host
+  useEffect(() => {
+    if (!roomId) return;
+    const token = authStore.getToken();
+    console.log('[ROOM] fetching active-reward for roomId=', roomId);
+    fetch(`${BASE_URL}/tasks/active-reward?room_id=${roomId}`, {
+      headers: token ? { Authorization: `Bearer ${token}` } : {},
+    })
+      .then(r => r.json())
+      .then(json => {
+        console.log('[ROOM] active-reward response:', JSON.stringify(json));
+        if (json.success && json.data) {
+          const bg = json.data.reward_bg_url;
+          const frame = json.data.reward_frame_url;
+          const bgUrl = bg ? `${MEDIA_BASE}/${bg.replace(/^\//, '')}` : null;
+          const frameUrl = frame ? `${MEDIA_BASE}/${frame.replace(/^\//, '')}` : null;
+          console.log('[ROOM] applying persisted reward bg=', bgUrl, 'frame=', frameUrl);
+          setRewardBgUrl(bgUrl);
+          setRewardFrameUrl(frameUrl);
+        } else {
+          console.log('[ROOM] no active reward found');
+        }
+      })
+      .catch(e => console.error('[ROOM] active-reward fetch error:', e));
   }, [roomId]);
 
   // Keyboard — track height to push input bar up, and visibility to hide GiftBar
@@ -340,23 +417,32 @@ export function RoomDetailScreen({ roomId = '', onBack }: RoomDetailScreenProps)
     setShowGiftPicker(true);
   };
 
-  const handleGiftSend = () => {
+  const handleGiftSend = (qty: number = 1) => {
     if (!pendingGift || !selectedTargetId) return;
-    const pos = slotPositions.current.get(selectedTargetId) ?? null;
+    const totalCost = pendingGift.coins * qty;
+
+    // Check balance before doing anything — no animation if insufficient
+    if (coinBalanceRef.current < totalCost) {
+      setShowGiftPicker(false);
+      router.push('/wallet' as any);
+      return;
+    }
+
     const target = giftTargets.find(t => t.userId === selectedTargetId);
     const hostUserId = roomInfo?.host_user_id ?? selectedTargetId;
     // Encode all data the socket needs for wallet debit + gift event
     sendMessage(
       `__gift__🎁__to__${target?.name ?? 'someone'}__img__${pendingGift.image_url ?? ''}__bg__${pendingGift.bg_color}` +
-      `__giftid__${pendingGift.id}__coins__${pendingGift.coins}__qty__1` +
+      `__giftid__${pendingGift.id}__coins__${pendingGift.coins}__qty__${qty}` +
       `__senderid__${currentUserId}__recipientid__${hostUserId}`
     );
-    setFlyGift(null);
-    setFlyTarget(null);
-    requestAnimationFrame(() => {
-      setFlyGift(pendingGift);
-      setFlyTarget(pos);
-    });
+    // Optimistically deduct from local balance
+    coinBalanceRef.current = Math.max(0, coinBalanceRef.current - totalCost);
+
+    setFlyItems(prev => [
+      ...prev,
+      { id: `${Date.now()}-${Math.random()}`, gift: pendingGift, qty },
+    ]);
   };
 
   const handleShare = () => {
@@ -396,8 +482,8 @@ export function RoomDetailScreen({ roomId = '', onBack }: RoomDetailScreenProps)
     }
   };
 
-  return (
-    <SafeAreaView style={styles.root} edges={['top', 'bottom']}>
+  const screenContent = (
+    <>
       <RoomHeader
         name={roomInfo?.room_name ?? 'Loading...'}
         agencyName={roomInfo?.agency_name}
@@ -405,9 +491,10 @@ export function RoomDetailScreen({ roomId = '', onBack }: RoomDetailScreenProps)
         level={roomInfo?.current_level ?? 0}
         roomId={roomId}
         totalCoins={roomInfo?.total_coins_received ?? 0}
+        hasRoomBg={!!rewardBgUrl}
         onBack={handleBackPress}
         onShare={handleShare}
-        onMore={() => router.push('/notifications' as any)}
+        onMore={() => {}}
       />
 
       <RoomStage
@@ -424,12 +511,14 @@ export function RoomDetailScreen({ roomId = '', onBack }: RoomDetailScreenProps)
         onSlotLayout={(userId, x, y) => { slotPositions.current.set(userId, { x, y }); }}
         battleInfo={battleStageInfo}
         coinsByUserId={coinsByUserId}
+        hasRoomBg={!!rewardBgUrl}
+        rewardFrameUrl={rewardFrameUrl}
       />
 
       <BattleBanner roomId={roomId} />
 
       {/* Chat area — scroll only, no floating icons here */}
-      <View style={styles.chatArea}>
+      <View style={[styles.chatArea, rewardBgUrl && { backgroundColor: 'transparent' }]}>
         <ScrollView
           ref={scrollRef}
           style={styles.flex}
@@ -457,12 +546,13 @@ export function RoomDetailScreen({ roomId = '', onBack }: RoomDetailScreenProps)
           />
         )}
         {!keyboardVisible && (
-          <GiftBar onGiftPress={handleGiftPress} />
+          <GiftBar onGiftPress={handleGiftPress} hasRoomBg={!!rewardBgUrl} />
         )}
         <ChatInputBar
           onSend={handleSend}
           onGiftOpen={() => setShowGiftShop(true)}
           onBattlePress={() => setShowBattle(true)}
+          hasRoomBg={!!rewardBgUrl}
         />
       </View>
 
@@ -488,7 +578,7 @@ export function RoomDetailScreen({ roomId = '', onBack }: RoomDetailScreenProps)
         ))}
       </View>
 
-      <DailyTaskModal visible={showDailyTask} onClose={() => setShowDailyTask(false)} roomId={roomId} />
+      <DailyTaskModal visible={showDailyTask} onClose={() => setShowDailyTask(false)} roomId={roomId} refreshKey={taskRefreshKey} />
       <CoinBoxModal visible={showCoinBox} onClose={() => setShowCoinBox(false)} />
       <BattleModal visible={showBattle} onClose={() => setShowBattle(false)} roomId={roomId} />
       <GiftShopModal
@@ -522,30 +612,26 @@ export function RoomDetailScreen({ roomId = '', onBack }: RoomDetailScreenProps)
       <RoomLevelUp
         visible={!!levelUpData}
         level={levelUpData?.level ?? 0}
+        roomName={roomInfo?.room_name ?? ''}
+        roomAvatarUrl={roomInfo?.room_image_url ?? null}
         onDone={() => setLevelUpData(null)}
       />
 
-      <GiftTargetPicker
+      <GiftPickerBar
         visible={showGiftPicker}
         gift={pendingGift}
+        gifts={allGifts}
         targets={giftTargets}
-        selectedId={selectedTargetId}
-        onSelect={setSelectedTargetId}
+        selectedTargetId={selectedTargetId}
+        onSelectTarget={setSelectedTargetId}
+        onGiftChange={setPendingGift}
         onSend={handleGiftSend}
         onClose={() => setShowGiftPicker(false)}
       />
 
       <GiftFlyAnimation
-        gift={flyGift}
-        targetPos={flyTarget}
-        onDone={() => {
-          setFlyGift(null);
-          setFlyTarget(null);
-          if (pendingWalletNav.current) {
-            pendingWalletNav.current = false;
-            router.push('/wallet' as any);
-          }
-        }}
+        items={flyItems}
+        onItemDone={id => setFlyItems(prev => prev.filter(i => i.id !== id))}
       />
 
       {/* Exit / Minimize modal */}
@@ -602,7 +688,31 @@ export function RoomDetailScreen({ roomId = '', onBack }: RoomDetailScreenProps)
           </TouchableOpacity>
         </View>
       </Modal>
-    </SafeAreaView>
+    </>
+  );
+
+  const innerStyle = { flex: 1, paddingTop: insets.top, paddingBottom: insets.bottom };
+
+  if (rewardBgUrl) {
+    return (
+      <>
+        <StatusBar style="dark" backgroundColor="transparent" translucent />
+        <ImageBackground source={{ uri: rewardBgUrl }} style={styles.flex} resizeMode="cover">
+          <View style={[styles.flex, styles.bgOverlay, innerStyle]}>
+            {screenContent}
+          </View>
+        </ImageBackground>
+      </>
+    );
+  }
+
+  return (
+    <>
+      <StatusBar style="dark" backgroundColor="#FFFFFF" />
+      <SafeAreaView style={[styles.root, styles.defaultBg]} edges={['top', 'bottom']}>
+        {screenContent}
+      </SafeAreaView>
+    </>
   );
 }
 
@@ -638,8 +748,10 @@ function SeatRequestBanner({ request, onAccept, onReject }: {
 }
 
 const styles = StyleSheet.create({
-  root: { flex: 1, backgroundColor: '#FFFFFF' },
+  root: { flex: 1, backgroundColor: 'transparent' },
+  defaultBg: { flex: 1, backgroundColor: '#FFFFFF' },
   flex: { flex: 1 },
+  bgOverlay: { backgroundColor: 'rgba(0,0,0,0.25)' },
   scrollContent: { paddingBottom: 8 },
   chatArea: {
     flex: 1,
@@ -663,6 +775,7 @@ const styles = StyleSheet.create({
     flexDirection: 'column',
     alignItems: 'center',
     gap: 6,
+    // picker bar zIndex: 30 sits above this when open
   },
   floatingItem: { alignItems: 'center', gap: 4 },
   floatingBtn: { width: 42, height: 42 },

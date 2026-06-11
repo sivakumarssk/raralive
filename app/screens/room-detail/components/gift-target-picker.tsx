@@ -1,9 +1,8 @@
 import { Ionicons } from '@expo/vector-icons';
-import { useEffect, useRef } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import {
   Animated,
   Image,
-  Modal,
   ScrollView,
   StyleSheet,
   Text,
@@ -25,24 +24,24 @@ export type GiftTarget = {
 type Props = {
   visible: boolean;
   gift: GiftItem | null;
-  targets: GiftTarget[];         // host first, then on-stage users
+  targets: GiftTarget[];
   selectedId: string | null;
   onSelect: (id: string) => void;
-  onSend: () => void;
+  onSend: (qty: number) => void;
   onClose: () => void;
+  onGiftChange?: (gift: GiftItem) => void;
+  allGifts?: GiftItem[];
 };
 
-function resolveAvatar(url: string | null | undefined) {
+function resolveImg(url: string | null | undefined) {
   if (!url) return null;
   try { return `${MEDIA_BASE}${new URL(url).pathname}`; }
   catch { return `${MEDIA_BASE}/${url.replace(/^\//, '')}`; }
 }
 
 function Avatar({ url, name, size = 40 }: { url: string | null; name: string; size?: number }) {
-  const uri = resolveAvatar(url);
-  if (uri) {
-    return <Image source={{ uri }} style={{ width: size, height: size, borderRadius: size / 2 }} />;
-  }
+  const uri = resolveImg(url);
+  if (uri) return <Image source={{ uri }} style={{ width: size, height: size, borderRadius: size / 2 }} />;
   return (
     <View style={[s.avatarFallback, { width: size, height: size, borderRadius: size / 2 }]}>
       <Text style={s.avatarInitial}>{name[0]?.toUpperCase()}</Text>
@@ -50,141 +49,221 @@ function Avatar({ url, name, size = 40 }: { url: string | null; name: string; si
   );
 }
 
-export function GiftTargetPicker({ visible, gift, targets, selectedId, onSelect, onSend, onClose }: Props) {
-  const slideY = useRef(new Animated.Value(200)).current;
+export function GiftTargetPicker({ visible, gift, targets, selectedId, onSelect, onSend, onGiftChange, allGifts = [] }: Props) {
+  const slideY = useRef(new Animated.Value(220)).current;
+  const [qty, setQty] = useState(1);
 
   useEffect(() => {
     if (visible) {
-      Animated.spring(slideY, { toValue: 0, useNativeDriver: true, tension: 70, friction: 12 }).start();
+      setQty(1);
+      Animated.spring(slideY, { toValue: 0, useNativeDriver: true, tension: 72, friction: 13 }).start();
     } else {
-      slideY.setValue(200);
+      Animated.timing(slideY, { toValue: 220, duration: 180, useNativeDriver: true }).start();
     }
   }, [visible]);
 
-  if (!gift) return null;
+  // Reset qty when gift changes
+  useEffect(() => { setQty(1); }, [gift?.id]);
 
-  const imgUri = gift.image_url
-    ? `${MEDIA_BASE}/${gift.image_url.replace(/^\//, '')}`
-    : null;
+  if (!gift && !visible) return null;
+
+  const resolvedGift = gift;
+  const imgUri = resolvedGift?.image_url ? resolveImg(resolvedGift.image_url) : null;
+  const totalCoins = (resolvedGift?.coins ?? 0) * qty;
 
   return (
-    <Modal visible={visible} transparent animationType="none" onRequestClose={onClose}>
-      <TouchableOpacity style={s.backdrop} activeOpacity={1} onPress={onClose} />
+    <Animated.View
+      style={[s.container, { transform: [{ translateY: slideY }] }]}
+      pointerEvents={visible ? 'box-none' : 'none'}>
 
-      <Animated.View style={[s.sheet, { transform: [{ translateY: slideY }] }]}>
-        {/* Handle */}
-        <View style={s.handle} />
-
-        {/* Gift preview row */}
-        <View style={s.giftRow}>
-          <View style={[s.giftCircle, { backgroundColor: gift.bg_color }]}>
-            {imgUri
-              ? <Image source={{ uri: imgUri }} style={s.giftImg} resizeMode="contain" />
-              : <Ionicons name="gift-outline" size={20} color="#7A0EED" />
-            }
-          </View>
-          <View style={{ flex: 1 }}>
-            <Text style={s.giftName}>{gift.name}</Text>
+      {/* ── Top row: gift info + qty + send ── */}
+      <View style={s.topRow}>
+        {/* Left: gift image + name + coins */}
+        <View style={s.giftInfo}>
+          {imgUri
+            ? <Image source={{ uri: imgUri }} style={s.giftImg} resizeMode="contain" />
+            : <Ionicons name="gift-outline" size={28} color="#7A0EED" />}
+          <View>
+            <Text style={s.giftName} numberOfLines={1}>{resolvedGift?.name}</Text>
             <View style={s.coinRow}>
-              <Image source={COIN_IMG} style={s.coinImg} resizeMode="contain" />
-              <Text style={s.coinAmt}>{gift.coins >= 1000 ? `${gift.coins / 1000}K` : gift.coins} coins</Text>
+              <Image source={COIN_IMG} style={s.coinIcon} resizeMode="contain" />
+              <Text style={s.coinAmt}>
+                {totalCoins >= 1000 ? `${(totalCoins / 1000).toFixed(1)}K` : totalCoins}
+              </Text>
             </View>
           </View>
-          <Text style={s.label}>Send to</Text>
         </View>
 
-        {/* User list */}
-        <ScrollView horizontal showsHorizontalScrollIndicator={false} style={s.userScroll} contentContainerStyle={s.userList}>
-          {targets.map(t => {
-            const selected = selectedId === t.userId;
+        {/* Center: qty control */}
+        <View style={s.qtyRow}>
+          <TouchableOpacity
+            onPress={() => setQty(q => Math.max(1, q - 1))}
+            style={s.qtyBtn} activeOpacity={0.7} hitSlop={8}>
+            <Ionicons name="remove" size={16} color="#7A0EED" />
+          </TouchableOpacity>
+          <Text style={s.qtyLabel}>×{qty}</Text>
+          <TouchableOpacity
+            onPress={() => setQty(q => q + 1)}
+            style={s.qtyBtn} activeOpacity={0.7} hitSlop={8}>
+            <Ionicons name="add" size={16} color="#7A0EED" />
+          </TouchableOpacity>
+        </View>
+
+        {/* Right: send button */}
+        <TouchableOpacity
+          style={[s.sendBtn, !selectedId && s.sendBtnDisabled]}
+          onPress={() => { if (selectedId) onSend(qty); }}
+          activeOpacity={0.85}
+          disabled={!selectedId}>
+          <Ionicons name="send" size={14} color="#fff" />
+          <Text style={s.sendBtnText}>Send</Text>
+        </TouchableOpacity>
+      </View>
+
+      {/* ── Targets (horizontal) ── */}
+      <ScrollView
+        horizontal
+        showsHorizontalScrollIndicator={false}
+        style={s.targetScroll}
+        contentContainerStyle={s.targetList}>
+        {targets.map(t => {
+          const selected = selectedId === t.userId;
+          return (
+            <TouchableOpacity
+              key={t.userId}
+              onPress={() => onSelect(t.userId)}
+              activeOpacity={0.8}
+              style={s.targetItem}>
+              <View style={[s.avatarWrap, selected && s.avatarWrapSelected]}>
+                <Avatar url={t.avatarUrl} name={t.name} size={42} />
+                {t.isHost && (
+                  <View style={s.hostBadge}>
+                    <Text style={s.hostBadgeText}>HOST</Text>
+                  </View>
+                )}
+                {selected && (
+                  <View style={s.checkBadge}>
+                    <Ionicons name="checkmark" size={9} color="#fff" />
+                  </View>
+                )}
+              </View>
+              <Text style={[s.targetName, selected && s.targetNameSelected]} numberOfLines={1}>
+                {t.name}
+              </Text>
+            </TouchableOpacity>
+          );
+        })}
+      </ScrollView>
+
+      {/* ── Gift picker (horizontal) ── */}
+      {allGifts.length > 0 && (
+        <ScrollView
+          horizontal
+          showsHorizontalScrollIndicator={false}
+          style={s.giftScroll}
+          contentContainerStyle={s.giftList}>
+          {allGifts.map(g => {
+            const gImgUri = g.image_url ? resolveImg(g.image_url) : null;
+            const isSelected = g.id === resolvedGift?.id;
             return (
               <TouchableOpacity
-                key={t.userId}
-                onPress={() => onSelect(t.userId)}
+                key={g.id}
+                onPress={() => onGiftChange?.(g)}
                 activeOpacity={0.8}
-                style={s.userItem}>
-                <View style={[s.avatarWrap, selected && s.avatarWrapSelected]}>
-                  <Avatar url={t.avatarUrl} name={t.name} size={46} />
-                  {t.isHost && (
-                    <View style={s.hostBadge}>
-                      <Text style={s.hostBadgeText}>HOST</Text>
-                    </View>
-                  )}
-                  {selected && (
-                    <View style={s.checkBadge}>
-                      <Ionicons name="checkmark" size={10} color="#fff" />
-                    </View>
-                  )}
+                style={[s.giftCell, isSelected && s.giftCellSelected]}>
+                {gImgUri
+                  ? <Image source={{ uri: gImgUri }} style={s.giftCellImg} resizeMode="contain" />
+                  : <Ionicons name="gift-outline" size={22} color="#7A0EED" />}
+                <View style={s.giftCellCoin}>
+                  <Image source={COIN_IMG} style={s.giftCellCoinImg} resizeMode="contain" />
+                  <Text style={s.giftCellCoinText}>
+                    {g.coins >= 1000 ? `${g.coins / 1000}K` : g.coins}
+                  </Text>
                 </View>
-                <Text style={[s.userName, selected && s.userNameSelected]} numberOfLines={1}>
-                  {t.name}
-                </Text>
               </TouchableOpacity>
             );
           })}
         </ScrollView>
-
-        {/* Send button */}
-        <TouchableOpacity
-          style={[s.sendBtn, !selectedId && s.sendBtnDisabled]}
-          onPress={onSend}
-          activeOpacity={0.85}
-          disabled={!selectedId}>
-          <Ionicons name="send" size={16} color="#fff" />
-          <Text style={s.sendBtnText}>Send Gift</Text>
-        </TouchableOpacity>
-      </Animated.View>
-    </Modal>
+      )}
+    </Animated.View>
   );
 }
 
+// ── Styles ────────────────────────────────────────────────────────────────────
+
 const s = StyleSheet.create({
-  backdrop: {
-    ...StyleSheet.absoluteFillObject,
-    backgroundColor: 'rgba(0,0,0,0.4)',
-  },
-  sheet: {
+  container: {
     position: 'absolute',
     bottom: 0, left: 0, right: 0,
-    backgroundColor: '#fff',
-    borderTopLeftRadius: 22,
-    borderTopRightRadius: 22,
-    paddingHorizontal: 16,
-    paddingBottom: 32,
-    paddingTop: 8,
+    backgroundColor: 'rgba(255,255,255,0.97)',
+    borderTopLeftRadius: 20,
+    borderTopRightRadius: 20,
+    paddingTop: 12,
+    paddingBottom: 16,
+    shadowColor: '#4A0099',
+    shadowOpacity: 0.18,
+    shadowRadius: 18,
+    shadowOffset: { width: 0, height: -4 },
+    elevation: 20,
   },
-  handle: {
-    width: 36, height: 4, borderRadius: 2,
-    backgroundColor: '#E0DDED',
-    alignSelf: 'center', marginBottom: 14,
-  },
-  giftRow: {
+
+  // Top row
+  topRow: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 12,
-    backgroundColor: '#F8F6FF',
-    borderRadius: 14,
-    padding: 12,
-    marginBottom: 16,
+    paddingHorizontal: 14,
+    gap: 10,
+    marginBottom: 10,
   },
-  giftCircle: {
-    width: 44, height: 44, borderRadius: 22,
+  giftInfo: {
+    flex: 1,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+  },
+  giftImg: { width: 40, height: 40 },
+  giftName: { fontSize: 13, fontWeight: '700', color: '#1C1E22', maxWidth: 100 },
+  coinRow: { flexDirection: 'row', alignItems: 'center', gap: 3, marginTop: 2 },
+  coinIcon: { width: 12, height: 12 },
+  coinAmt: { fontSize: 12, fontWeight: '700', color: '#E8944A' },
+
+  // Qty
+  qtyRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    backgroundColor: '#F0E8FF',
+    borderRadius: 20,
+    paddingHorizontal: 8,
+    paddingVertical: 4,
+  },
+  qtyBtn: {
+    width: 24, height: 24,
     alignItems: 'center', justifyContent: 'center',
   },
-  giftImg: { width: 32, height: 32 },
-  giftName: { fontSize: 14, fontWeight: '700', color: '#1C1E22' },
-  coinRow: { flexDirection: 'row', alignItems: 'center', gap: 4, marginTop: 2 },
-  coinImg: { width: 12, height: 12 },
-  coinAmt: { fontSize: 12, fontWeight: '600', color: '#E8944A' },
-  label: { fontSize: 12, fontWeight: '700', color: '#7A0EED' },
+  qtyLabel: { fontSize: 14, fontWeight: '800', color: '#7A0EED', minWidth: 28, textAlign: 'center' },
 
-  userScroll: { flexShrink: 0 },
-  userList: { gap: 12, paddingHorizontal: 4, paddingBottom: 4 },
-  userItem: { alignItems: 'center', gap: 6, width: 64 },
+  // Send button
+  sendBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 5,
+    backgroundColor: '#7A0EED',
+    borderRadius: 20,
+    paddingHorizontal: 14,
+    paddingVertical: 8,
+  },
+  sendBtnDisabled: { backgroundColor: '#DDDAE8' },
+  sendBtnText: { fontSize: 13, fontWeight: '700', color: '#fff' },
+
+  // Targets
+  targetScroll: { flexShrink: 0 },
+  targetList: { paddingHorizontal: 14, gap: 10, paddingBottom: 4 },
+  targetItem: { alignItems: 'center', gap: 4, width: 56 },
   avatarWrap: {
     position: 'relative',
-    borderRadius: 27,
-    borderWidth: 2.5,
+    borderRadius: 25,
+    borderWidth: 2,
     borderColor: 'transparent',
   },
   avatarWrapSelected: { borderColor: '#7A0EED' },
@@ -192,32 +271,43 @@ const s = StyleSheet.create({
     backgroundColor: '#EDE8F7',
     alignItems: 'center', justifyContent: 'center',
   },
-  avatarInitial: { fontSize: 18, fontWeight: '700', color: '#7A0EED' },
+  avatarInitial: { fontSize: 16, fontWeight: '700', color: '#7A0EED' },
   hostBadge: {
     position: 'absolute', bottom: -4, left: '50%',
-    transform: [{ translateX: -14 }],
+    transform: [{ translateX: -12 }],
     backgroundColor: '#7A0EED',
-    borderRadius: 6, paddingHorizontal: 4, paddingVertical: 1,
+    borderRadius: 5, paddingHorizontal: 3, paddingVertical: 1,
   },
-  hostBadgeText: { fontSize: 8, fontWeight: '800', color: '#fff', letterSpacing: 0.3 },
+  hostBadgeText: { fontSize: 7, fontWeight: '800', color: '#fff' },
   checkBadge: {
     position: 'absolute', top: -2, right: -2,
-    width: 18, height: 18, borderRadius: 9,
+    width: 16, height: 16, borderRadius: 8,
     backgroundColor: '#7A0EED',
     alignItems: 'center', justifyContent: 'center',
     borderWidth: 1.5, borderColor: '#fff',
   },
-  userName: {
-    fontSize: 10, fontWeight: '600', color: '#60626A',
-    textAlign: 'center', maxWidth: 62,
-  },
-  userNameSelected: { color: '#7A0EED', fontWeight: '700' },
+  targetName: { fontSize: 10, fontWeight: '600', color: '#60626A', textAlign: 'center', maxWidth: 54 },
+  targetNameSelected: { color: '#7A0EED', fontWeight: '700' },
 
-  sendBtn: {
-    flexDirection: 'row', alignItems: 'center', justifyContent: 'center',
-    gap: 8, marginTop: 16,
-    backgroundColor: '#7A0EED', borderRadius: 48, paddingVertical: 14,
+  // Gift picker row
+  giftScroll: { flexShrink: 0, marginTop: 6 },
+  giftList: { paddingHorizontal: 14, gap: 6, paddingBottom: 2 },
+  giftCell: {
+    alignItems: 'center',
+    gap: 3,
+    paddingHorizontal: 8,
+    paddingVertical: 6,
+    borderRadius: 12,
+    borderWidth: 1.5,
+    borderColor: 'transparent',
+    minWidth: 52,
   },
-  sendBtnDisabled: { backgroundColor: '#DDDAE8' },
-  sendBtnText: { fontSize: 15, fontWeight: '700', color: '#fff' },
+  giftCellSelected: {
+    borderColor: '#7A0EED',
+    backgroundColor: '#F0E8FF',
+  },
+  giftCellImg: { width: 34, height: 34 },
+  giftCellCoin: { flexDirection: 'row', alignItems: 'center', gap: 2 },
+  giftCellCoinImg: { width: 10, height: 10 },
+  giftCellCoinText: { fontSize: 10, fontWeight: '700', color: '#1C1E22' },
 });

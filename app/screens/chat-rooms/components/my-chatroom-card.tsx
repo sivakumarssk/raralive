@@ -1,4 +1,5 @@
 import { Ionicons } from '@expo/vector-icons';
+import { Image as ExpoImage } from 'expo-image';
 import { Image, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
 import { getLevelImage } from '@/screens/room-detail/components/room-level-up';
 
@@ -42,7 +43,7 @@ export function MyChatroomCard({ room, onPress }: MyChatroomCardProps) {
             <View style={styles.onlineDot} />
             <Text style={styles.onlineText}>{room.onlineCount} ONLINE</Text>
             <Text style={styles.pipe}>|</Text>
-            <Image source={levelImg} style={styles.levelImg} resizeMode="contain" />
+            <ExpoImage source={levelImg} style={styles.levelImg} contentFit="contain" />
           </View>
         </View>
 

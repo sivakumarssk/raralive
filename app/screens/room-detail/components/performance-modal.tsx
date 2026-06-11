@@ -1,4 +1,5 @@
 import { Ionicons } from '@expo/vector-icons';
+import { Image as ExpoImage } from 'expo-image';
 import { useRef, useState } from 'react';
 import {
   Animated,
@@ -13,9 +14,9 @@ import {
   View,
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import { getLevelImage } from './room-level-up';
 
-const LEVEL_IMG = require('@/assets/tabs/chatroom/groupLevels/0.png');
-const COIN_IMG  = require('@/assets/tabs/coin.png');
+const COIN_IMG = require('@/assets/tabs/coin.png');
 
 const { height: SCREEN_H, width: SCREEN_W } = Dimensions.get('window');
 const SHEET_HEIGHT = SCREEN_H * 0.88;
@@ -44,9 +45,10 @@ function formatCoins(n: number) {
   return String(n);
 }
 
-type Props = { visible: boolean; onClose: () => void };
+type Props = { visible: boolean; onClose: () => void; level?: number };
 
-export function PerformanceModal({ visible, onClose }: Props) {
+export function PerformanceModal({ visible, onClose, level = 0 }: Props) {
+  const levelImg = getLevelImage(level);
   const insets = useSafeAreaInsets();
   const [activeTab, setActiveTab] = useState<Tab>('levels');
   const translateY = useRef(new Animated.Value(SHEET_HEIGHT)).current;
@@ -126,7 +128,7 @@ export function PerformanceModal({ visible, onClose }: Props) {
               <View style={s.heroBanner}>
                 {/* Glow behind image */}
                 <View style={s.heroGlow} />
-                <Image source={LEVEL_IMG} style={s.heroLevelImg} resizeMode="contain" />
+                <ExpoImage source={levelImg} style={s.heroLevelImg} contentFit="contain" />
 
                 {/* Progress bar + labels */}
                 <View style={s.heroBottom}>

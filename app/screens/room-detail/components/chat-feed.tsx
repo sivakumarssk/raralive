@@ -123,17 +123,9 @@ const feed = StyleSheet.create({
     paddingHorizontal: 14,
     paddingVertical: 6,
   },
-  joinText: {
-    fontSize: 12,
-    color: '#60626A',
-    fontWeight: '500',
-  },
+  joinText: { fontSize: 12, color: '#60626A', fontWeight: '500' },
   joinStar: { fontSize: 12 },
-  joinName: {
-    fontSize: 12,
-    fontWeight: '700',
-    color: '#7A0EED',
-  },
+  joinName: { fontSize: 12, fontWeight: '700', color: '#7A0EED' },
 
   // Gift notice
   giftRow: {
@@ -209,11 +201,7 @@ const feed = StyleSheet.create({
     alignItems: 'center',
     gap: 6,
   },
-  username: {
-    fontSize: 13,
-    fontWeight: '700',
-    color: '#1C1E22',
-  },
+  username: { fontSize: 13, fontWeight: '700', color: '#1C1E22' },
   levelBadge: {
     flexDirection: 'row',
     alignItems: 'center',

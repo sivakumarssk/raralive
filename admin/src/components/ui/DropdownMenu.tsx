@@ -19,7 +19,7 @@ export function DropdownMenu({ items }: { items: DropdownItem[] }) {
     // Place below-right of button, flip left if too close to right edge
     const menuWidth = 192; // w-48
     const left = rect.right - menuWidth < 0 ? rect.left : rect.right - menuWidth;
-    setPos({ top: rect.bottom + 6, left });
+    setPos({ top: rect.bottom + 16, left });
     setOpen(true);
   };
 

@@ -4,18 +4,37 @@ import coinImg from '../../assets/coin.png';
 
 const API_BASE = import.meta.env.VITE_API_URL ?? 'http://192.168.0.8:5000';
 
+const DAYS = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'] as const;
+
 type Task = {
   id: string; title: string; description: string; type: 'daily';
   target_coins: number | null; target_gift_id: string | null; target_count: number;
-  reward_gems: number; icon_type: 'emoji' | 'image'; icon_value: string;
+  icon_type: 'emoji' | 'image'; icon_value: string;
   min_level: number; max_level: number; sort_order: number; is_active: boolean;
   gift_name: string | null; gift_image_url: string | null;
+  reward_bg_url: string | null; reward_frame_url: string | null;
+  day_of_week: number[]; // 0=Sun … 6=Sat
 };
 type Gift = { id: string; name: string; image_url: string | null; coins: number };
 
 function resolveImg(url: string | null) {
   if (!url) return null;
   return url.startsWith('http') ? url : `${API_BASE}/${url.replace(/^\//, '')}`;
+}
+
+// ── Day-of-week pill display ─────────────────────────────────────────────────
+
+function DowPills({ days }: { days: number[] }) {
+  if (!days || days.length === 7) {
+    return <span className="text-xs font-semibold text-purple-600 bg-purple-50 px-2 py-0.5 rounded-full">Every day</span>;
+  }
+  return (
+    <div className="flex gap-0.5 flex-wrap">
+      {DAYS.map((d, i) => (
+        <span key={i} className={`text-[10px] font-bold px-1.5 py-0.5 rounded ${days.includes(i) ? 'bg-purple-600 text-white' : 'bg-gray-100 text-gray-300'}`}>{d}</span>
+      ))}
+    </div>
+  );
 }
 
 // ── Drawer ──────────────────────────────────────────────────────────────────
@@ -26,18 +45,21 @@ function TaskDrawer({ open, editing, gifts, onClose, onSaved }: {
 }) {
   const [title, setTitle] = useState('');
   const [description, setDescription] = useState('');
-  const [type] = useState<'daily'>('daily');
   const [targetCoins, setTargetCoins] = useState('');
   const [targetGiftId, setTargetGiftId] = useState('');
   const [targetCount, setTargetCount] = useState('1');
-  const [rewardGems, setRewardGems] = useState('0');
   const [iconType, setIconType] = useState<'emoji' | 'image'>('emoji');
   const [iconValue, setIconValue] = useState('🎁');
   const [sortOrder, setSortOrder] = useState('0');
+  const [dowSelected, setDowSelected] = useState<number[]>([0,1,2,3,4,5,6]);
   const [file, setFile] = useState<File | null>(null);
+  const [bgFile, setBgFile] = useState<File | null>(null);
+  const [frameFile, setFrameFile] = useState<File | null>(null);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState('');
   const fileRef = useRef<HTMLInputElement>(null);
+  const bgFileRef = useRef<HTMLInputElement>(null);
+  const frameFileRef = useRef<HTMLInputElement>(null);
 
   const selectedGift = gifts.find(g => g.id === targetGiftId) ?? null;
 
@@ -47,43 +69,51 @@ function TaskDrawer({ open, editing, gifts, onClose, onSaved }: {
       setTargetCoins(editing.target_coins ? String(editing.target_coins) : '');
       setTargetGiftId(editing.target_gift_id ?? '');
       setTargetCount(String(editing.target_count));
-      setRewardGems(String(editing.reward_gems));
       setIconType(editing.icon_type); setIconValue(editing.icon_value);
       setSortOrder(String(editing.sort_order));
+      setDowSelected(editing.day_of_week ?? [0,1,2,3,4,5,6]);
     } else {
       setTitle(''); setDescription('');
       setTargetCoins(''); setTargetGiftId(''); setTargetCount('1');
-      setRewardGems('0'); setIconType('emoji'); setIconValue('🎁');
+      setIconType('emoji'); setIconValue('🎁');
       setSortOrder('0');
+      setDowSelected([0,1,2,3,4,5,6]);
     }
-    setFile(null); setError('');
+    setFile(null); setBgFile(null); setFrameFile(null); setError('');
   }, [editing, open]);
+
+  const toggleDay = (d: number) => {
+    setDowSelected(prev =>
+      prev.includes(d) ? prev.filter(x => x !== d) : [...prev, d].sort()
+    );
+  };
 
   const save = async () => {
     if (!title.trim() || !description.trim()) { setError('Title and description required.'); return; }
+    if (dowSelected.length === 0) { setError('Select at least one day.'); return; }
     setSaving(true); setError('');
     const form = new FormData();
     form.append('title', title.trim()); form.append('description', description.trim());
-    form.append('type', type); form.append('target_count', targetCount);
-    form.append('reward_gems', rewardGems); form.append('sort_order', sortOrder);
-    // keep min/max level as fixed defaults so backend doesn't break
+    form.append('type', 'daily'); form.append('target_count', targetCount);
+    form.append('sort_order', sortOrder);
     form.append('min_level', '0'); form.append('max_level', '100');
+    form.append('day_of_week', JSON.stringify(dowSelected));
     if (targetCoins) form.append('target_coins', targetCoins);
     if (targetGiftId) form.append('target_gift_id', targetGiftId);
     if (targetGiftId && selectedGift) {
-      // Gift selected → use gift image as icon automatically
       form.append('icon_type', 'image');
       form.append('icon_value', selectedGift.image_url ?? '');
     } else if (file) {
       form.append('icon_image', file);
     } else if (iconType === 'emoji' && iconValue === '__coin__') {
-      // Coin quick-pick — store as a special emoji marker the app renders as the coin image
       form.append('icon_type', 'emoji');
       form.append('icon_value', '🪙');
     } else {
       form.append('icon_type', iconType);
       form.append('icon_value', iconValue);
     }
+    if (bgFile) form.append('reward_bg_image', bgFile);
+    if (frameFile) form.append('reward_frame_image', frameFile);
 
     const res = editing
       ? await api.uploadPatch<Task>(`/tasks/admin/${editing.id}`, form)
@@ -103,6 +133,7 @@ function TaskDrawer({ open, editing, gifts, onClose, onSaved }: {
           <button onClick={onClose} className="text-gray-400 text-xl font-bold">×</button>
         </div>
         <div className="flex-1 overflow-y-auto px-6 py-5 space-y-4">
+
           <div>
             <label className="block text-xs font-semibold text-gray-500 mb-1.5">Title *</label>
             <input value={title} onChange={e => setTitle(e.target.value)} placeholder="e.g. Gift Master"
@@ -116,9 +147,42 @@ function TaskDrawer({ open, editing, gifts, onClose, onSaved }: {
               className="w-full border border-gray-200 rounded-xl px-3.5 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-purple-400 resize-none" />
           </div>
 
+          {/* ── Schedule ── */}
+          <div className="p-3 bg-purple-50 rounded-xl border border-purple-100">
+            <div className="flex items-center justify-between mb-2">
+              <p className="text-xs font-bold text-purple-600 uppercase tracking-wide">Schedule (repeats weekly)</p>
+              <div className="flex gap-2">
+                <button onClick={() => setDowSelected([0,1,2,3,4,5,6])}
+                  className="text-[10px] font-semibold text-purple-500 hover:text-purple-700">All</button>
+                <span className="text-gray-300 text-xs">|</span>
+                <button onClick={() => setDowSelected([1,2,3,4,5])}
+                  className="text-[10px] font-semibold text-purple-500 hover:text-purple-700">Weekdays</button>
+                <span className="text-gray-300 text-xs">|</span>
+                <button onClick={() => setDowSelected([0,6])}
+                  className="text-[10px] font-semibold text-purple-500 hover:text-purple-700">Weekend</button>
+                <span className="text-gray-300 text-xs">|</span>
+                <button onClick={() => setDowSelected([])}
+                  className="text-[10px] font-semibold text-gray-400 hover:text-gray-600">None</button>
+              </div>
+            </div>
+            <div className="flex gap-1.5">
+              {DAYS.map((d, i) => (
+                <button key={i} onClick={() => toggleDay(i)}
+                  className={`flex-1 py-2 rounded-lg text-xs font-bold transition-all border ${
+                    dowSelected.includes(i)
+                      ? 'bg-purple-600 text-white border-purple-600'
+                      : 'bg-white text-gray-400 border-gray-200 hover:border-purple-300'
+                  }`}>{d}</button>
+              ))}
+            </div>
+            <p className="text-[10px] text-purple-400 mt-1.5">
+              Task resets every day at midnight. Shown only on selected days.
+            </p>
+          </div>
+
+          {/* ── Target ── */}
           <div className="p-3 bg-gray-50 rounded-xl space-y-3">
             <p className="text-xs font-bold text-gray-500 uppercase tracking-wide">Target (pick one)</p>
-            {/* Coin target */}
             <div>
               <label className="block text-xs text-gray-500 mb-1">Coin target (total coins gifted)</label>
               <input type="number" min="1" value={targetCoins}
@@ -127,11 +191,9 @@ function TaskDrawer({ open, editing, gifts, onClose, onSaved }: {
                 className="w-full border border-gray-200 rounded-xl px-3.5 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-purple-400" />
             </div>
 
-            {/* Specific gift — with image preview */}
             <div>
               <label className="block text-xs text-gray-500 mb-1">Specific gift</label>
               <div className="flex items-center gap-2">
-                {/* Gift image preview */}
                 <div className="w-10 h-10 rounded-lg bg-purple-50 flex items-center justify-center shrink-0 border border-purple-100">
                   {selectedGift && resolveImg(selectedGift.image_url)
                     ? <img src={resolveImg(selectedGift.image_url)!} className="w-7 h-7 object-contain" />
@@ -156,20 +218,13 @@ function TaskDrawer({ open, editing, gifts, onClose, onSaved }: {
             </div>
           </div>
 
-          <div className="grid grid-cols-2 gap-3">
-            <div>
-              <label className="block text-xs font-semibold text-gray-500 mb-1.5">Reward Gems</label>
-              <input type="number" min="0" value={rewardGems} onChange={e => setRewardGems(e.target.value)}
-                className="w-full border border-gray-200 rounded-xl px-3.5 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-purple-400" />
-            </div>
-            <div>
-              <label className="block text-xs font-semibold text-gray-500 mb-1.5">Sort Order</label>
-              <input type="number" min="0" value={sortOrder} onChange={e => setSortOrder(e.target.value)}
-                className="w-full border border-gray-200 rounded-xl px-3.5 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-purple-400" />
-            </div>
+          <div>
+            <label className="block text-xs font-semibold text-gray-500 mb-1.5">Sort Order</label>
+            <input type="number" min="0" value={sortOrder} onChange={e => setSortOrder(e.target.value)}
+              className="w-full border border-gray-200 rounded-xl px-3.5 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-purple-400" />
           </div>
 
-          {/* Icon — auto-filled when a gift is selected */}
+          {/* ── Icon ── */}
           {targetGiftId ? (
             <div className="flex items-center gap-3 p-3 bg-purple-50 border border-purple-100 rounded-xl">
               <div className="w-12 h-12 rounded-xl bg-white border border-purple-200 flex items-center justify-center shrink-0">
@@ -186,25 +241,17 @@ function TaskDrawer({ open, editing, gifts, onClose, onSaved }: {
           ) : (
             <div>
               <label className="block text-xs font-semibold text-gray-500 mb-2">Icon</label>
-
-              {/* Quick-pick emoji buttons */}
               <div className="flex items-center gap-2 mb-3">
                 <p className="text-xs text-gray-400">Quick pick:</p>
-                {/* Gift box */}
-                <button
-                  onClick={() => { setIconType('emoji'); setIconValue('🎁'); setFile(null); }}
+                <button onClick={() => { setIconType('emoji'); setIconValue('🎁'); setFile(null); }}
                   className={`w-10 h-10 rounded-xl flex items-center justify-center text-xl border-2 transition-all ${iconType === 'emoji' && iconValue === '🎁' ? 'border-purple-500 bg-purple-50' : 'border-gray-200 hover:border-purple-200'}`}>
                   🎁
                 </button>
-                {/* Coin image — same as app */}
-                <button
-                  onClick={() => { setIconType('emoji'); setIconValue('__coin__'); setFile(null); }}
+                <button onClick={() => { setIconType('emoji'); setIconValue('__coin__'); setFile(null); }}
                   className={`w-10 h-10 rounded-xl flex items-center justify-center border-2 transition-all ${iconType === 'emoji' && iconValue === '__coin__' ? 'border-amber-400 bg-amber-50' : 'border-gray-200 hover:border-amber-200'}`}>
                   <img src={coinImg} className="w-7 h-7 object-contain" />
                 </button>
               </div>
-
-              {/* Emoji / Image toggle */}
               <div className="flex gap-3 mb-2">
                 <button onClick={() => setIconType('emoji')}
                   className={`px-3 py-1.5 rounded-lg text-sm font-semibold border ${iconType === 'emoji' ? 'border-purple-500 bg-purple-50 text-purple-700' : 'border-gray-200 text-gray-500'}`}>
@@ -215,7 +262,6 @@ function TaskDrawer({ open, editing, gifts, onClose, onSaved }: {
                   Upload Image
                 </button>
               </div>
-
               {iconType === 'emoji' && iconValue !== '__coin__' && (
                 <input value={iconValue} onChange={e => setIconValue(e.target.value)} placeholder="🎁" maxLength={4}
                   className="w-24 border border-gray-200 rounded-xl px-3.5 py-2.5 text-2xl text-center focus:outline-none focus:ring-2 focus:ring-purple-400" />
@@ -242,6 +288,67 @@ function TaskDrawer({ open, editing, gifts, onClose, onSaved }: {
             </div>
           )}
 
+          {/* ── Reward visuals ── */}
+          <div className="space-y-3">
+            <p className="text-xs font-bold text-gray-500 uppercase tracking-wide">Reward Visuals (24h)</p>
+            <p className="text-xs text-gray-400">These appear in the chatroom for 24 hours after the host completes this task.</p>
+
+            <div>
+              <label className="block text-xs font-semibold text-gray-500 mb-1.5">Chatroom Background</label>
+              <div className="flex items-center gap-3">
+                <div className="w-20 h-12 rounded-lg border border-gray-200 bg-gray-50 overflow-hidden shrink-0 flex items-center justify-center">
+                  {bgFile
+                    ? <img src={URL.createObjectURL(bgFile)} className="w-full h-full object-cover" />
+                    : editing?.reward_bg_url && resolveImg(editing.reward_bg_url)
+                      ? <img src={resolveImg(editing.reward_bg_url)!} className="w-full h-full object-cover" />
+                      : <span className="text-gray-300 text-xs">No image</span>}
+                </div>
+                <div className="flex flex-col gap-1">
+                  <button onClick={() => bgFileRef.current?.click()}
+                    className="text-xs font-semibold text-purple-600 hover:bg-purple-50 px-3 py-1.5 rounded-lg border border-purple-200">
+                    {bgFile || editing?.reward_bg_url ? 'Change' : 'Upload'}
+                  </button>
+                  {(bgFile || editing?.reward_bg_url) && (
+                    <button onClick={() => setBgFile(null)}
+                      className="text-xs text-red-400 hover:bg-red-50 px-3 py-1 rounded-lg">
+                      Remove
+                    </button>
+                  )}
+                </div>
+              </div>
+              <input ref={bgFileRef} type="file" accept="image/png,image/jpeg,image/jpg,image/webp" className="hidden"
+                onChange={e => { const f = e.target.files?.[0]; if (f) setBgFile(f); e.target.value = ''; }} />
+            </div>
+
+            <div>
+              <label className="block text-xs font-semibold text-gray-500 mb-1.5">Profile Frame</label>
+              <div className="flex items-center gap-3">
+                <div className="w-12 h-12 rounded-full border-2 border-dashed border-gray-200 bg-gray-50 overflow-hidden shrink-0 flex items-center justify-center">
+                  {frameFile
+                    ? <img src={URL.createObjectURL(frameFile)} className="w-full h-full object-contain" />
+                    : editing?.reward_frame_url && resolveImg(editing.reward_frame_url)
+                      ? <img src={resolveImg(editing.reward_frame_url)!} className="w-full h-full object-contain" />
+                      : <span className="text-gray-300 text-xs text-center">None</span>}
+                </div>
+                <div className="flex flex-col gap-1">
+                  <button onClick={() => frameFileRef.current?.click()}
+                    className="text-xs font-semibold text-purple-600 hover:bg-purple-50 px-3 py-1.5 rounded-lg border border-purple-200">
+                    {frameFile || editing?.reward_frame_url ? 'Change' : 'Upload'}
+                  </button>
+                  {(frameFile || editing?.reward_frame_url) && (
+                    <button onClick={() => setFrameFile(null)}
+                      className="text-xs text-red-400 hover:bg-red-50 px-3 py-1 rounded-lg">
+                      Remove
+                    </button>
+                  )}
+                </div>
+              </div>
+              <p className="text-xs text-gray-400 mt-1">Use a transparent PNG — it overlays on the host avatar ring.</p>
+              <input ref={frameFileRef} type="file" accept="image/png,image/gif" className="hidden"
+                onChange={e => { const f = e.target.files?.[0]; if (f) setFrameFile(f); e.target.value = ''; }} />
+            </div>
+          </div>
+
           {error && <p className="text-sm text-red-500">{error}</p>}
         </div>
         <div className="px-6 py-5 border-t border-gray-100 flex gap-3">
@@ -261,7 +368,6 @@ export function TasksPage() {
   const [tasks, setTasks] = useState<Task[]>([]);
   const [gifts, setGifts] = useState<Gift[]>([]);
   const [loading, setLoading] = useState(true);
-  const [filterType, setFilterType] = useState<'all' | 'daily'>('all');
   const [drawerOpen, setDrawerOpen] = useState(false);
   const [editing, setEditing] = useState<Task | null>(null);
 
@@ -289,14 +395,15 @@ export function TasksPage() {
     setTasks(prev => prev.filter(t => t.id !== id));
   };
 
-  const filtered = filterType === 'all' ? tasks : tasks.filter(t => t.type === filterType);
+  // Today's day index for highlighting
+  const todayDow = new Date().getDay();
 
   return (
     <div className="p-6 max-w-5xl mx-auto">
       <div className="flex items-center justify-between mb-6">
         <div>
           <h1 className="text-2xl font-black text-gray-900">Tasks</h1>
-          <p className="text-sm text-gray-400 mt-0.5">Daily &amp; weekly tasks shown in the app</p>
+          <p className="text-sm text-gray-400 mt-0.5">Daily tasks — repeat weekly, reset at midnight</p>
         </div>
         <button onClick={() => { setEditing(null); setDrawerOpen(true); }}
           className="flex items-center gap-2 px-4 py-2.5 bg-gradient-to-r from-purple-600 to-pink-600 text-white rounded-xl text-sm font-semibold hover:opacity-90 shadow-md shadow-purple-200">
@@ -304,33 +411,37 @@ export function TasksPage() {
         </button>
       </div>
 
-      <div className="flex gap-2 mb-4">
-        {(['all', 'daily'] as const).map(f => (
-          <button key={f} onClick={() => setFilterType(f)}
-            className={`px-4 py-1.5 rounded-full text-sm font-semibold capitalize ${filterType === f ? 'bg-purple-600 text-white' : 'bg-gray-100 text-gray-500 hover:bg-gray-200'}`}>
-            {f} {f !== 'all' && `(${tasks.filter(t => t.type === f).length})`}
-          </button>
-        ))}
+      {/* Week overview strip */}
+      <div className="flex gap-2 mb-5 p-3 bg-white rounded-2xl border border-gray-100 shadow-sm">
+        {DAYS.map((d, i) => {
+          const count = tasks.filter(t => t.is_active && (t.day_of_week ?? [0,1,2,3,4,5,6]).includes(i)).length;
+          return (
+            <div key={i} className={`flex-1 rounded-xl p-2 text-center transition-all ${i === todayDow ? 'bg-purple-600 text-white shadow-sm' : 'bg-gray-50 text-gray-500'}`}>
+              <p className={`text-[10px] font-bold uppercase ${i === todayDow ? 'text-purple-200' : 'text-gray-400'}`}>{d}</p>
+              <p className={`text-lg font-black mt-0.5 ${i === todayDow ? 'text-white' : count > 0 ? 'text-purple-600' : 'text-gray-200'}`}>{count}</p>
+            </div>
+          );
+        })}
       </div>
 
       <div className="bg-white rounded-2xl border border-gray-100 shadow-sm overflow-hidden">
         <table className="w-full text-sm">
           <thead>
             <tr className="border-b border-gray-50 bg-gray-50">
-              {['Task', 'Target', 'Reward', 'Status', ''].map(h => (
+              {['Task', 'Target', 'Schedule', 'Visuals', 'Status', ''].map(h => (
                 <th key={h} className="px-5 py-3 text-left text-xs font-bold text-gray-400 uppercase tracking-wide">{h}</th>
               ))}
             </tr>
           </thead>
           <tbody>
-            {loading && <tr><td colSpan={5} className="text-center py-12 text-gray-400">Loading…</td></tr>}
-            {!loading && filtered.length === 0 && <tr><td colSpan={5} className="text-center py-12 text-gray-400">No tasks yet.</td></tr>}
-            {filtered.map(task => {
-              // If task targets a specific gift, show the gift image as the icon
+            {loading && <tr><td colSpan={6} className="text-center py-12 text-gray-400">Loading…</td></tr>}
+            {!loading && tasks.length === 0 && <tr><td colSpan={6} className="text-center py-12 text-gray-400">No tasks yet.</td></tr>}
+            {tasks.map(task => {
               const iconImgUrl = task.target_gift_id
                 ? resolveImg(task.gift_image_url)
                 : task.icon_type === 'image' ? resolveImg(task.icon_value) : null;
               const giftImg = task.target_gift_id ? resolveImg(task.gift_image_url) : null;
+              const dow = task.day_of_week ?? [0,1,2,3,4,5,6];
               return (
                 <tr key={task.id} className={`border-b border-gray-50 hover:bg-gray-50 group ${!task.is_active ? 'opacity-50' : ''}`}>
                   {/* Task icon + title */}
@@ -343,19 +454,17 @@ export function TasksPage() {
                       </div>
                       <div>
                         <p className="font-semibold text-gray-900">{task.title}</p>
-                        <p className="text-xs text-gray-400 truncate max-w-[180px]">{task.description}</p>
+                        <p className="text-xs text-gray-400 truncate max-w-[160px]">{task.description}</p>
                       </div>
                     </div>
                   </td>
 
-                  {/* Target — show gift image or coin icon */}
+                  {/* Target */}
                   <td className="px-5 py-3">
                     {task.target_gift_id ? (
                       <div className="flex items-center gap-2">
                         <div className="w-8 h-8 rounded-lg bg-purple-50 flex items-center justify-center border border-purple-100 shrink-0">
-                          {giftImg
-                            ? <img src={giftImg} className="w-6 h-6 object-contain" />
-                            : <span className="text-base">🎁</span>}
+                          {giftImg ? <img src={giftImg} className="w-6 h-6 object-contain" /> : <span className="text-base">🎁</span>}
                         </div>
                         <div>
                           <p className="text-xs font-semibold text-gray-700">{task.gift_name}</p>
@@ -372,14 +481,28 @@ export function TasksPage() {
                           <p className="text-[10px] text-gray-400">coins</p>
                         </div>
                       </div>
-                    ) : (
-                      <span className="text-gray-300">—</span>
-                    )}
+                    ) : <span className="text-gray-300">—</span>}
                   </td>
 
-                  {/* Reward */}
+                  {/* Schedule */}
                   <td className="px-5 py-3">
-                    <span className="text-xs font-bold text-purple-600">💎 {task.reward_gems} gems</span>
+                    <DowPills days={dow} />
+                  </td>
+
+                  {/* Reward visuals */}
+                  <td className="px-5 py-3">
+                    <div className="flex items-center gap-2">
+                      {task.reward_bg_url ? (
+                        <div title="Background" className="w-10 h-7 rounded border border-gray-200 overflow-hidden">
+                          <img src={resolveImg(task.reward_bg_url)!} className="w-full h-full object-cover" />
+                        </div>
+                      ) : <span className="text-gray-300 text-xs">—</span>}
+                      {task.reward_frame_url && (
+                        <div title="Frame" className="w-7 h-7 rounded-full border border-gray-200 overflow-hidden">
+                          <img src={resolveImg(task.reward_frame_url)!} className="w-full h-full object-contain" />
+                        </div>
+                      )}
+                    </div>
                   </td>
 
                   {/* Toggle */}

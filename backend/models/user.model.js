@@ -56,7 +56,7 @@ async function createUser({ phone, email, passwordHash }) {
   return result.rows[0];
 }
 
-async function updateProfile(userId, { fullName, username, gender, dateOfBirth, preferredLanguage, avatarUrl }) {
+async function updateProfile(userId, { fullName, username, gender, dateOfBirth, preferredLanguage, avatarUrl, bio, coverUrl, location }) {
   const result = await db.query(
     `UPDATE users
      SET full_name = COALESCE($2, full_name),
@@ -65,12 +65,51 @@ async function updateProfile(userId, { fullName, username, gender, dateOfBirth, 
          date_of_birth = COALESCE($5, date_of_birth),
          preferred_language = COALESCE($6, preferred_language),
          avatar_url = COALESCE($7, avatar_url),
+         bio = COALESCE($8, bio),
+         cover_url = COALESCE($9, cover_url),
+         location = COALESCE($10, location),
          updated_at = NOW()
      WHERE id = $1
-     RETURNING id, phone, email, username, full_name, gender, date_of_birth, preferred_language, avatar_url`,
-    [userId, fullName || null, username || null, gender || null, dateOfBirth || null, preferredLanguage || null, avatarUrl || null]
+     RETURNING id, phone, email, username, full_name, gender, date_of_birth, preferred_language, avatar_url, bio, cover_url, location`,
+    [userId, fullName || null, username || null, gender || null, dateOfBirth || null, preferredLanguage || null, avatarUrl || null, bio !== undefined ? bio : null, coverUrl || null, location !== undefined ? location : null]
   );
   return result.rows[0] || null;
+}
+
+async function getProfileWithStats(userId) {
+  const result = await db.query(
+    `SELECT u.id, u.phone, u.email, u.username, u.full_name, u.gender,
+            u.date_of_birth, u.preferred_language, u.avatar_url, u.bio, u.cover_url, u.location,
+            u.is_phone_verified, u.created_at,
+            (SELECT COUNT(*) FROM user_follows WHERE following_id = u.id) AS followers_count,
+            (SELECT COUNT(*) FROM user_follows WHERE follower_id  = u.id) AS following_count,
+            (SELECT COUNT(*) FROM posts WHERE user_id = u.id) AS posts_count
+     FROM users u WHERE u.id = $1`,
+    [userId]
+  );
+  return result.rows[0] || null;
+}
+
+async function followUser(followerId, followingId) {
+  await db.query(
+    `INSERT INTO user_follows (follower_id, following_id) VALUES ($1, $2) ON CONFLICT DO NOTHING`,
+    [followerId, followingId]
+  );
+}
+
+async function unfollowUser(followerId, followingId) {
+  await db.query(
+    `DELETE FROM user_follows WHERE follower_id = $1 AND following_id = $2`,
+    [followerId, followingId]
+  );
+}
+
+async function isFollowing(followerId, followingId) {
+  const r = await db.query(
+    `SELECT 1 FROM user_follows WHERE follower_id = $1 AND following_id = $2`,
+    [followerId, followingId]
+  );
+  return r.rows.length > 0;
 }
 
 async function listUsers({ limit = 50, offset = 0, search = '' }) {
@@ -118,4 +157,8 @@ module.exports = {
   updatePassword,
   markPhoneVerified,
   listUsers,
+  getProfileWithStats,
+  followUser,
+  unfollowUser,
+  isFollowing,
 };

@@ -218,24 +218,26 @@ ALTER TABLE rooms ADD COLUMN IF NOT EXISTS current_level SMALLINT NOT NULL DEFAU
 -- Gems balance (host earns gems from gifts: 1 coin = 5 gems)
 ALTER TABLE wallets ADD COLUMN IF NOT EXISTS gems BIGINT NOT NULL DEFAULT 0;
 
--- Tasks defined by admin (daily or weekly, optionally level-gated or gift-specific)
+-- Tasks defined by admin — daily, repeat weekly on selected days
 CREATE TABLE IF NOT EXISTS tasks (
-  id            UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-  title         TEXT NOT NULL,
-  description   TEXT NOT NULL,
-  type          VARCHAR(10) NOT NULL CHECK (type IN ('daily', 'weekly')),
-  target_coins  INTEGER,                        -- coins target (null = not coin-based)
-  target_gift_id UUID REFERENCES gifts(id) ON DELETE SET NULL,  -- specific gift required
-  target_count  INTEGER NOT NULL DEFAULT 1,     -- how many gifts or coins needed
-  reward_gems   INTEGER NOT NULL DEFAULT 0,     -- gems rewarded on completion
-  icon_type     VARCHAR(10) NOT NULL DEFAULT 'emoji' CHECK (icon_type IN ('emoji','image')),
-  icon_value    TEXT NOT NULL DEFAULT '🎁',     -- emoji char or image URL
-  min_level     SMALLINT NOT NULL DEFAULT 0,    -- show only to rooms at this level+
-  max_level     SMALLINT NOT NULL DEFAULT 100,
-  sort_order    SMALLINT NOT NULL DEFAULT 0,
-  is_active     BOOLEAN NOT NULL DEFAULT TRUE,
-  created_at    TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-  updated_at    TIMESTAMPTZ NOT NULL DEFAULT NOW()
+  id               UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  title            TEXT NOT NULL,
+  description      TEXT NOT NULL,
+  type             VARCHAR(10) NOT NULL DEFAULT 'daily' CHECK (type IN ('daily')),
+  target_coins     INTEGER,
+  target_gift_id   UUID REFERENCES gifts(id) ON DELETE SET NULL,
+  target_count     INTEGER NOT NULL DEFAULT 1,
+  icon_type        VARCHAR(10) NOT NULL DEFAULT 'emoji' CHECK (icon_type IN ('emoji','image')),
+  icon_value       TEXT NOT NULL DEFAULT '🎁',
+  min_level        SMALLINT NOT NULL DEFAULT 0,
+  max_level        SMALLINT NOT NULL DEFAULT 100,
+  sort_order       SMALLINT NOT NULL DEFAULT 0,
+  is_active        BOOLEAN NOT NULL DEFAULT TRUE,
+  day_of_week      SMALLINT[] NOT NULL DEFAULT '{0,1,2,3,4,5,6}', -- 0=Sun…6=Sat
+  reward_bg_url    TEXT,
+  reward_frame_url TEXT,
+  created_at       TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  updated_at       TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
 CREATE INDEX IF NOT EXISTS idx_tasks_type ON tasks (type, is_active);

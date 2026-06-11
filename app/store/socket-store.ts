@@ -37,6 +37,8 @@ function notify() { listeners.forEach(fn => fn()); }
 const walletBalanceListeners = new Set<(coins: number) => void>();
 const giftErrorListeners = new Set<(message: string) => void>();
 const levelUpListeners = new Set<(level: number) => void>();
+const taskCompletedListeners = new Set<(data: { task_id: string; title: string; reward_bg_url: string | null; reward_frame_url: string | null }) => void>();
+const rewardAppliedListeners = new Set<(data: { reward_bg_url: string | null; reward_frame_url: string | null }) => void>();
 
 export function onWalletUpdate(fn: (coins: number) => void) {
   walletBalanceListeners.add(fn);
@@ -49,6 +51,14 @@ export function onGiftError(fn: (message: string) => void) {
 export function onLevelUp(fn: (level: number) => void) {
   levelUpListeners.add(fn);
   return () => { levelUpListeners.delete(fn); };
+}
+export function onTaskCompleted(fn: (data: { task_id: string; title: string; reward_bg_url: string | null; reward_frame_url: string | null }) => void) {
+  taskCompletedListeners.add(fn);
+  return () => { taskCompletedListeners.delete(fn); };
+}
+export function onRewardApplied(fn: (data: { reward_bg_url: string | null; reward_frame_url: string | null }) => void) {
+  rewardAppliedListeners.add(fn);
+  return () => { rewardAppliedListeners.delete(fn); };
 }
 
 function resolveAvatarUrl(url: string | null | undefined): string {
@@ -162,6 +172,16 @@ export const socketStore = {
       state.roomLevel = level;
       levelUpListeners.forEach(fn => fn(level));
       notify();
+    });
+
+    socket.on('task_completed', (data: { task_id: string; title: string; reward_bg_url: string | null; reward_frame_url: string | null }) => {
+      console.log('[SOCKET] task_completed received:', JSON.stringify(data));
+      taskCompletedListeners.forEach(fn => fn(data));
+    });
+
+    socket.on('reward_applied', (data: { reward_bg_url: string | null; reward_frame_url: string | null }) => {
+      console.log('[SOCKET] reward_applied received:', JSON.stringify(data));
+      rewardAppliedListeners.forEach(fn => fn(data));
     });
 
     socket.on('online_count', ({ count }: { count: number }) => {

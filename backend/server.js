@@ -4,6 +4,7 @@ const http = require('http');
 const path = require('path');
 const express = require('express');
 const cors = require('cors');
+const cron = require('node-cron');
 const apiRoutes = require('./routes');
 const { notFound, errorHandler } = require('./middleware/error.middleware');
 const { pool } = require('./config/db');
@@ -23,7 +24,17 @@ app.use(notFound);
 app.use(errorHandler);
 
 const httpServer = http.createServer(app);
-setupSocket(httpServer);
+const io = setupSocket(httpServer);
+require('./utils/io-instance').set(io);
+
+// ── Midnight cron: rotate daily tasks ────────────────────────────────────────
+// Runs at 00:00 every day. No DB cleanup needed — task_progress uses period_start (date)
+// so each new day automatically starts fresh. This cron just logs the rotation.
+cron.schedule('0 0 * * *', () => {
+  const today = new Date();
+  const dow = ['Sun','Mon','Tue','Wed','Thu','Fri','Sat'][today.getDay()];
+  console.log(`[CRON] Daily task rotation — ${today.toISOString().slice(0,10)} (${dow}). New tasks will be served based on day_of_week.`);
+}, { timezone: 'UTC' });
 
 async function startServer() {
   try {

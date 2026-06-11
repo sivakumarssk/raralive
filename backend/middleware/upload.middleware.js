@@ -56,4 +56,51 @@ const uploadPost = multer({
   limits: { fileSize: 100 * 1024 * 1024 }, // 100 MB
 });
 
-module.exports = { upload, uploadGift, uploadShopGift, uploadPost };
+// Profile: avatar + cover in one request
+const uploadProfile = multer({
+  storage: multer.diskStorage({
+    destination(_req, file, cb) {
+      const folder = file.fieldname === 'cover' ? 'covers' : 'avatars';
+      const dir = path.join(__dirname, '..', 'uploads', folder);
+      if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
+      cb(null, dir);
+    },
+    filename(_req, file, cb) {
+      const ext = path.extname(file.originalname) || '.png';
+      const unique = crypto.randomBytes(12).toString('hex');
+      const prefix = file.fieldname === 'cover' ? 'cover' : 'avatar';
+      cb(null, `${prefix}_${unique}${ext}`);
+    },
+  }),
+  fileFilter(_req, file, cb) {
+    if (file.mimetype.startsWith('image/')) cb(null, true);
+    else cb(new Error('Only image files are allowed.'));
+  },
+  limits: { fileSize: 10 * 1024 * 1024 },
+});
+
+// Task reward visuals — icon + background + frame in one request
+const uploadTask = multer({
+  storage: multer.diskStorage({
+    destination(_req, file, cb) {
+      const subdir = file.fieldname === 'icon_image' ? 'shop-gifts'
+        : file.fieldname === 'reward_bg_image' ? 'task-bg'
+        : 'task-frames';
+      const dir = path.join(__dirname, '..', 'uploads', subdir);
+      if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
+      cb(null, dir);
+    },
+    filename(_req, file, cb) {
+      const ext = path.extname(file.originalname) || '.png';
+      const unique = crypto.randomBytes(12).toString('hex');
+      cb(null, `${file.fieldname}_${unique}${ext}`);
+    },
+  }),
+  fileFilter(_req, file, cb) {
+    if (file.mimetype.startsWith('image/')) cb(null, true);
+    else cb(new Error('Only image files are allowed.'));
+  },
+  limits: { fileSize: 10 * 1024 * 1024 },
+});
+
+module.exports = { upload, uploadGift, uploadShopGift, uploadPost, uploadProfile, uploadTask };

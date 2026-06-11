@@ -18,16 +18,17 @@ import { authStore } from '@/store/auth-store';
 
 const COIN_IMG = require('@/assets/tabs/coin.png');
 const { height: SCREEN_H } = Dimensions.get('window');
-const SHEET_HEIGHT = SCREEN_H * 0.78;
+const SHEET_HEIGHT = SCREEN_H * 0.55;
 
 type Tab = 'tasks' | 'top-hosts' | 'winners';
 
 type TaskItem = {
   task_id: string; title: string; description: string; type: 'daily' | 'weekly';
   target_coins: number | null; target_gift_id: string | null; target_count: number;
-  reward_gems: number; icon_type: 'emoji' | 'image'; icon_value: string;
+  icon_type: 'emoji' | 'image'; icon_value: string;
   progress: number; completed: boolean; completed_at: string | null; reward_claimed: boolean;
   gift_name: string | null; gift_image_url: string | null;
+  reward_bg_url: string | null; reward_frame_url: string | null;
 };
 
 function formatCoins(n: number) {
@@ -58,7 +59,7 @@ function TaskIcon({ task }: { task: TaskItem }) {
   return <Text style={tab.taskEmoji}>{task.icon_value}</Text>;
 }
 
-function TaskCard({ task, onClaim }: { task: TaskItem; onClaim: (id: string) => void }) {
+function TaskCard({ task }: { task: TaskItem }) {
   const goal = task.target_coins ?? task.target_count;
   const goalLabel = task.target_coins ? formatCoins(task.target_coins) : String(task.target_count);
   const color = '#7A0EED';
@@ -82,23 +83,29 @@ function TaskCard({ task, onClaim }: { task: TaskItem; onClaim: (id: string) => 
         </View>
         <Text style={tab.taskDesc}>{task.description}</Text>
         <View style={tab.rewardRow}>
-          <Text style={tab.rewardText}>💎 {task.reward_gems} gems</Text>
-          {task.completed && !task.reward_claimed && (
-            <TouchableOpacity onPress={() => onClaim(task.task_id)} style={tab.claimBtn} activeOpacity={0.8}>
-              <Text style={tab.claimBtnText}>Claim</Text>
-            </TouchableOpacity>
+          {task.completed && <Text style={tab.claimedText}>✓ Reward applied</Text>}
+          {task.reward_bg_url && (
+            <View style={[tab.rewardChip, task.completed && { backgroundColor: '#E8F5E9', borderColor: '#4CAF50' }]}>
+              <Ionicons name="image-outline" size={11} color={task.completed ? '#4CAF50' : '#7A0EED'} />
+              <Text style={[tab.rewardChipText, task.completed && { color: '#4CAF50' }]}>BG</Text>
+            </View>
           )}
-          {task.reward_claimed && <Text style={tab.claimedText}>✓ Claimed</Text>}
+          {task.reward_frame_url && (
+            <View style={[tab.rewardChip, task.completed && { backgroundColor: '#E8F5E9', borderColor: '#4CAF50' }]}>
+              <Ionicons name="person-circle-outline" size={11} color={task.completed ? '#4CAF50' : '#7A0EED'} />
+              <Text style={[tab.rewardChipText, task.completed && { color: '#4CAF50' }]}>Frame</Text>
+            </View>
+          )}
         </View>
       </View>
     </View>
   );
 }
 
-function TasksTab({ roomId }: { roomId?: string }) {
+function TasksTab({ roomId, refreshKey }: { roomId?: string; refreshKey?: number }) {
   const [tasks, setTasks] = useState<TaskItem[]>([]);
   const [loading, setLoading] = useState(true);
-  const [claimMsg, setClaimMsg] = useState('');
+
 
   const load = () => {
     const token = authStore.getToken();
@@ -112,22 +119,7 @@ function TasksTab({ roomId }: { roomId?: string }) {
       .finally(() => setLoading(false));
   };
 
-  useEffect(() => { load(); }, [roomId]);
-
-  const handleClaim = async (taskId: string) => {
-    const token = authStore.getToken();
-    if (!token) return;
-    const res = await fetch(`${BASE_URL}/tasks/claim`, {
-      method: 'POST',
-      headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
-      body: JSON.stringify({ task_id: taskId }),
-    }).then(r => r.json());
-    if (res.success) {
-      setClaimMsg(`💎 +${res.data.gems_awarded} gems claimed!`);
-      setTasks(prev => prev.map(t => t.task_id === taskId ? { ...t, reward_claimed: true } : t));
-      setTimeout(() => setClaimMsg(''), 2500);
-    }
-  };
+  useEffect(() => { load(); }, [roomId, refreshKey]);
 
   const dailyTasks = tasks.filter(t => t.type === 'daily');
 
@@ -139,18 +131,58 @@ function TasksTab({ roomId }: { roomId?: string }) {
 
   return (
     <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={tab.scroll}>
-      {claimMsg ? (
-        <View style={tab.claimBanner}>
-          <Text style={tab.claimBannerText}>{claimMsg}</Text>
-        </View>
-      ) : null}
-
       {dailyTasks.length > 0 && (
         <View style={tab.section}>
           <Text style={tab.sectionTitle}>Daily Tasks</Text>
           {dailyTasks.map(task => (
-            <TaskCard key={task.task_id} task={task} onClaim={handleClaim} />
+            <TaskCard key={task.task_id} task={task} />
           ))}
+        </View>
+      )}
+
+      {/* Reward previews */}
+      {dailyTasks.some(t => t.reward_bg_url || t.reward_frame_url) && (
+        <View style={tab.rewardSection}>
+          <Text style={tab.rewardSectionTitle}>Rewards</Text>
+          <Text style={tab.rewardSectionSub}>Complete the task to unlock</Text>
+          <View style={tab.rewardPreviews}>
+            {dailyTasks.map(task => {
+              const bgUri = task.reward_bg_url ? `${MEDIA_BASE}/${task.reward_bg_url.replace(/^\//, '')}` : null;
+              const frameUri = task.reward_frame_url ? `${MEDIA_BASE}/${task.reward_frame_url.replace(/^\//, '')}` : null;
+              const unlocked = task.reward_claimed;
+              if (!bgUri && !frameUri) return null;
+              return (
+                <View key={task.task_id} style={tab.rewardPreviewRow}>
+                  {bgUri && (
+                    <View style={tab.rewardPreviewItem}>
+                      <View style={tab.rewardBgThumb}>
+                        <Image source={{ uri: bgUri }} style={tab.rewardBgImg} resizeMode="cover" />
+                        {!unlocked && (
+                          <View style={tab.rewardLockOverlay}>
+                            <Ionicons name="lock-closed" size={18} color="#fff" />
+                          </View>
+                        )}
+                      </View>
+                      <Text style={tab.rewardPreviewLabel}>Background</Text>
+                    </View>
+                  )}
+                  {frameUri && (
+                    <View style={tab.rewardPreviewItem}>
+                      <View style={tab.rewardFrameThumb}>
+                        <Image source={{ uri: frameUri }} style={tab.rewardFrameImg} resizeMode="contain" />
+                        {!unlocked && (
+                          <View style={tab.rewardLockOverlay}>
+                            <Ionicons name="lock-closed" size={18} color="#fff" />
+                          </View>
+                        )}
+                      </View>
+                      <Text style={tab.rewardPreviewLabel}>Frame</Text>
+                    </View>
+                  )}
+                </View>
+              );
+            })}
+          </View>
         </View>
       )}
 
@@ -235,7 +267,7 @@ function TopHostsTab() {
 type Winner = {
   id: string; full_name: string | null; username: string | null;
   avatar_url: string | null; completed_at: string | null;
-  task_title: string; reward_gems: number;
+  task_title: string;
 };
 
 function WinnersTab() {
@@ -285,9 +317,7 @@ function WinnersTab() {
               <Text style={th.name}>{name}</Text>
               <Text style={th.sub}>{w.task_title}</Text>
             </View>
-            <View style={[th.coinsBadge, { backgroundColor: '#E8F5E9' }]}>
-              <Text style={[th.coinsText, { color: '#2E7D32' }]}>💎 {w.reward_gems}</Text>
-            </View>
+            <Text style={th.sub}>{w.completed_at ? new Date(w.completed_at).toLocaleDateString() : ''}</Text>
           </View>
         );
       })}
@@ -307,9 +337,9 @@ const th = StyleSheet.create({
   coinsText: { fontSize: 12, fontWeight: '700', color: '#7A0EED' },
 });
 
-type Props = { visible: boolean; onClose: () => void; roomId?: string };
+type Props = { visible: boolean; onClose: () => void; roomId?: string; refreshKey?: number };
 
-export function DailyTaskModal({ visible, onClose, roomId }: Props) {
+export function DailyTaskModal({ visible, onClose, roomId, refreshKey }: Props) {
   const insets = useSafeAreaInsets();
   const [activeTab, setActiveTab] = useState<Tab>('tasks');
   const translateY = useRef(new Animated.Value(SHEET_HEIGHT)).current;
@@ -355,7 +385,7 @@ export function DailyTaskModal({ visible, onClose, roomId }: Props) {
           ))}
         </View>
         <View style={s.content}>
-          {activeTab === 'tasks' && <TasksTab roomId={roomId} />}
+          {activeTab === 'tasks' && <TasksTab roomId={roomId} refreshKey={refreshKey} />}
           {activeTab === 'top-hosts' && <TopHostsTab />}
           {activeTab === 'winners' && <WinnersTab />}
         </View>
@@ -414,4 +444,31 @@ const tab = StyleSheet.create({
     margin: 16, backgroundColor: '#E8F5E9', borderRadius: 12, padding: 12, alignItems: 'center',
   },
   claimBannerText: { fontSize: 14, fontWeight: '700', color: '#2E7D32' },
+  rewardChip: {
+    flexDirection: 'row', alignItems: 'center', gap: 3,
+    backgroundColor: '#F2EAFF', borderRadius: 20, paddingHorizontal: 7, paddingVertical: 3,
+  },
+  rewardChipText: { fontSize: 10, fontWeight: '700', color: '#7A0EED' },
+  rewardSection: { paddingHorizontal: 20, paddingTop: 20, paddingBottom: 8 },
+  rewardSectionTitle: { fontSize: 16, fontWeight: '800', color: '#1C1E22', marginBottom: 2 },
+  rewardSectionSub: { fontSize: 12, color: '#ABADB2', marginBottom: 12 },
+  rewardPreviews: { gap: 12 },
+  rewardPreviewRow: { flexDirection: 'row', gap: 12 },
+  rewardPreviewItem: { alignItems: 'center', gap: 5 },
+  rewardBgThumb: {
+    width: 100, height: 64, borderRadius: 10, overflow: 'hidden',
+    backgroundColor: '#F0EDF8', position: 'relative',
+  },
+  rewardBgImg: { width: '100%', height: '100%' },
+  rewardFrameThumb: {
+    width: 60, height: 60, borderRadius: 30, overflow: 'hidden',
+    backgroundColor: '#F0EDF8', position: 'relative',
+  },
+  rewardFrameImg: { width: '100%', height: '100%' },
+  rewardLockOverlay: {
+    ...StyleSheet.absoluteFillObject,
+    backgroundColor: 'rgba(0,0,0,0.45)',
+    alignItems: 'center', justifyContent: 'center',
+  },
+  rewardPreviewLabel: { fontSize: 11, color: '#7A7A8A', fontWeight: '600' },
 });

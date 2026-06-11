@@ -11,14 +11,14 @@ export type HostInfo = {
   isOnline: boolean;
 };
 
-export type SlotLayoutMap = Map<string, { x: number; y: number }>; // userId → screen center
+export type SlotLayoutMap = Map<string, { x: number; y: number }>;
 
 export type BattleStageInfo = {
   ownRoomName: string;
   ownRoomImageUrl: string | null;
   rivalRoomName: string;
   rivalRoomImageUrl: string | null;
-  timeDisplay: string; // formatted MM:SS
+  timeDisplay: string;
   isFinished: boolean;
 };
 
@@ -34,9 +34,10 @@ type RoomStageProps = {
   isHostMuted?: boolean;
   onSlotLayout?: (userId: string, x: number, y: number) => void;
   hostUserId?: string;
-  // battle
   battleInfo?: BattleStageInfo | null;
-  coinsByUserId?: Map<string, number>; // userId → coins received as gifts
+  coinsByUserId?: Map<string, number>;
+  hasRoomBg?: boolean;
+  rewardFrameUrl?: string | null;
 };
 
 function resolveAvatar(url: string | null | undefined): string | undefined {
@@ -59,8 +60,7 @@ function CoinBadge({ coins }: { coins: number }) {
   );
 }
 
-
-function HostSlot({ hostInfo, isHost, isMuted, onToggleMute, onLayout, coins, showCoins }: {
+function HostSlot({ hostInfo, isHost, isMuted, onToggleMute, onLayout, coins, showCoins, frameUrl, hasRoomBg }: {
   hostInfo: HostInfo;
   isHost: boolean;
   isMuted?: boolean;
@@ -68,6 +68,8 @@ function HostSlot({ hostInfo, isHost, isMuted, onToggleMute, onLayout, coins, sh
   onLayout?: (x: number, y: number) => void;
   coins?: number;
   showCoins?: boolean;
+  frameUrl?: string | null;
+  hasRoomBg?: boolean;
 }) {
   const avatarContent = (
     <>
@@ -91,28 +93,36 @@ function HostSlot({ hostInfo, isHost, isMuted, onToggleMute, onLayout, coins, sh
     </>
   );
 
-  const ringStyle = [stage.hostAvatarRing, !hostInfo.isOnline && stage.hostAvatarRingOffline];
+  const ringStyle = [
+    stage.hostAvatarRing,
+    !hostInfo.isOnline && stage.hostAvatarRingOffline,
+    hasRoomBg && stage.hostAvatarRingBg,
+  ];
   const measureLayout = (ref: View | null) => {
     if (!ref || !onLayout) return;
     ref.measureInWindow((x, y, w, h) => onLayout(x + w / 2, y + h / 2));
   };
 
+  const nameStyle = [
+    stage.seatName,
+    !hostInfo.isOnline && stage.offlineName,
+    hasRoomBg && stage.nameOnBg,
+  ];
+
   return (
     <View style={stage.hostWrap}>
       {isHost ? (
-        <TouchableOpacity
-          ref={measureLayout}
-          onPress={onToggleMute}
-          activeOpacity={0.8}
-          style={ringStyle}>
+        <TouchableOpacity ref={measureLayout} onPress={onToggleMute} activeOpacity={0.8} style={ringStyle}>
           {avatarContent}
+          {frameUrl && <Image source={{ uri: frameUrl }} style={stage.frameOverlay} resizeMode="contain" />}
         </TouchableOpacity>
       ) : (
         <View ref={measureLayout} style={ringStyle}>
           {avatarContent}
+          {frameUrl && <Image source={{ uri: frameUrl }} style={stage.frameOverlay} resizeMode="contain" />}
         </View>
       )}
-      <Text style={[stage.seatName, !hostInfo.isOnline && stage.offlineName]}>
+      <Text style={nameStyle} numberOfLines={1}>
         {hostInfo.isOnline ? hostInfo.name : 'Offline'}
       </Text>
       {showCoins && <CoinBadge coins={coins ?? 0} />}
@@ -120,7 +130,7 @@ function HostSlot({ hostInfo, isHost, isMuted, onToggleMute, onLayout, coins, sh
   );
 }
 
-function OccupiedSlot({ slot, isMe, isMuted, onToggleMute, onLayout, coins, showCoins }: {
+function OccupiedSlot({ slot, isMe, isMuted, onToggleMute, onLayout, coins, showCoins, hasRoomBg }: {
   slot: SeatSlot;
   isMe?: boolean;
   isMuted?: boolean;
@@ -128,6 +138,7 @@ function OccupiedSlot({ slot, isMe, isMuted, onToggleMute, onLayout, coins, show
   onLayout?: (x: number, y: number) => void;
   coins?: number;
   showCoins?: boolean;
+  hasRoomBg?: boolean;
 }) {
   const uri = resolveAvatar(slot.avatarUrl);
   const avatar = uri ? (
@@ -143,10 +154,13 @@ function OccupiedSlot({ slot, isMe, isMuted, onToggleMute, onLayout, coins, show
     ref.measureInWindow((x, y, w, h) => onLayout(x + w / 2, y + h / 2));
   };
 
+  const ringStyle = [stage.occupiedRing, hasRoomBg && stage.occupiedRingBg];
+  const nameStyle = [stage.seatName, hasRoomBg && stage.nameOnBg];
+
   return (
     <View style={stage.seatWrap}>
       {isMe ? (
-        <TouchableOpacity ref={measureLayout} onPress={onToggleMute} activeOpacity={0.8} style={stage.occupiedRing}>
+        <TouchableOpacity ref={measureLayout} onPress={onToggleMute} activeOpacity={0.8} style={ringStyle}>
           {avatar}
           {isMuted && (
             <View style={stage.muteBadge}>
@@ -155,21 +169,21 @@ function OccupiedSlot({ slot, isMe, isMuted, onToggleMute, onLayout, coins, show
           )}
         </TouchableOpacity>
       ) : (
-        <View ref={measureLayout} style={stage.occupiedRing}>
+        <View ref={measureLayout} style={ringStyle}>
           {avatar}
         </View>
       )}
-      <Text style={stage.seatName} numberOfLines={1}>{slot.userName}</Text>
+      <Text style={nameStyle} numberOfLines={1}>{slot.userName}</Text>
       {showCoins && <CoinBadge coins={coins ?? 0} />}
     </View>
   );
 }
 
-function RequestableSlot({ onPress }: { onPress: () => void }) {
+function RequestableSlot({ onPress, hasRoomBg }: { onPress: () => void; hasRoomBg?: boolean }) {
   return (
     <TouchableOpacity onPress={onPress} activeOpacity={0.8} style={stage.seatWrap}>
-      <View style={[stage.seatCircle, stage.seatCircleRequest]}>
-        <Ionicons name="add" size={26} color="#7A0EED" />
+      <View style={[stage.seatCircle, hasRoomBg ? stage.seatCircleGold : stage.seatCircleDefault]}>
+        <Ionicons name={hasRoomBg ? 'mic-outline' : 'add'} size={hasRoomBg ? 22 : 26} color={hasRoomBg ? '#FFD700' : '#7A0EED'} />
       </View>
       <View style={stage.requestPill}>
         <Text style={stage.requestPillText}>REQUEST</Text>
@@ -178,24 +192,23 @@ function RequestableSlot({ onPress }: { onPress: () => void }) {
   );
 }
 
-function LockedSlot() {
+function LockedSlot({ hasRoomBg }: { hasRoomBg?: boolean }) {
   return (
     <View style={stage.seatWrap}>
-      <View style={stage.seatCircle}>
-        <Ionicons name="add" size={24} color="#BDBDBD" />
+      <View style={[stage.seatCircle, hasRoomBg ? stage.seatCircleGold : stage.seatCircleDefault]}>
+        <Ionicons name={hasRoomBg ? 'mic-outline' : 'add'} size={hasRoomBg ? 22 : 24} color={hasRoomBg ? '#FFD700' : '#BDBDBD'} />
       </View>
-      <Text style={stage.joinLabel}>JOIN</Text>
+      <Text style={[stage.joinLabel, hasRoomBg && stage.joinLabelBg]}>JOIN</Text>
     </View>
   );
 }
 
-// 7 member slots (indices 1–7), fixed positions — 8 total including host
 const MEMBER_INDICES = [1, 2, 3, 4, 5, 6, 7];
 
 export function RoomStage({
   hostInfo, seats, isHost, hideEmptySlots, onRequestSeat,
   myUserId, isMuted, onToggleMute, isHostMuted, onSlotLayout, hostUserId,
-  battleInfo, coinsByUserId,
+  battleInfo, coinsByUserId, hasRoomBg, rewardFrameUrl,
 }: RoomStageProps) {
   const filledMap = new Map(
     seats.filter(s => s.slotIndex !== 0).map(s => [s.slotIndex, s])
@@ -218,30 +231,24 @@ export function RoomStage({
           onLayout={onSlotLayout ? (x, y) => onSlotLayout(occupied.userId, x, y) : undefined}
           coins={coins}
           showCoins={!!battleInfo}
+          hasRoomBg={hasRoomBg}
         />
       );
     }
-    if (hideEmptySlots || isHost) return <LockedSlot key={slotIndex} />;
+    if (hideEmptySlots || isHost) return <LockedSlot key={slotIndex} hasRoomBg={hasRoomBg} />;
     if (firstEmptyIndex === null) return null;
     if (slotIndex === firstEmptyIndex) {
-      return <RequestableSlot key={slotIndex} onPress={() => onRequestSeat(slotIndex)} />;
+      return <RequestableSlot key={slotIndex} onPress={() => onRequestSeat(slotIndex)} hasRoomBg={hasRoomBg} />;
     }
-    return <LockedSlot key={slotIndex} />;
+    return <LockedSlot key={slotIndex} hasRoomBg={hasRoomBg} />;
   }
 
-  const row1 = MEMBER_INDICES.slice(0, 3); // 1,2,3
-  const row2 = MEMBER_INDICES.slice(3, 7); // 4,5,6,7
-
+  const row1 = MEMBER_INDICES.slice(0, 3);
+  const row2 = MEMBER_INDICES.slice(3, 7);
   const hostCoins = hostUserId ? coinsByUserId?.get(hostUserId) : undefined;
 
-  return (
-    <LinearGradient
-      colors={['#DDD5F8', '#EDE8FF', '#F5F2FF']}
-      start={{ x: 0, y: 0 }}
-      end={{ x: 1, y: 1 }}
-      style={stage.container}>
-
-      {/* Row 1: host + slots 1,2,3 */}
+  const stageContent = (
+    <>
       <View style={stage.row}>
         <HostSlot
           hostInfo={hostInfo}
@@ -251,15 +258,28 @@ export function RoomStage({
           onLayout={onSlotLayout && hostUserId ? (x, y) => onSlotLayout(hostUserId, x, y) : undefined}
           coins={hostCoins}
           showCoins={!!battleInfo}
+          frameUrl={rewardFrameUrl}
+          hasRoomBg={hasRoomBg}
         />
         {row1.map(renderMemberSlot)}
       </View>
-
-      {/* Row 2: slots 4,5,6,7 */}
       <View style={stage.row}>
         {row2.map(renderMemberSlot)}
       </View>
+    </>
+  );
 
+  if (hasRoomBg) {
+    return <View style={stage.container}>{stageContent}</View>;
+  }
+
+  return (
+    <LinearGradient
+      colors={['#DDD5F8', '#EDE8FF', '#F5F2FF']}
+      start={{ x: 0, y: 0 }}
+      end={{ x: 1, y: 1 }}
+      style={stage.container}>
+      {stageContent}
     </LinearGradient>
   );
 }
@@ -269,6 +289,13 @@ const stage = StyleSheet.create({
     paddingVertical: 18,
     paddingHorizontal: 12,
     gap: 12,
+    overflow: 'hidden',
+  },
+  frameOverlay: {
+    position: 'absolute',
+    top: -4, left: -4, right: -4, bottom: -4,
+    width: undefined, height: undefined,
+    zIndex: 2,
   },
   row: {
     flexDirection: 'row',
@@ -280,14 +307,14 @@ const stage = StyleSheet.create({
   hostWrap: {
     alignItems: 'center',
     gap: 2,
-    width: 72,
+    width: 68,
   },
   hostAvatarRing: {
-    width: 68,
-    height: 68,
-    borderRadius: 34,
-    borderWidth: 3,
-    borderColor: '#7A0EED',
+    width: 60,
+    height: 60,
+    borderRadius: 30,
+    borderWidth: 2,
+    borderColor: '#FFD700',
     alignItems: 'center',
     justifyContent: 'center',
     position: 'relative',
@@ -295,10 +322,18 @@ const stage = StyleSheet.create({
   hostAvatarRingOffline: {
     borderColor: '#ABADB2',
   },
+  hostAvatarRingBg: {
+    borderColor: '#FFFFFF',
+    shadowColor: '#FFFFFF',
+    shadowOpacity: 0.5,
+    shadowRadius: 6,
+    shadowOffset: { width: 0, height: 0 },
+    elevation: 4,
+  },
   hostAvatar: {
-    width: 60,
-    height: 60,
-    borderRadius: 30,
+    width: 54,
+    height: 54,
+    borderRadius: 27,
   },
   hostAvatarFallback: {
     backgroundColor: '#EDE8F7',
@@ -306,7 +341,7 @@ const stage = StyleSheet.create({
     justifyContent: 'center',
   },
   hostAvatarInitial: {
-    fontSize: 22,
+    fontSize: 20,
     fontWeight: '800',
     color: '#7A0EED',
   },
@@ -329,19 +364,22 @@ const stage = StyleSheet.create({
     width: 68,
   },
   occupiedRing: {
-    width: 56,
-    height: 56,
-    borderRadius: 28,
+    width: 60,
+    height: 60,
+    borderRadius: 30,
     borderWidth: 2,
-    borderColor: '#7A0EED',
+    borderColor: '#FFD700',
     alignItems: 'center',
     justifyContent: 'center',
     position: 'relative',
   },
+  occupiedRingBg: {
+    borderColor: '#FFFFFF',
+  },
   seatAvatar: {
-    width: 50,
-    height: 50,
-    borderRadius: 25,
+    width: 54,
+    height: 54,
+    borderRadius: 27,
   },
   seatAvatarFallback: {
     backgroundColor: '#EDE8F7',
@@ -349,7 +387,7 @@ const stage = StyleSheet.create({
     justifyContent: 'center',
   },
   seatInitial: {
-    fontSize: 18,
+    fontSize: 20,
     fontWeight: '700',
     color: '#7A0EED',
   },
@@ -360,20 +398,28 @@ const stage = StyleSheet.create({
     textAlign: 'center',
     maxWidth: 66,
   },
+  nameOnBg: {
+    color: '#FFFFFF',
+    textShadowColor: 'rgba(0,0,0,0.8)',
+    textShadowOffset: { width: 0, height: 1 },
+    textShadowRadius: 3,
+  },
   seatCircle: {
-    width: 56,
-    height: 56,
-    borderRadius: 28,
+    width: 60,
+    height: 60,
+    borderRadius: 30,
     borderWidth: 2,
-    borderColor: '#BDBDBD',
     borderStyle: 'dashed',
     alignItems: 'center',
     justifyContent: 'center',
+  },
+  seatCircleDefault: {
+    borderColor: '#BDBDBD',
     backgroundColor: 'rgba(255,255,255,0.5)',
   },
-  seatCircleRequest: {
-    borderColor: '#7A0EED',
-    borderStyle: 'solid',
+  seatCircleGold: {
+    borderColor: '#FFD700',
+    backgroundColor: 'rgba(255,215,0,0.08)',
   },
   requestPill: {
     backgroundColor: '#7A0EED',
@@ -387,11 +433,31 @@ const stage = StyleSheet.create({
     fontWeight: '800',
     letterSpacing: 0.5,
   },
+  requestPillGold: {
+    backgroundColor: 'rgba(255,215,0,0.2)',
+    borderRadius: 10,
+    paddingHorizontal: 8,
+    paddingVertical: 3,
+    borderWidth: 1,
+    borderColor: '#FFD700',
+  },
+  requestPillGoldText: {
+    color: '#FFD700',
+    fontSize: 9,
+    fontWeight: '800',
+    letterSpacing: 0.5,
+  },
   joinLabel: {
     fontSize: 10,
     fontWeight: '600',
     color: '#ABADB2',
     letterSpacing: 0.4,
+  },
+  joinLabelBg: {
+    color: 'rgb(255, 255, 255)',
+    textShadowColor: 'rgba(0,0,0,0.6)',
+    textShadowOffset: { width: 0, height: 1 },
+    textShadowRadius: 2,
   },
   muteBadge: {
     position: 'absolute',
@@ -405,7 +471,6 @@ const stage = StyleSheet.create({
     justifyContent: 'center',
   },
 
-  // Coin badge below name
   coinBadge: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -423,5 +488,4 @@ const stage = StyleSheet.create({
     fontWeight: '800',
     color: '#7A0EED',
   },
-
 });

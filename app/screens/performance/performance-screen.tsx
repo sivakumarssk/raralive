@@ -1,4 +1,5 @@
 import { Ionicons } from '@expo/vector-icons';
+import { Image as ExpoImage } from 'expo-image';
 import { LinearGradient } from 'expo-linear-gradient';
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import { useEffect, useRef, useState } from 'react';
@@ -223,7 +224,7 @@ export function PerformanceScreen() {
               </View>
 
               {/* Level image — smaller, centred */}
-              <Image source={levelImg} style={s.levelImg} resizeMode="contain" />
+              <ExpoImage source={levelImg} style={s.levelImg} contentFit="contain" />
 
               {/* Progress card */}
               <View style={s.progressCard}>

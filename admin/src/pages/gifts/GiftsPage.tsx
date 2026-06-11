@@ -269,10 +269,10 @@ function DeleteDialog({ gift, onConfirm, onCancel, deleting }: {
       <div className="absolute inset-0 bg-black/40" onClick={onCancel} />
       <div className="relative bg-white rounded-2xl shadow-2xl p-6 w-full max-w-sm">
         <div className="flex items-center gap-4 mb-4">
-          <div className="w-14 h-14 rounded-2xl flex items-center justify-center shrink-0" style={{ backgroundColor: gift.bg_color }}>
+          <div className="w-14 h-14 rounded-2xl flex items-center justify-center shrink-0 bg-gray-50">
             {imgUrl
               ? <img src={imgUrl} alt={gift.name} className="w-10 h-10 object-contain" />
-              : <div className="w-8 h-8 rounded-full bg-white/50" />}
+              : <div className="w-8 h-8 rounded-full bg-gray-200" />}
           </div>
           <div>
             <p className="font-black text-gray-900">{gift.name}</p>
@@ -426,13 +426,10 @@ export function GiftsPage() {
                       {/* Gift */}
                       <td className="px-6 py-3">
                         <div className="flex items-center gap-3">
-                          <div
-                            className="w-11 h-11 rounded-xl flex items-center justify-center shrink-0"
-                            style={{ backgroundColor: gift.bg_color }}
-                          >
+                          <div className="w-11 h-11 rounded-xl flex items-center justify-center shrink-0 bg-gray-50">
                             {imgUrl
-                              ? <img src={imgUrl} alt={gift.name} className="w-8 h-8 object-contain" />
-                              : <div className="w-6 h-6 rounded-full bg-white/50" />}
+                              ? <img src={imgUrl} alt={gift.name} className="w-9 h-9 object-contain" />
+                              : <div className="w-6 h-6 rounded-full bg-gray-200" />}
                           </div>
                           <span className="font-semibold text-gray-800">{gift.name}</span>
                         </div>

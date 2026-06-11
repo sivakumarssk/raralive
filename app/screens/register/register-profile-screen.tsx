@@ -198,6 +198,7 @@ export function RegisterProfileScreen({ onSkip, onComplete }: RegisterProfileScr
   const [dob, setDob] = useState<Date | null>(null);
   const [avatarUri, setAvatarUri] = useState<string | null>(null);
   const [avatarMime, setAvatarMime] = useState('image/jpeg');
+  const [location, setLocation] = useState('');
   const [showCalendar, setShowCalendar] = useState(false);
   const [errors, setErrors] = useState<{ fullName?: string; username?: string; dob?: string; api?: string }>({});
   const [loading, setLoading] = useState(false);
@@ -269,6 +270,7 @@ export function RegisterProfileScreen({ onSkip, onComplete }: RegisterProfileScr
         dateOfBirth: formatDob(dob!),
         avatarUri: avatarUri ?? undefined,
         avatarMimeType: avatarMime,
+        location: location.trim() || undefined,
       },
       token,
     );
@@ -421,6 +423,22 @@ export function RegisterProfileScreen({ onSkip, onComplete }: RegisterProfileScr
               </TouchableOpacity>
               <Text style={styles.hint}>You must be 18 or older to join.</Text>
               {errors.dob ? <Text style={styles.errorText}>{errors.dob}</Text> : null}
+            </View>
+
+            {/* Location */}
+            <View style={styles.field}>
+              <Text style={styles.label}>LOCATION</Text>
+              <View style={styles.inputBox}>
+                <Ionicons name="location-outline" size={20} color="#7A0EED" />
+                <TextInput
+                  placeholder="City or country (optional)"
+                  placeholderTextColor="#A9ABB3"
+                  style={styles.input}
+                  value={location}
+                  returnKeyType="done"
+                  onChangeText={setLocation}
+                />
+              </View>
             </View>
 
             {/* API error */}

@@ -10,6 +10,7 @@ import {
   FlatList,
   Image,
   KeyboardAvoidingView,
+  Modal,
   Platform,
   StyleSheet,
   Text,
@@ -200,29 +201,40 @@ function Caption({ displayName, text }: { displayName: string; text: string }) {
   );
 }
 
-// ── Comments sheet ────────────────────────────────────────────────────────────
-
-function CommentsSheet({
-  postId,
-  allowComments,
-  onClose,
-  onCountChange,
-}: {
-  postId: string;
+// ── Comments sheet — single instance at screen level, slides up from app bottom
+type CommentsSheetProps = {
+  visible: boolean;
+  postId: string | null;
   allowComments: boolean;
   onClose: () => void;
-  onCountChange: (n: number) => void;
-}) {
+  onCountChange: (postId: string, n: number) => void;
+};
+
+function CommentsSheet({ visible, postId, allowComments, onClose, onCountChange }: CommentsSheetProps) {
   const insets = useSafeAreaInsets();
+  const { height: SCREEN_H } = Dimensions.get('window');
+  const SHEET_H = SCREEN_H * 0.72;
+  const slideY = useRef(new Animated.Value(SHEET_H)).current;
+
   const [comments, setComments] = useState<Comment[]>([]);
-  const [loading, setLoading] = useState(true);
+  const [loading, setLoading] = useState(false);
   const [text, setText] = useState('');
   const [posting, setPosting] = useState(false);
-  const slideY = useRef(new Animated.Value(600)).current;
   const countRef = useRef(0);
+  const loadedPostId = useRef<string | null>(null);
 
+  // Animate in when visible, reset + load when postId changes
   useEffect(() => {
-    Animated.timing(slideY, { toValue: 0, duration: 280, useNativeDriver: true }).start();
+    if (!visible || !postId) return;
+    // slide in
+    slideY.setValue(SHEET_H);
+    Animated.spring(slideY, { toValue: 0, useNativeDriver: true, tension: 68, friction: 12 }).start();
+
+    if (loadedPostId.current === postId) return;
+    loadedPostId.current = postId;
+    setComments([]);
+    setText('');
+    setLoading(true);
     fetch(`${BASE_URL}/posts/${postId}/comments?limit=50`)
       .then(r => r.json())
       .then(j => {
@@ -233,19 +245,20 @@ function CommentsSheet({
       })
       .catch(() => {})
       .finally(() => setLoading(false));
-  }, [postId, slideY]);
+  }, [visible, postId, SHEET_H, slideY]);
 
   const dismiss = () => {
-    Animated.timing(slideY, { toValue: 600, duration: 240, useNativeDriver: true })
-      .start(onClose);
+    Animated.timing(slideY, { toValue: SHEET_H, duration: 240, useNativeDriver: true }).start(() => {
+      loadedPostId.current = null;
+      onClose();
+    });
   };
 
   const submit = async () => {
     const trimmed = text.trim();
-    if (!trimmed || posting) return;
+    if (!trimmed || posting || !postId) return;
     setText('');
     setPosting(true);
-    // Optimistic — add locally immediately
     const temp: Comment = {
       id: `temp_${Date.now()}`,
       text: trimmed,
@@ -257,8 +270,7 @@ function CommentsSheet({
     };
     setComments(prev => [...prev, temp]);
     countRef.current += 1;
-    onCountChange(countRef.current);
-
+    onCountChange(postId, countRef.current);
     try {
       const token = authStore.getToken();
       const r = await fetch(`${BASE_URL}/posts/${postId}/comments`, {
@@ -270,27 +282,35 @@ function CommentsSheet({
         body: JSON.stringify({ text: trimmed }),
       });
       const j = await r.json();
-      if (j.success) {
-        // Replace temp with real comment
-        setComments(prev => prev.map(c => c.id === temp.id ? j.data : c));
-      }
-    } catch { /* silent — temp comment stays */ } finally {
+      if (j.success) setComments(prev => prev.map(c => c.id === temp.id ? j.data : c));
+    } catch { /* silent */ } finally {
       setPosting(false);
     }
   };
 
   return (
-    <View style={StyleSheet.absoluteFill} pointerEvents="box-none">
+    <Modal visible={visible} transparent animationType="none" onRequestClose={dismiss} statusBarTranslucent>
       <TouchableOpacity style={cmt.backdrop} activeOpacity={1} onPress={dismiss} />
-      <Animated.View style={[cmt.sheet, { transform: [{ translateY: slideY }], paddingBottom: insets.bottom + 8 }]}>
-        <View style={cmt.handle} />
-        <Text style={cmt.title}>Comments</Text>
+      <Animated.View style={[cmt.sheet, { height: SHEET_H, paddingBottom: insets.bottom + 4, transform: [{ translateY: slideY }] }]}>
+        {/* Drag handle */}
+        <View style={cmt.handleWrap}>
+          <View style={cmt.handle} />
+        </View>
 
+        {/* Header row */}
+        <View style={cmt.headerRow}>
+          <Text style={cmt.title}>Comments</Text>
+          <TouchableOpacity onPress={dismiss} hitSlop={10}>
+            <Ionicons name="close" size={22} color="#60626A" />
+          </TouchableOpacity>
+        </View>
+
+        {/* Comment list */}
         {loading ? (
-          <ActivityIndicator color="#7A0EED" style={{ marginVertical: 32 }} />
+          <ActivityIndicator color="#7A0EED" style={{ marginVertical: 40 }} />
         ) : comments.length === 0 ? (
           <View style={cmt.empty}>
-            <Ionicons name="chatbubbles-outline" size={44} color="#D0C8F0" />
+            <Ionicons name="chatbubbles-outline" size={48} color="#D0C8F0" />
             <Text style={cmt.emptyText}>No comments yet. Be the first!</Text>
           </View>
         ) : (
@@ -299,13 +319,13 @@ function CommentsSheet({
             keyExtractor={c => c.id}
             showsVerticalScrollIndicator={false}
             style={{ flex: 1 }}
-            contentContainerStyle={{ paddingHorizontal: 16, paddingBottom: 12 }}
+            contentContainerStyle={{ paddingHorizontal: 16, paddingTop: 4, paddingBottom: 12 }}
             renderItem={({ item }) => {
               const name = item.username ?? item.full_name ?? 'User';
               const uri = resolveMedia(item.avatar_url);
               return (
                 <View style={cmt.row}>
-                  <Avatar initial={name[0]?.toUpperCase() ?? '?'} color={avatarColor(item.user_id)} size={34} uri={uri} />
+                  <Avatar initial={name[0]?.toUpperCase() ?? '?'} color={avatarColor(item.user_id)} size={36} uri={uri} />
                   <View style={cmt.bubble}>
                     <Text style={cmt.commentName}>
                       {name} <Text style={cmt.commentText}>{item.text}</Text>
@@ -318,8 +338,9 @@ function CommentsSheet({
           />
         )}
 
+        {/* Input */}
         {allowComments ? (
-          <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
+          <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : 'height'}>
             <View style={cmt.inputRow}>
               <TextInput
                 style={cmt.input}
@@ -348,22 +369,32 @@ function CommentsSheet({
           </View>
         )}
       </Animated.View>
-    </View>
+    </Modal>
   );
 }
 
 // ── Post card ─────────────────────────────────────────────────────────────────
 
-function PostCard({ post }: { post: FeedPost }) {
+const MAX_IMG_H = SCREEN_W * 1.25; // max ~5:4 tall
+const MIN_IMG_H = SCREEN_W * 0.56; // min ~16:9 wide
+
+function PostCard({ post, currentUserId, onOpenComments }: {
+  post: FeedPost;
+  currentUserId: string;
+  onOpenComments: (postId: string, allowComments: boolean) => void;
+}) {
   const [liked, setLiked] = useState(false);
   const [likesCount, setLikesCount] = useState(post.likes_count);
-  const [commentsCount, setCommentsCount] = useState(post.comments_count);
-  const [showComments, setShowComments] = useState(false);
+  const [commentsCount] = useState(post.comments_count);
   const [downloading, setDownloading] = useState(false);
   const [mediaError, setMediaError] = useState(false);
+  const [mediaHeight, setMediaHeight] = useState(POST_IMG_H);
+  const [following, setFollowing] = useState(false);
+  const [followLoading, setFollowLoading] = useState(false);
   const likeScale = useRef(new Animated.Value(1)).current;
-  const likeInitialized = useRef(false);
+  const initDone = useRef(false);
 
+  const isOwnPost = !!currentUserId && post.user_id === currentUserId;
   const displayName = post.username ?? post.full_name ?? 'User';
   const initial = displayName[0]?.toUpperCase() ?? '?';
   const color = avatarColor(post.user_id);
@@ -372,19 +403,57 @@ function PostCard({ post }: { post: FeedPost }) {
   const mediaUri = firstMedia ? resolveMedia(firstMedia.media_url) : null;
   const isVideo = firstMedia?.media_type === 'video';
 
-  // Fetch liked state once on mount — silent
+  // Measure actual image size and fit height to aspect ratio
   useEffect(() => {
-    if (likeInitialized.current) return;
-    likeInitialized.current = true;
+    if (!mediaUri || isVideo) return;
+    Image.getSize(
+      mediaUri,
+      (w, h) => {
+        if (!w || !h) return;
+        const ratio = h / w;
+        const computed = SCREEN_W * ratio;
+        setMediaHeight(Math.min(MAX_IMG_H, Math.max(MIN_IMG_H, computed)));
+      },
+      () => {},
+    );
+  }, [mediaUri, isVideo]);
+
+  // Fetch liked + follow state once on mount
+  useEffect(() => {
+    if (initDone.current) return;
+    initDone.current = true;
     const token = authStore.getToken();
     if (!token) return;
-    fetch(`${BASE_URL}/posts/${post.id}/liked`, {
-      headers: { Authorization: `Bearer ${token}` },
-    })
+    fetch(`${BASE_URL}/posts/${post.id}/liked`, { headers: { Authorization: `Bearer ${token}` } })
       .then(r => r.json())
       .then(j => { if (j.success) setLiked(j.data.liked); })
       .catch(() => {});
-  }, [post.id]);
+    if (!isOwnPost) {
+      fetch(`${BASE_URL}/auth/follow/${post.user_id}`, { headers: { Authorization: `Bearer ${token}` } })
+        .then(r => r.json())
+        .then(j => { if (j.success) setFollowing(j.following); })
+        .catch(() => {});
+    }
+  }, [post.id, post.user_id, isOwnPost]);
+
+  const handleFollow = async () => {
+    if (followLoading || isOwnPost) return;
+    const token = authStore.getToken();
+    if (!token) return;
+    const wasFollowing = following;
+    setFollowing(!wasFollowing);
+    setFollowLoading(true);
+    try {
+      await fetch(`${BASE_URL}/auth/follow/${post.user_id}`, {
+        method: wasFollowing ? 'DELETE' : 'POST',
+        headers: { Authorization: `Bearer ${token}` },
+      });
+    } catch {
+      setFollowing(wasFollowing);
+    } finally {
+      setFollowLoading(false);
+    }
+  };
 
   const handleLike = () => {
     // Instant optimistic — no await, fire and forget
@@ -440,23 +509,32 @@ function PostCard({ post }: { post: FeedPost }) {
           <Text style={card.username}>{displayName}</Text>
           <Text style={card.time}>{timeAgo(post.created_at)}</Text>
         </View>
-        <TouchableOpacity style={card.followBtn} activeOpacity={0.85}>
-          <Text style={card.followText}>Follow</Text>
-        </TouchableOpacity>
+        {!isOwnPost && (
+          <TouchableOpacity
+            style={[card.followBtn, following && card.followingBtn]}
+            activeOpacity={0.85}
+            onPress={handleFollow}
+            disabled={followLoading}>
+            {followLoading
+              ? <ActivityIndicator size="small" color={following ? '#7A0EED' : '#FFFFFF'} />
+              : <Text style={[card.followText, following && card.followingText]}>
+                  {following ? 'Following' : 'Follow'}
+                </Text>}
+          </TouchableOpacity>
+        )}
       </View>
 
       {/* Media */}
-      <View style={[card.media, { backgroundColor: '#1A1A2E' }]}>
+      <View style={[card.media, { height: mediaHeight, backgroundColor: '#0D0D1A' }]}>
         {mediaUri && !mediaError ? (
           <Image
             source={{ uri: mediaUri }}
-            style={card.mediaImage}
-            resizeMode="cover"
+            style={{ width: SCREEN_W, height: mediaHeight }}
+            resizeMode="contain"
             onError={() => setMediaError(true)}
           />
         ) : (
-          // Fallback when no media or image load error
-          <View style={card.mediaPlaceholder}>
+          <View style={[card.mediaPlaceholder, { height: mediaHeight }]}>
             <Ionicons name={isVideo ? 'videocam-outline' : 'image-outline'} size={40} color="rgba(255,255,255,0.3)" />
           </View>
         )}
@@ -483,7 +561,7 @@ function PostCard({ post }: { post: FeedPost }) {
             <Text style={[card.actionCount, liked && { color: '#E14C57' }]}>{formatCount(likesCount)}</Text>
           </TouchableOpacity>
 
-          <TouchableOpacity style={card.actionBtn} onPress={() => setShowComments(true)} activeOpacity={0.8}>
+          <TouchableOpacity style={card.actionBtn} onPress={() => onOpenComments(post.id, post.allow_comments)} activeOpacity={0.8}>
             <Ionicons name="chatbubble-outline" size={20} color="#60626A" />
             <Text style={card.actionCount}>{formatCount(commentsCount)}</Text>
           </TouchableOpacity>
@@ -504,16 +582,6 @@ function PostCard({ post }: { post: FeedPost }) {
       {post.caption ? (
         <Caption displayName={displayName} text={post.caption} />
       ) : null}
-
-      {/* Comments sheet — rendered outside the card so it overlays the whole screen */}
-      {showComments && (
-        <CommentsSheet
-          postId={post.id}
-          allowComments={post.allow_comments}
-          onClose={() => setShowComments(false)}
-          onCountChange={setCommentsCount}
-        />
-      )}
     </View>
   );
 }
@@ -525,10 +593,28 @@ export function HomeScreen() {
   const bottomInset    = Platform.OS === 'android' ? Math.max(insets.bottom, 12) : 0;
   const TAB_BAR_HEIGHT = Platform.OS === 'ios' ? 80 : 56 + bottomInset;
 
+  const currentUserId = authStore.getUserId() ?? '';
   const [activeTab, setActiveTab] = useState<HomeTab>('Trending');
   const [posts, setPosts] = useState<FeedPost[]>([]);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
+
+  // Sheet state — single instance for all posts
+  const [sheetPostId, setSheetPostId] = useState<string | null>(null);
+  const [sheetAllowComments, setSheetAllowComments] = useState(true);
+
+  const openComments = useCallback((postId: string, allowComments: boolean) => {
+    setSheetPostId(postId);
+    setSheetAllowComments(allowComments);
+  }, []);
+
+  const closeComments = useCallback(() => {
+    setSheetPostId(null);
+  }, []);
+
+  const handleCountChange = useCallback((postId: string, n: number) => {
+    setPosts(prev => prev.map(p => p.id === postId ? { ...p, comments_count: n } : p));
+  }, []);
 
   const loadFeed = useCallback(async (silent = false) => {
     if (!silent) setLoading(true);
@@ -575,10 +661,24 @@ export function HomeScreen() {
                 <Text style={styles.emptySub}>Posts you and others share will appear here</Text>
               </View>
             }
-            renderItem={({ item }) => <PostCard post={item} />}
+            renderItem={({ item }) => (
+              <PostCard
+                post={item}
+                currentUserId={currentUserId}
+                onOpenComments={openComments}
+              />
+            )}
           />
         )}
       </View>
+
+      <CommentsSheet
+        visible={!!sheetPostId}
+        postId={sheetPostId}
+        allowComments={sheetAllowComments}
+        onClose={closeComments}
+        onCountChange={handleCountChange}
+      />
     </SafeAreaView>
   );
 }
@@ -639,12 +739,13 @@ const card = StyleSheet.create({
   headerText: { flex: 1 },
   username:   { fontSize: 14, fontWeight: '700', color: '#1C1E22' },
   time:       { fontSize: 12, color: '#ABADB2', marginTop: 1 },
-  followBtn:  { height: 32, paddingHorizontal: 18, borderRadius: 999, backgroundColor: '#7A0EED', alignItems: 'center', justifyContent: 'center', shadowColor: '#7A0EED', shadowOpacity: 0.3, shadowRadius: 6, shadowOffset: { width: 0, height: 2 }, elevation: 3 },
-  followText: { fontSize: 13, fontWeight: '700', color: '#FFFFFF' },
+  followBtn:     { height: 32, paddingHorizontal: 18, borderRadius: 999, backgroundColor: '#7A0EED', alignItems: 'center', justifyContent: 'center', shadowColor: '#7A0EED', shadowOpacity: 0.3, shadowRadius: 6, shadowOffset: { width: 0, height: 2 }, elevation: 3 },
+  followingBtn:  { backgroundColor: 'transparent', borderWidth: 1.5, borderColor: '#7A0EED', shadowOpacity: 0, elevation: 0 },
+  followText:    { fontSize: 13, fontWeight: '700', color: '#FFFFFF' },
+  followingText: { color: '#7A0EED' },
 
-  media:            { width: SCREEN_W, height: POST_IMG_H, overflow: 'hidden' },
-  mediaImage:       { width: SCREEN_W, height: POST_IMG_H },
-  mediaPlaceholder: { width: SCREEN_W, height: POST_IMG_H, backgroundColor: '#1A1A2E', alignItems: 'center', justifyContent: 'center' },
+  media:            { width: SCREEN_W, overflow: 'hidden' },
+  mediaPlaceholder: { width: SCREEN_W, backgroundColor: '#0D0D1A', alignItems: 'center', justifyContent: 'center' },
   playOverlay:      { ...StyleSheet.absoluteFillObject, alignItems: 'center', justifyContent: 'center' },
   playCircle:       { width: 62, height: 62, borderRadius: 31, backgroundColor: 'rgba(255,255,255,0.22)', alignItems: 'center', justifyContent: 'center', borderWidth: 2, borderColor: 'rgba(255,255,255,0.5)' },
 
@@ -655,21 +756,23 @@ const card = StyleSheet.create({
 });
 
 const cmt = StyleSheet.create({
-  backdrop:     { ...StyleSheet.absoluteFillObject, backgroundColor: 'rgba(0,0,0,0.45)' },
-  sheet:        { position: 'absolute', bottom: 0, left: 0, right: 0, backgroundColor: '#FFFFFF', borderTopLeftRadius: 24, borderTopRightRadius: 24, maxHeight: '75%', minHeight: 320, shadowColor: '#000', shadowOpacity: 0.2, shadowRadius: 20, shadowOffset: { width: 0, height: -4 }, elevation: 20 },
-  handle:       { width: 40, height: 4, borderRadius: 2, backgroundColor: '#E0DFF5', alignSelf: 'center', marginTop: 10, marginBottom: 12 },
-  title:        { fontSize: 16, fontWeight: '800', color: '#1C1E22', paddingHorizontal: 20, marginBottom: 12 },
-  empty:        { alignItems: 'center', justifyContent: 'center', gap: 8, paddingVertical: 40 },
-  emptyText:    { fontSize: 14, color: '#ABADB2' },
-  row:          { flexDirection: 'row', gap: 10, marginBottom: 14, alignItems: 'flex-start' },
-  bubble:       { flex: 1 },
-  commentName:  { fontSize: 13, fontWeight: '700', color: '#1C1E22', lineHeight: 19 },
-  commentText:  { fontWeight: '400', color: '#3C3F4A' },
-  commentTime:  { fontSize: 11, color: '#ABADB2', marginTop: 2 },
-  inputRow:     { flexDirection: 'row', alignItems: 'flex-end', gap: 10, paddingHorizontal: 16, paddingTop: 10, paddingBottom: 8, borderTopWidth: StyleSheet.hairlineWidth, borderTopColor: '#F0EFF5' },
-  input:        { flex: 1, minHeight: 40, maxHeight: 100, backgroundColor: '#F7F5FF', borderRadius: 20, paddingHorizontal: 16, paddingVertical: 10, fontSize: 14, color: '#1C1E22', borderWidth: 1, borderColor: '#E8E6F0' },
-  sendBtn:      { width: 38, height: 38, borderRadius: 19, backgroundColor: '#7A0EED', alignItems: 'center', justifyContent: 'center', shadowColor: '#7A0EED', shadowOpacity: 0.35, shadowRadius: 6, shadowOffset: { width: 0, height: 2 }, elevation: 3 },
+  backdrop:        { position: 'absolute', left: 0, right: 0, top: 0, bottom: 0, backgroundColor: 'rgba(0,0,0,0.5)' },
+  sheet:           { position: 'absolute', bottom: 0, left: 0, right: 0, backgroundColor: '#FFFFFF', borderTopLeftRadius: 24, borderTopRightRadius: 24, shadowColor: '#000', shadowOpacity: 0.25, shadowRadius: 20, shadowOffset: { width: 0, height: -4 }, elevation: 24 },
+  handleWrap:      { alignItems: 'center', paddingTop: 10, paddingBottom: 6 },
+  handle:          { width: 40, height: 4, borderRadius: 2, backgroundColor: '#E0DFF5' },
+  headerRow:       { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingHorizontal: 20, paddingBottom: 10, borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: '#F0EFF5' },
+  title:           { fontSize: 16, fontWeight: '800', color: '#1C1E22' },
+  empty:           { alignItems: 'center', justifyContent: 'center', gap: 10, paddingVertical: 48 },
+  emptyText:       { fontSize: 14, color: '#ABADB2' },
+  row:             { flexDirection: 'row', gap: 10, marginBottom: 16, alignItems: 'flex-start' },
+  bubble:          { flex: 1 },
+  commentName:     { fontSize: 13, fontWeight: '700', color: '#1C1E22', lineHeight: 19 },
+  commentText:     { fontWeight: '400', color: '#3C3F4A' },
+  commentTime:     { fontSize: 11, color: '#ABADB2', marginTop: 2 },
+  inputRow:        { flexDirection: 'row', alignItems: 'flex-end', gap: 10, paddingHorizontal: 16, paddingTop: 10, paddingBottom: 8, borderTopWidth: StyleSheet.hairlineWidth, borderTopColor: '#F0EFF5' },
+  input:           { flex: 1, minHeight: 40, maxHeight: 100, backgroundColor: '#F7F5FF', borderRadius: 20, paddingHorizontal: 16, paddingVertical: 10, fontSize: 14, color: '#1C1E22', borderWidth: 1, borderColor: '#E8E6F0' },
+  sendBtn:         { width: 38, height: 38, borderRadius: 19, backgroundColor: '#7A0EED', alignItems: 'center', justifyContent: 'center', shadowColor: '#7A0EED', shadowOpacity: 0.35, shadowRadius: 6, shadowOffset: { width: 0, height: 2 }, elevation: 3 },
   sendBtnDisabled: { backgroundColor: '#C8B0F5', shadowOpacity: 0, elevation: 0 },
-  disabledBar:  { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 6, paddingVertical: 12, borderTopWidth: StyleSheet.hairlineWidth, borderTopColor: '#F0EFF5' },
-  disabledText: { fontSize: 13, color: '#ABADB2' },
+  disabledBar:     { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 6, paddingVertical: 14, borderTopWidth: StyleSheet.hairlineWidth, borderTopColor: '#F0EFF5' },
+  disabledText:    { fontSize: 13, color: '#ABADB2' },
 });

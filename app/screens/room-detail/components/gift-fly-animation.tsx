@@ -1,95 +1,121 @@
 import { useEffect, useRef } from 'react';
-import { Animated, Dimensions, Image, StyleSheet, View } from 'react-native';
+import { Animated, Dimensions, Image, StyleSheet, Text, View } from 'react-native';
 import { MEDIA_BASE } from '@/services/api';
 import type { GiftItem } from '../room-detail.data';
 
 const { width: W, height: H } = Dimensions.get('window');
 
-export type SlotPosition = {
-  x: number;
-  y: number;
+export type SlotPosition = { x: number; y: number };
+
+export type FlyItem = {
+  id: string;
+  gift: GiftItem;
+  qty: number;
 };
 
-type Props = {
-  gift: GiftItem | null;
-  targetPos: SlotPosition | null;
-  onDone: () => void;
+type SingleProps = {
+  item: FlyItem;
+  onDone: (id: string) => void;
 };
 
-export function GiftFlyAnimation({ gift, targetPos, onDone }: Props) {
-  const translateX = useRef(new Animated.Value(0)).current;
-  const translateY = useRef(new Animated.Value(0)).current;
-  const scale = useRef(new Animated.Value(1)).current;
-  const animRef = useRef<Animated.CompositeAnimation | null>(null);
+const COIN_IMG = require('@/assets/tabs/coin.png');
 
-  const startX = W / 2;
-  const startY = H - 120;
+function resolveImg(url: string | null | undefined) {
+  if (!url) return null;
+  try { return `${MEDIA_BASE}${new URL(url).pathname}`; }
+  catch { return `${MEDIA_BASE}/${url.replace(/^\//, '')}`; }
+}
+
+function SingleFly({ item, onDone }: SingleProps) {
+  const scale = useRef(new Animated.Value(0)).current;
+  const opacity = useRef(new Animated.Value(1)).current;
+  // Slight random horizontal offset so stacked gifts don't perfectly overlap
+  const offsetX = useRef((Math.random() - 0.5) * 80).current;
+  const offsetY = useRef((Math.random() - 0.5) * 40).current;
 
   useEffect(() => {
-    if (!gift || !targetPos) return;
+    scale.setValue(0);
+    opacity.setValue(1);
 
-    // Stop any running animation immediately before starting new one
-    animRef.current?.stop();
-
-    translateX.setValue(0);
-    translateY.setValue(0);
-    scale.setValue(1);
-
-    const dx = targetPos.x - startX;
-    const dy = targetPos.y - startY;
-
-    const anim = Animated.sequence([
+    Animated.sequence([
+      // Pop in
+      Animated.spring(scale, {
+        toValue: 1,
+        useNativeDriver: true,
+        tension: 200,
+        friction: 7,
+      }),
+      // Hold briefly
+      Animated.delay(500),
+      // Fade out with slight scale up
       Animated.parallel([
-        Animated.timing(translateX, { toValue: dx, duration: 200, useNativeDriver: true }),
-        Animated.timing(translateY, { toValue: dy, duration: 200, useNativeDriver: true }),
-        Animated.timing(scale, { toValue: 0.5, duration: 200, useNativeDriver: true }),
+        Animated.timing(opacity, { toValue: 0, duration: 250, useNativeDriver: true }),
+        Animated.timing(scale, { toValue: 1.3, duration: 250, useNativeDriver: true }),
       ]),
-      Animated.spring(scale, { toValue: 1.3, useNativeDriver: true, tension: 300, friction: 5 }),
-    ]);
+    ]).start(() => onDone(item.id));
+  }, []);
 
-    animRef.current = anim;
-    anim.start(({ finished }) => {
-      if (finished) onDone();
-    });
-
-    return () => { animRef.current?.stop(); };
-  }, [gift, targetPos]);
-
-  if (!gift) return null;
-
-  const imgUri = gift.image_url
-    ? `${MEDIA_BASE}/${gift.image_url.replace(/^\//, '')}`
-    : null;
+  const imgUri = resolveImg(item.gift.image_url);
 
   return (
+    <Animated.View
+      style={[
+        s.flyEl,
+        {
+          left: W / 2 - 36 + offsetX,
+          top: H * 0.38 + offsetY,
+          opacity,
+          transform: [{ scale }],
+        },
+      ]}>
+      {imgUri
+        ? <Image source={{ uri: imgUri }} style={s.img} resizeMode="contain" />
+        : <View style={s.fallback} />}
+      {item.qty > 1 && (
+        <View style={s.qtyBadge}>
+          <Text style={s.qtyText}>×{item.qty}</Text>
+        </View>
+      )}
+    </Animated.View>
+  );
+}
+
+type Props = {
+  items: FlyItem[];
+  onItemDone: (id: string) => void;
+};
+
+export function GiftFlyAnimation({ items, onItemDone }: Props) {
+  if (items.length === 0) return null;
+  return (
     <View style={StyleSheet.absoluteFill} pointerEvents="none">
-      <Animated.View
-        style={[
-          s.gifEl,
-          {
-            left: startX - 28,
-            top: startY - 28,
-            transform: [{ translateX }, { translateY }, { scale }],
-          },
-        ]}>
-        {imgUri
-          ? <Image source={{ uri: imgUri }} style={s.img} resizeMode="contain" />
-          : <View style={s.fallback} />
-        }
-      </Animated.View>
+      {items.map(item => (
+        <SingleFly key={item.id} item={item} onDone={onItemDone} />
+      ))}
     </View>
   );
 }
 
 const s = StyleSheet.create({
-  gifEl: {
+  flyEl: {
     position: 'absolute',
-    width: 56,
-    height: 56,
-    borderRadius: 28,
-    overflow: 'hidden',
-    backgroundColor: 'transparent',
+    width: 72,
+    height: 72,
+    alignItems: 'center',
+    justifyContent: 'center',
   },
-  img: { width: 56, height: 56 },
-  fallback: { width: 56, height: 56, borderRadius: 28, backgroundColor: '#7A0EED' },
+  img: { width: 72, height: 72 },
+  fallback: { width: 72, height: 72, borderRadius: 36, backgroundColor: '#7A0EED' },
+  qtyBadge: {
+    position: 'absolute',
+    bottom: 0,
+    right: 0,
+    backgroundColor: '#1C1E22',
+    borderRadius: 10,
+    paddingHorizontal: 5,
+    paddingVertical: 1,
+    borderWidth: 1,
+    borderColor: '#fff',
+  },
+  qtyText: { fontSize: 10, fontWeight: '800', color: '#fff' },
 });

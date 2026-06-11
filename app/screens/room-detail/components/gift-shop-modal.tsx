@@ -20,7 +20,7 @@ import type { SeatSlot } from '@/hooks/useRoomSocket';
 const COIN_IMG = require('@/assets/tabs/coin.png');
 
 const { height: SCREEN_H, width: SCREEN_W } = Dimensions.get('window');
-const SHEET_HEIGHT = SCREEN_H * 0.72;
+const SHEET_HEIGHT = SCREEN_H * 0.52;
 const ITEM_W = (SCREEN_W - 2) / 4;
 
 type ShopGift = {

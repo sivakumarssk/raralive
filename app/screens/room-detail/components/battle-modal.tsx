@@ -20,8 +20,8 @@ import { BASE_URL, MEDIA_BASE } from '@/services/api';
 import { authStore } from '@/store/auth-store';
 
 const { height: SCREEN_H } = Dimensions.get('window');
-const SHEET_HEIGHT = SCREEN_H * 0.78;
-const SETUP_HEIGHT = SCREEN_H * 0.60;
+const SHEET_HEIGHT = SCREEN_H * 0.55;
+const SETUP_HEIGHT = SCREEN_H * 0.48;
 const TIME_OPTIONS = [10, 15, 25, 30];
 
 type Room = {

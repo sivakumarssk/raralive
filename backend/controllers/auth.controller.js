@@ -134,16 +134,21 @@ async function completeProfile(req, res, next) {
       return res.status(401).json({ success: false, message: 'Unauthorized.' });
     }
 
-    const { fullName, username, gender, dateOfBirth, preferredLanguage } = req.body;
+    const { fullName, username, gender, dateOfBirth, preferredLanguage, bio, location } = req.body;
 
     if (!username || !/^[a-zA-Z0-9_]{3,20}$/.test(username.trim())) {
       return res.status(400).json({ success: false, message: 'Username is required (3–20 characters, letters/numbers/underscore).' });
     }
 
-    // Build avatar URL if a file was uploaded
     let avatarUrl = undefined;
-    if (req.file) {
+    let coverUrl = undefined;
+    if (req.files?.avatar?.[0]) {
+      avatarUrl = `uploads/avatars/${req.files.avatar[0].filename}`;
+    } else if (req.file) {
       avatarUrl = `uploads/avatars/${req.file.filename}`;
+    }
+    if (req.files?.cover?.[0]) {
+      coverUrl = `uploads/covers/${req.files.cover[0].filename}`;
     }
 
     const updated = await userModel.updateProfile(userId, {
@@ -153,6 +158,9 @@ async function completeProfile(req, res, next) {
       dateOfBirth,
       preferredLanguage,
       avatarUrl,
+      bio,
+      coverUrl,
+      location,
     });
 
     return res.json({ success: true, message: 'Profile updated.', data: updated });
@@ -277,18 +285,40 @@ async function getMe(req, res, next) {
   try {
     const userId = req.user?.id;
     if (!userId) return res.status(401).json({ success: false, message: 'Unauthorized.' });
-    const db = require('../config/db');
-    const result = await db.query(
-      `SELECT id, phone, email, username, full_name, gender, date_of_birth,
-              preferred_language, avatar_url, is_phone_verified, created_at
-       FROM users WHERE id = $1`,
-      [userId]
-    );
-    if (!result.rows[0]) return res.status(404).json({ success: false, message: 'User not found.' });
-    return res.json({ success: true, data: result.rows[0] });
+    const profile = await userModel.getProfileWithStats(userId);
+    if (!profile) return res.status(404).json({ success: false, message: 'User not found.' });
+    return res.json({ success: true, data: profile });
   } catch (error) {
     next(error);
   }
+}
+
+async function followUser(req, res, next) {
+  try {
+    const followerId = req.user?.id;
+    const { userId: followingId } = req.params;
+    if (followerId === followingId) return res.status(400).json({ success: false, message: 'Cannot follow yourself.' });
+    await userModel.followUser(followerId, followingId);
+    return res.json({ success: true, following: true });
+  } catch (error) { next(error); }
+}
+
+async function unfollowUser(req, res, next) {
+  try {
+    const followerId = req.user?.id;
+    const { userId: followingId } = req.params;
+    await userModel.unfollowUser(followerId, followingId);
+    return res.json({ success: true, following: false });
+  } catch (error) { next(error); }
+}
+
+async function checkFollow(req, res, next) {
+  try {
+    const followerId = req.user?.id;
+    const { userId: followingId } = req.params;
+    const following = await userModel.isFollowing(followerId, followingId);
+    return res.json({ success: true, following });
+  } catch (error) { next(error); }
 }
 
 /** PATCH /api/auth/language */
@@ -321,4 +351,7 @@ module.exports = {
   forgotPassword,
   verifyResetOtp,
   resetPassword,
+  followUser,
+  unfollowUser,
+  checkFollow,
 };

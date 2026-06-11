@@ -18,9 +18,10 @@ type ChatInputBarProps = {
   onGiftOpen?: () => void;
   onCoinPress?: () => void;
   onBattlePress?: () => void;
+  hasRoomBg?: boolean;
 };
 
-export function ChatInputBar({ onSend, onGiftOpen, onCoinPress, onBattlePress }: ChatInputBarProps) {
+export function ChatInputBar({ onSend, onGiftOpen, onCoinPress, onBattlePress, hasRoomBg }: ChatInputBarProps) {
   const [text, setText] = useState('');
   const [focused, setFocused] = useState(false);
   const inputRef = useRef<TextInput>(null);
@@ -40,15 +41,15 @@ export function ChatInputBar({ onSend, onGiftOpen, onCoinPress, onBattlePress }:
   };
 
   return (
-    <View style={bar.container}>
+    <View style={[bar.container, hasRoomBg && bar.containerBg]}>
         {/* Collapsed: input + battle + gift */}
 
-        <View style={bar.inputWrap}>
+        <View style={[bar.inputWrap, hasRoomBg && bar.inputWrapBg]}>
           <TextInput
             ref={inputRef}
-            style={bar.input}
+            style={[bar.input, hasRoomBg && bar.inputBg]}
             placeholder="Say something..."
-            placeholderTextColor="#ABADB2"
+            placeholderTextColor={hasRoomBg ? 'rgba(255,255,255,0.5)' : '#ABADB2'}
             value={text}
             onChangeText={setText}
             returnKeyType="send"
@@ -102,6 +103,10 @@ const bar = StyleSheet.create({
     borderTopColor: '#F0EDF8',
     gap: 8,
   },
+  containerBg: {
+    backgroundColor: 'rgba(0,0,0,0.45)',
+    borderTopColor: 'rgba(255,255,255,0.1)',
+  },
   coinBtn: {
     width: 38,
     height: 38,
@@ -128,10 +133,9 @@ const bar = StyleSheet.create({
     justifyContent: 'center',
     paddingHorizontal: 16,
   },
-  input: {
-    fontSize: 14,
-    color: '#1C1E22',
-  },
+  inputWrapBg: { backgroundColor: 'rgba(255,255,255,0.15)' },
+  input: { fontSize: 14, color: '#1C1E22' },
+  inputBg: { color: '#FFFFFF' },
   giftBtn: {
     borderRadius: 19,
     overflow: 'hidden',

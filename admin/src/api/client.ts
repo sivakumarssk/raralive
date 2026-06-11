@@ -1,5 +1,17 @@
 const BASE_URL = `${import.meta.env.VITE_API_URL ?? 'http://192.168.0.8:5000'}/api`;
 
+const TOKEN_ERROR_MSGS = ['invalid or expired token', 'invalid token', 'expired token', 'token expired', 'jwt expired', 'unauthorized'];
+
+function isTokenError(status: number, message: string): boolean {
+  if (status === 401) return true;
+  return TOKEN_ERROR_MSGS.some(m => message.toLowerCase().includes(m));
+}
+
+function handleTokenError() {
+  localStorage.removeItem('admin_token');
+  window.location.href = '/login';
+}
+
 function getToken() {
   return localStorage.getItem('admin_token');
 }
@@ -18,12 +30,11 @@ async function request<T>(
       },
       ...options,
     });
-    if (res.status === 401) {
-      localStorage.removeItem('admin_token');
-      window.location.href = '/login';
+    const json = await res.json();
+    if (isTokenError(res.status, json.message || '')) {
+      handleTokenError();
       return { ok: false, message: 'Session expired. Please log in again.' };
     }
-    const json = await res.json();
     if (!res.ok || !json.success) {
       return { ok: false, message: json.message || 'Something went wrong.' };
     }
@@ -45,12 +56,11 @@ async function uploadForm<T>(
       headers: token ? { Authorization: `Bearer ${token}` } : {},
       body: formData,
     });
-    if (res.status === 401) {
-      localStorage.removeItem('admin_token');
-      window.location.href = '/login';
+    const json = await res.json();
+    if (isTokenError(res.status, json.message || '')) {
+      handleTokenError();
       return { ok: false, message: 'Session expired. Please log in again.' };
     }
-    const json = await res.json();
     if (!res.ok || !json.success) {
       return { ok: false, message: json.message || 'Something went wrong.' };
     }

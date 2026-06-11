@@ -1,6 +1,5 @@
 import { DarkTheme, DefaultTheme, ThemeProvider } from '@react-navigation/native';
 import { router, Stack } from 'expo-router';
-import { StatusBar } from 'expo-status-bar';
 import { useEffect } from 'react';
 import 'react-native-reanimated';
 
@@ -41,9 +40,10 @@ export default function RootLayout() {
         <Stack.Screen name="notifications/index" options={{ headerShown: false }} />
         <Stack.Screen name="battle/overview" options={{ headerShown: false }} />
         <Stack.Screen name="battle/live" options={{ headerShown: false }} />
+        <Stack.Screen name="profile/edit" options={{ headerShown: false }} />
+        <Stack.Screen name="gift-history/index" options={{ headerShown: false }} />
       </Stack>
       <MiniRoomPlayer />
-      <StatusBar style="auto" />
     </ThemeProvider>
   );
 }
