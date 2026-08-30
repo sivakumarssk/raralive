@@ -291,11 +291,19 @@ export function CreateScreen({ onNext, onClose }: CreateScreenProps) {
       }));
 
       if (tab === 'Photos') {
-        setPhotoCache(prev => append ? [...prev, ...items] : items);
+        setPhotoCache(prev => {
+          if (!append) return items;
+          const seen = new Set(prev.map(a => a.id));
+          return [...prev, ...items.filter(a => !seen.has(a.id))];
+        });
         setPhotoHasMore(page.hasNextPage);
         setPhotoCursor(page.endCursor);
       } else {
-        setVideoCache(prev => append ? [...prev, ...items] : items);
+        setVideoCache(prev => {
+          if (!append) return items;
+          const seen = new Set(prev.map(a => a.id));
+          return [...prev, ...items.filter(a => !seen.has(a.id))];
+        });
         setVideoHasMore(page.hasNextPage);
         setVideoCursor(page.endCursor);
       }

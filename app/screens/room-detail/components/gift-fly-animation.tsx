@@ -1,9 +1,10 @@
 import { useEffect, useRef } from 'react';
-import { Animated, Dimensions, Image, StyleSheet, Text, View } from 'react-native';
+import { Animated, Dimensions, Image, StyleSheet, View } from 'react-native';
 import { MEDIA_BASE } from '@/services/api';
 import type { GiftItem } from '../room-detail.data';
 
 const { width: W, height: H } = Dimensions.get('window');
+const GIFT_SIZE = 40;
 
 export type SlotPosition = { x: number; y: number };
 
@@ -11,14 +12,9 @@ export type FlyItem = {
   id: string;
   gift: GiftItem;
   qty: number;
+  targetUserId?: string;
+  targetPos?: SlotPosition;
 };
-
-type SingleProps = {
-  item: FlyItem;
-  onDone: (id: string) => void;
-};
-
-const COIN_IMG = require('@/assets/tabs/coin.png');
 
 function resolveImg(url: string | null | undefined) {
   if (!url) return null;
@@ -26,33 +22,46 @@ function resolveImg(url: string | null | undefined) {
   catch { return `${MEDIA_BASE}/${url.replace(/^\//, '')}`; }
 }
 
-function SingleFly({ item, onDone }: SingleProps) {
-  const scale = useRef(new Animated.Value(0)).current;
+function SingleFly({ item, delay = 0, onDone }: { item: FlyItem; delay?: number; onDone: () => void }) {
+  const startX = W / 2 - GIFT_SIZE / 2;
+  const startY = H * 0.78;
+
+  // Shift left by half gift size so the gift CENTER lands on the avatar center
+  const endX = item.targetPos
+    ? item.targetPos.x - GIFT_SIZE / 2
+    : W / 2 - GIFT_SIZE / 2;
+  const endY = item.targetPos
+    ? item.targetPos.y + 18
+    : H * 0.25;
+
+  const posX = useRef(new Animated.Value(startX)).current;
+  const posY = useRef(new Animated.Value(startY)).current;
   const opacity = useRef(new Animated.Value(1)).current;
-  // Slight random horizontal offset so stacked gifts don't perfectly overlap
-  const offsetX = useRef((Math.random() - 0.5) * 80).current;
-  const offsetY = useRef((Math.random() - 0.5) * 40).current;
+  const doneRef = useRef(false);
 
   useEffect(() => {
-    scale.setValue(0);
-    opacity.setValue(1);
-
-    Animated.sequence([
-      // Pop in
-      Animated.spring(scale, {
-        toValue: 1,
-        useNativeDriver: true,
-        tension: 200,
-        friction: 7,
-      }),
-      // Hold briefly
-      Animated.delay(500),
-      // Fade out with slight scale up
+    const fly = () => {
       Animated.parallel([
-        Animated.timing(opacity, { toValue: 0, duration: 250, useNativeDriver: true }),
-        Animated.timing(scale, { toValue: 1.3, duration: 250, useNativeDriver: true }),
-      ]),
-    ]).start(() => onDone(item.id));
+        Animated.timing(posX, { toValue: endX, duration: 600, useNativeDriver: true }),
+        Animated.timing(posY, { toValue: endY, duration: 600, useNativeDriver: true }),
+      ]).start(() => {
+        Animated.timing(opacity, {
+          toValue: 0,
+          duration: 100,
+          useNativeDriver: true,
+        }).start(() => {
+          if (!doneRef.current) {
+            doneRef.current = true;
+            onDone();
+          }
+        });
+      });
+    };
+    if (delay > 0) {
+      const t = setTimeout(fly, delay);
+      return () => clearTimeout(t);
+    }
+    fly();
   }, []);
 
   const imgUri = resolveImg(item.gift.image_url);
@@ -62,21 +71,46 @@ function SingleFly({ item, onDone }: SingleProps) {
       style={[
         s.flyEl,
         {
-          left: W / 2 - 36 + offsetX,
-          top: H * 0.38 + offsetY,
+          width: GIFT_SIZE,
+          height: GIFT_SIZE,
           opacity,
-          transform: [{ scale }],
+          transform: [{ translateX: posX }, { translateY: posY }],
         },
       ]}>
       {imgUri
-        ? <Image source={{ uri: imgUri }} style={s.img} resizeMode="contain" />
+        ? <Image source={{ uri: imgUri }} style={s.giftImg} resizeMode="contain" />
         : <View style={s.fallback} />}
-      {item.qty > 1 && (
-        <View style={s.qtyBadge}>
-          <Text style={s.qtyText}>×{item.qty}</Text>
-        </View>
-      )}
     </Animated.View>
+  );
+}
+
+// Wrapper that tracks done count for multi-qty items
+function MultiFly({ item, onDone }: { item: FlyItem; onDone: () => void }) {
+  const count = Math.min(item.qty, 5);
+  const doneCount = useRef(0);
+
+  const handleOneDone = () => {
+    doneCount.current += 1;
+    if (doneCount.current >= count) onDone();
+  };
+
+  return (
+    <>
+      {Array.from({ length: count }).map((_, i) => (
+        <SingleFly
+          key={`${item.id}_${i}`}
+          delay={i * 150}
+          item={i === 0 ? item : {
+            ...item,
+            targetPos: item.targetPos ? {
+              x: item.targetPos.x + (Math.random() - 0.5) * 20,
+              y: item.targetPos.y + (Math.random() - 0.5) * 14,
+            } : undefined,
+          }}
+          onDone={handleOneDone}
+        />
+      ))}
+    </>
   );
 }
 
@@ -90,7 +124,11 @@ export function GiftFlyAnimation({ items, onItemDone }: Props) {
   return (
     <View style={StyleSheet.absoluteFill} pointerEvents="none">
       {items.map(item => (
-        <SingleFly key={item.id} item={item} onDone={onItemDone} />
+        <MultiFly
+          key={item.id}
+          item={item}
+          onDone={() => onItemDone(item.id)}
+        />
       ))}
     </View>
   );
@@ -99,23 +137,17 @@ export function GiftFlyAnimation({ items, onItemDone }: Props) {
 const s = StyleSheet.create({
   flyEl: {
     position: 'absolute',
-    width: 72,
-    height: 72,
-    alignItems: 'center',
-    justifyContent: 'center',
+    top: 0,
+    left: 0,
   },
-  img: { width: 72, height: 72 },
-  fallback: { width: 72, height: 72, borderRadius: 36, backgroundColor: '#7A0EED' },
-  qtyBadge: {
-    position: 'absolute',
-    bottom: 0,
-    right: 0,
-    backgroundColor: '#1C1E22',
-    borderRadius: 10,
-    paddingHorizontal: 5,
-    paddingVertical: 1,
-    borderWidth: 1,
-    borderColor: '#fff',
+  giftImg: {
+    width: GIFT_SIZE,
+    height: GIFT_SIZE,
   },
-  qtyText: { fontSize: 10, fontWeight: '800', color: '#fff' },
+  fallback: {
+    width: GIFT_SIZE,
+    height: GIFT_SIZE,
+    borderRadius: GIFT_SIZE / 2,
+    backgroundColor: '#7A0EED',
+  },
 });

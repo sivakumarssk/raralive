@@ -2,11 +2,17 @@ const walletModel = require('../models/wallet.model');
 const packageModel = require('../models/coin-package.model');
 const db = require('../config/db');
 
-/** GET /api/wallet/me — current user's balance */
+/** GET /api/wallet/me — current user's balance + total coins gifted (for level) */
 async function getMyWallet(req, res, next) {
   try {
     const wallet = await walletModel.getOrCreateWallet(req.user.id);
-    return res.json({ success: true, data: { coins: wallet.coins } });
+    const giftedResult = await db.query(
+      `SELECT COALESCE(SUM(coins * quantity), 0)::int AS coins_gifted
+       FROM room_gift_events WHERE sender_id = $1`,
+      [req.user.id]
+    );
+    const coins_gifted = parseInt(giftedResult.rows[0]?.coins_gifted ?? 0, 10);
+    return res.json({ success: true, data: { coins: wallet.coins, coins_gifted } });
   } catch (err) { next(err); }
 }
 

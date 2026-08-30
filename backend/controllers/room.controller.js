@@ -1,7 +1,7 @@
 const roomModel = require('../models/room.model');
 const agencyModel = require('../models/agency.model');
 const db = require('../config/db');
-const { getAllOnlineCounts } = require('../socket');
+const { getAllOnlineCounts, isRoomHostOnline } = require('../socket');
 
 /** GET /api/rooms/online-counts */
 function onlineCounts(req, res) {
@@ -12,6 +12,19 @@ function onlineCounts(req, res) {
 async function publicRooms(req, res, next) {
   try {
     const rooms = await roomModel.getPublicRooms();
+
+    // If user is authenticated, filter out rooms where they are blocked
+    const userId = req.user?.id;
+    if (userId) {
+      const blocked = await db.query(
+        `SELECT room_id FROM room_blocked_users WHERE user_id = $1`,
+        [userId]
+      );
+      const blockedRoomIds = new Set(blocked.rows.map(r => r.room_id));
+      const filtered = rooms.filter(r => !blockedRoomIds.has(r.id));
+      return res.json({ success: true, data: filtered });
+    }
+
     return res.json({ success: true, data: rooms });
   } catch (error) {
     next(error);
@@ -26,9 +39,11 @@ async function getRoom(req, res, next) {
       `SELECT r.id, r.room_code, r.room_name, r.room_image_url, r.visibility, r.status, r.host_user_id,
               r.current_level, r.total_coins_received,
               a.agency_name,
-              u.full_name AS host_name, u.username AS host_username, u.avatar_url AS host_avatar_url
+              u.full_name AS host_name, u.username AS host_username, u.avatar_url AS host_avatar_url,
+              lb.likes_count
        FROM rooms r
        LEFT JOIN agencies a ON a.id = r.agency_id
+       LEFT JOIN live_broadcasts lb ON lb.room_id = r.id AND lb.status = 'active'
        JOIN users u ON u.id = r.host_user_id
        WHERE r.id = $1`,
       [id]
@@ -76,7 +91,7 @@ async function myRooms(req, res, next) {
 async function createRoom(req, res, next) {
   try {
     const userId = req.user?.id;
-    const { room_name, agent_code, visibility = 'public' } = req.body;
+    const { room_name, agent_code, visibility = 'public', city, state, district } = req.body;
 
     if (!room_name) {
       return res.status(400).json({ success: false, message: 'room_name is required.' });
@@ -135,6 +150,9 @@ async function createRoom(req, res, next) {
         hostUserId: userId,
         roomImageUrl: avatarUrl,
         visibility,
+        city: city?.trim() || null,
+        state: state?.trim() || null,
+        district: district?.trim() || null,
         createdBy: null,
       });
     } catch (err) {
@@ -154,6 +172,9 @@ async function createRoom(req, res, next) {
         room_image_url: room.room_image_url,
         visibility: room.visibility,
         status: room.status,
+        city: room.city,
+        state: room.state,
+        district: room.district,
         agency_name: agency?.agency_name ?? null,
         created_at: room.created_at,
       },
@@ -163,4 +184,19 @@ async function createRoom(req, res, next) {
   }
 }
 
-module.exports = { onlineCounts, publicRooms, getRoom, getRoomByCode, myRooms, createRoom };
+/** GET /api/rooms/public-for-battle?exclude_room_id=X */
+async function publicRoomsForBattle(req, res, next) {
+  try {
+    const { exclude_room_id } = req.query;
+    const rooms = await roomModel.getPublicRooms();
+    // Only show active public rooms whose host is currently live in the room,
+    // excluding the requester's own room — a battle invite is useless if the
+    // host isn't there to accept it.
+    const filtered = rooms.filter(r => r.id !== exclude_room_id && isRoomHostOnline(r.id));
+    return res.json({ success: true, data: filtered });
+  } catch (error) {
+    next(error);
+  }
+}
+
+module.exports = { onlineCounts, publicRooms, publicRoomsForBattle, getRoom, getRoomByCode, myRooms, createRoom };

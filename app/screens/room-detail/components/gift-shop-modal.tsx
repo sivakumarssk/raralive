@@ -16,6 +16,8 @@ import {
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { BASE_URL, MEDIA_BASE } from '@/services/api';
 import type { SeatSlot } from '@/hooks/useRoomSocket';
+import { useUserLevel } from '@/components/UserLevel';
+import { formatCoins, getLevelThreshold, getNextLevelThreshold } from '@/utils/userLevel';
 
 const COIN_IMG = require('@/assets/tabs/coin.png');
 
@@ -42,7 +44,8 @@ type Props = {
   onClose: () => void;
   seats: SeatSlot[];
   hostInfo: { userId: string; name: string; avatarUrl: string | null };
-  onSendGift: (gift: ShopGift, targetName: string, qty: number) => void;
+  isHostOnline?: boolean;
+  onSendGift: (gift: ShopGift, targetName: string, qty: number, targetUserId?: string) => void;
 };
 
 function resolveImg(url: string | null) {
@@ -50,9 +53,10 @@ function resolveImg(url: string | null) {
   return `${MEDIA_BASE}/${url.replace(/^\//, '')}`;
 }
 
-export function GiftShopModal({ visible, onClose, seats, hostInfo, onSendGift }: Props) {
+export function GiftShopModal({ visible, onClose, seats, hostInfo, isHostOnline = true, onSendGift }: Props) {
   const insets = useSafeAreaInsets();
   const translateY = useRef(new Animated.Value(SHEET_HEIGHT)).current;
+  const { coinsSpent, level } = useUserLevel();
 
   const [categories, setCategories] = useState<Category[]>([]);
   const [activeCatId, setActiveCatId] = useState<string | null>(null);
@@ -63,9 +67,9 @@ export function GiftShopModal({ visible, onClose, seats, hostInfo, onSendGift }:
   const [selectedUserId, setSelectedUserId] = useState<string>(hostInfo.userId);
   const [selectedUserName, setSelectedUserName] = useState<string>(hostInfo.name);
 
-  // Targets: host first then on-stage seats
+  // Targets: host first (only if online) then on-stage seats
   const targets = [
-    { userId: hostInfo.userId, name: hostInfo.name, avatarUrl: hostInfo.avatarUrl, isHost: true },
+    ...(isHostOnline ? [{ userId: hostInfo.userId, name: hostInfo.name, avatarUrl: hostInfo.avatarUrl, isHost: true }] : []),
     ...seats
       .filter(s => s.slotIndex !== 0 && s.userId !== hostInfo.userId)
       .map(s => ({ userId: s.userId, name: s.userName, avatarUrl: s.avatarUrl, isHost: false })),
@@ -84,11 +88,14 @@ export function GiftShopModal({ visible, onClose, seats, hostInfo, onSendGift }:
       .catch(() => {});
   }, [visible]);
 
-  // Reset host selection when modal opens
+  // Reset selection when modal opens — pick first available target
   useEffect(() => {
     if (visible) {
-      setSelectedUserId(hostInfo.userId);
-      setSelectedUserName(hostInfo.name);
+      const firstTarget = isHostOnline
+        ? { userId: hostInfo.userId, name: hostInfo.name }
+        : (seats.find(s => s.slotIndex !== 0 && s.userId !== hostInfo.userId) ?? { userId: hostInfo.userId, name: hostInfo.name });
+      setSelectedUserId(firstTarget.userId);
+      setSelectedUserName('name' in firstTarget ? firstTarget.name : (firstTarget as any).userName ?? 'User');
       setSelectedGift(null);
       setQuantity(1);
     }
@@ -119,10 +126,16 @@ export function GiftShopModal({ visible, onClose, seats, hostInfo, onSendGift }:
   function handleSend() {
     if (!selectedGift) return;
     close();
-    onSendGift(selectedGift, selectedUserName, quantity);
+    onSendGift(selectedGift, selectedUserName, quantity, selectedUserId);
   }
 
   const activeGifts = categories.find(c => c.id === activeCatId)?.gifts ?? [];
+
+  const currentThreshold = getLevelThreshold(level);
+  const nextThreshold = getNextLevelThreshold(level);
+  const coinsNeeded = Math.max(1, (nextThreshold ?? currentThreshold + 1) - currentThreshold);
+  const coinsIntoLevel = Math.max(0, coinsSpent - currentThreshold);
+  const levelProgress = Math.min(coinsIntoLevel / coinsNeeded, 1);
 
   return (
     <Modal visible={visible} transparent animationType="none" onRequestClose={close} onShow={open}>
@@ -135,18 +148,29 @@ export function GiftShopModal({ visible, onClose, seats, hostInfo, onSendGift }:
           <View style={s.handle} />
         </View>
 
-        {/* Points bar */}
-        {/* <View style={s.pointsBar}>
-          <View style={s.pointsLeft}>
-            <Text style={s.pointsText}>0/50 Pts</Text>
-            <View style={s.pointsTrack}><View style={s.pointsFill} /></View>
+        {/* ID Level bar — shows the logged-in user's own level progress */}
+        <View style={s.pointsBar}>
+          <View style={s.levelPill}>
+            <Text style={s.levelPillText}>Lv {level}</Text>
           </View>
-          <TouchableOpacity style={s.pointsRight}>
+          <View style={s.pointsLeft}>
+            <View style={s.pointsTrack}>
+              <View style={[s.pointsFill, { width: `${Math.round(levelProgress * 100)}%` }]} />
+            </View>
+            <View style={s.pointsSubRow}>
+              <Text style={s.pointsText}>
+                {nextThreshold != null
+                  ? `${formatCoins(coinsIntoLevel)}/${formatCoins(coinsNeeded)} to Lv ${level + 1}`
+                  : 'Max Level'}
+              </Text>
+              <Text style={s.pointsPercent}>{Math.round(levelProgress * 100)}%</Text>
+            </View>
+          </View>
+          <View style={s.pointsRight}>
             <Image source={COIN_IMG} style={s.pointsCoin} resizeMode="contain" />
-            <Text style={s.pointsBalance}>0</Text>
-            <Ionicons name="chevron-forward" size={14} color="#7A0EED" />
-          </TouchableOpacity>
-        </View> */}
+            <Text style={s.pointsBalance}>{formatCoins(coinsSpent)}</Text>
+          </View>
+        </View>
 
         {/* Category tabs */}
         <ScrollView horizontal showsHorizontalScrollIndicator={false} style={s.tabsScroll} contentContainerStyle={s.tabsContent}>
@@ -263,30 +287,35 @@ const s = StyleSheet.create({
   backdrop: { ...StyleSheet.absoluteFillObject, backgroundColor: 'rgba(0,0,0,0.55)' },
   sheet: {
     position: 'absolute', bottom: 0, left: 0, right: 0,
-    backgroundColor: '#FFFFFF', borderTopLeftRadius: 20, borderTopRightRadius: 20, overflow: 'hidden',
+    backgroundColor: '#151718', borderTopLeftRadius: 20, borderTopRightRadius: 20, overflow: 'hidden',
   },
   handleArea: { alignItems: 'center', paddingTop: 8, paddingBottom: 6 },
-  handle: { width: 36, height: 4, borderRadius: 2, backgroundColor: '#DDDAE8' },
+  handle: { width: 36, height: 4, borderRadius: 2, backgroundColor: 'rgba(255,255,255,0.25)' },
 
   pointsBar: {
-    flexDirection: 'row', alignItems: 'center', backgroundColor: '#F8F7FC',
-    paddingHorizontal: 16, paddingVertical: 8, gap: 12,
-    borderTopWidth: StyleSheet.hairlineWidth, borderBottomWidth: StyleSheet.hairlineWidth, borderColor: '#EBEBEB',
+    flexDirection: 'row', alignItems: 'center', backgroundColor: '#1E2022',
+    paddingHorizontal: 14, paddingVertical: 10, gap: 10,
   },
+  levelPill: {
+    backgroundColor: '#7A0EED', borderRadius: 20, paddingHorizontal: 10, paddingVertical: 4,
+  },
+  levelPillText: { fontSize: 11, fontWeight: '900', color: '#FFFFFF', letterSpacing: 0.5 },
   pointsLeft: { flex: 1, gap: 4 },
-  pointsText: { fontSize: 11, color: '#ABADB2', fontWeight: '600' },
-  pointsTrack: { height: 4, backgroundColor: '#EBEBEB', borderRadius: 2, overflow: 'hidden' },
-  pointsFill: { width: '0%', height: '100%', backgroundColor: '#F59E0B', borderRadius: 2 },
+  pointsText: { fontSize: 10, color: 'rgba(255,255,255,0.55)', fontWeight: '600' },
+  pointsTrack: { height: 6, backgroundColor: 'rgba(255,255,255,0.15)', borderRadius: 3, overflow: 'hidden' },
+  pointsFill: { height: '100%', backgroundColor: '#A855F7', borderRadius: 3 },
+  pointsSubRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
+  pointsPercent: { fontSize: 11, fontWeight: '900', color: '#A855F7' },
   pointsRight: { flexDirection: 'row', alignItems: 'center', gap: 4 },
   pointsCoin: { width: 16, height: 16 },
-  pointsBalance: { fontSize: 14, fontWeight: '700', color: '#1C1E22' },
+  pointsBalance: { fontSize: 13, fontWeight: '700', color: '#FFFFFF' },
 
   tabsScroll: { flexShrink: 0, maxHeight: 40 },
   tabsContent: { paddingHorizontal: 12, gap: 4 },
   tab: { paddingHorizontal: 14, paddingVertical: 8, position: 'relative', alignItems: 'center' },
-  tabText: { fontSize: 13, fontWeight: '600', color: '#ABADB2' },
-  tabTextActive: { color: '#1C1E22', fontWeight: '700' },
-  tabUnderline: { position: 'absolute', bottom: 0, left: 10, right: 10, height: 2, borderRadius: 1, backgroundColor: '#7A0EED' },
+  tabText: { fontSize: 13, fontWeight: '600', color: 'rgba(255,255,255,0.45)' },
+  tabTextActive: { color: '#FFFFFF', fontWeight: '700' },
+  tabUnderline: { position: 'absolute', bottom: 0, left: 10, right: 10, height: 2, borderRadius: 1, backgroundColor: '#A855F7' },
 
   grid: { flex: 1 },
   gridContent: { paddingBottom: 4 },
@@ -294,7 +323,7 @@ const s = StyleSheet.create({
     aspectRatio: 0.85, alignItems: 'center', justifyContent: 'center',
     paddingBottom: 6, borderWidth: 1.5, borderColor: 'transparent', position: 'relative', gap: 4,
   },
-  giftCellSelected: { borderColor: '#7A0EED', backgroundColor: 'rgba(122,14,237,0.07)', borderRadius: 10 },
+  giftCellSelected: { borderColor: '#A855F7', backgroundColor: 'rgba(168,85,247,0.15)', borderRadius: 10 },
   giftImgWrap: { width: 48, height: 48, borderRadius: 24, alignItems: 'center', justifyContent: 'center', overflow: 'hidden' },
   giftImg: { width: 42, height: 42 },
   giftEmoji: { fontSize: 28 },
@@ -304,54 +333,54 @@ const s = StyleSheet.create({
 
   bottomBar: {
     flexDirection: 'row', alignItems: 'center',
-    paddingHorizontal: 12, paddingVertical: 10, backgroundColor: '#FFFFFF',
-    borderTopWidth: StyleSheet.hairlineWidth, borderTopColor: '#EBEBEB', gap: 8,
+    paddingHorizontal: 12, paddingVertical: 10, backgroundColor: '#1E2022',
+    borderTopWidth: StyleSheet.hairlineWidth, borderTopColor: 'rgba(255,255,255,0.08)', gap: 8,
   },
   userPicker: {
     flex: 1, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between',
-    backgroundColor: '#F4F5F8', borderRadius: 8, paddingHorizontal: 14, paddingVertical: 12,
+    backgroundColor: '#26282B', borderRadius: 8, paddingHorizontal: 14, paddingVertical: 12,
   },
-  userPickerText: { fontSize: 13, fontWeight: '600', color: '#1C1E22', flex: 1 },
+  userPickerText: { fontSize: 13, fontWeight: '600', color: '#FFFFFF', flex: 1 },
   qtyPicker: {
     flexDirection: 'row', alignItems: 'center', gap: 6,
-    backgroundColor: '#F4F5F8', borderRadius: 8, paddingHorizontal: 14, paddingVertical: 12,
+    backgroundColor: '#26282B', borderRadius: 8, paddingHorizontal: 14, paddingVertical: 12,
     minWidth: 72, justifyContent: 'center',
   },
-  qtyText: { fontSize: 13, fontWeight: '700', color: '#1C1E22' },
+  qtyText: { fontSize: 13, fontWeight: '700', color: '#FFFFFF' },
   sendBtn: { width: 44, height: 44, borderRadius: 10, backgroundColor: '#7A0EED', alignItems: 'center', justifyContent: 'center' },
-  sendBtnDisabled: { backgroundColor: '#DDDAE8' },
+  sendBtnDisabled: { backgroundColor: 'rgba(255,255,255,0.15)' },
 
   // User dropdown
   dropdown: {
     position: 'absolute', left: 12, right: 12, bottom: 70,
-    backgroundColor: '#FFFFFF', borderRadius: 14, elevation: 8,
-    shadowColor: '#000', shadowOpacity: 0.15, shadowRadius: 12, shadowOffset: { width: 0, height: -2 },
-    borderWidth: 1, borderColor: '#F0EDF8', maxHeight: 220, overflow: 'hidden',
+    backgroundColor: '#26282B', borderRadius: 14, elevation: 8,
+    shadowColor: '#000', shadowOpacity: 0.4, shadowRadius: 12, shadowOffset: { width: 0, height: -2 },
+    borderWidth: 1, borderColor: 'rgba(255,255,255,0.1)', maxHeight: 220, overflow: 'hidden',
   },
   dropdownItem: {
     flexDirection: 'row', alignItems: 'center', gap: 10,
     paddingHorizontal: 14, paddingVertical: 10,
-    borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: '#F4F4F4',
+    borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: 'rgba(255,255,255,0.08)',
   },
-  dropdownItemSelected: { backgroundColor: '#F4EEFF' },
+  dropdownItemSelected: { backgroundColor: 'rgba(168,85,247,0.15)' },
   dropdownAvatar: { width: 34, height: 34, borderRadius: 17 },
-  dropdownAvatarFallback: { backgroundColor: '#EDE8F7', alignItems: 'center', justifyContent: 'center' },
-  dropdownInitial: { fontSize: 14, fontWeight: '700', color: '#7A0EED' },
-  dropdownName: { fontSize: 13, fontWeight: '600', color: '#1C1E22', flex: 1 },
-  dropdownNameSelected: { color: '#7A0EED' },
+  dropdownAvatarFallback: { backgroundColor: 'rgba(255,255,255,0.1)', alignItems: 'center', justifyContent: 'center' },
+  dropdownInitial: { fontSize: 14, fontWeight: '700', color: '#A855F7' },
+  dropdownName: { fontSize: 13, fontWeight: '600', color: '#FFFFFF', flex: 1 },
+  dropdownNameSelected: { color: '#A855F7' },
   hostChip: { backgroundColor: '#7A0EED', borderRadius: 6, paddingHorizontal: 6, paddingVertical: 2 },
   hostChipText: { fontSize: 8, fontWeight: '800', color: '#fff', letterSpacing: 0.3 },
 
   // Qty dropdown
   qtyDropdown: {
     position: 'absolute', right: 60, bottom: 70,
-    backgroundColor: '#FFFFFF', borderRadius: 12, elevation: 8,
-    shadowColor: '#000', shadowOpacity: 0.12, shadowRadius: 10, shadowOffset: { width: 0, height: -2 },
-    borderWidth: 1, borderColor: '#F0EDF8',
+    backgroundColor: '#26282B', borderRadius: 12, elevation: 8,
+    shadowColor: '#000', shadowOpacity: 0.4, shadowRadius: 10, shadowOffset: { width: 0, height: -2 },
+    borderWidth: 1, borderColor: 'rgba(255,255,255,0.1)',
   },
   qtyList: { paddingHorizontal: 8, paddingVertical: 10, gap: 6 },
-  qtyItem: { width: 44, height: 44, borderRadius: 10, backgroundColor: '#F4F5F8', alignItems: 'center', justifyContent: 'center' },
+  qtyItem: { width: 44, height: 44, borderRadius: 10, backgroundColor: '#33353A', alignItems: 'center', justifyContent: 'center' },
   qtyItemSelected: { backgroundColor: '#7A0EED' },
-  qtyItemText: { fontSize: 13, fontWeight: '700', color: '#1C1E22' },
+  qtyItemText: { fontSize: 13, fontWeight: '700', color: '#FFFFFF' },
   qtyItemTextSelected: { color: '#FFFFFF' },
 });

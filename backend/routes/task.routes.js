@@ -20,6 +20,7 @@ router.get('/gems',           authenticate, getMyGems);
 router.get('/gem-history',    authenticate, getMyGemHistory);
 router.get('/top-hosts',      authenticate, ctrl.getTopHosts);
 router.get('/winners',        authenticate, ctrl.getWinners);
+router.get('/top-gifters',    authenticate, ctrl.getTopGifters);
 
 // ── Admin routes ──────────────────────────────────────────────────────────────
 router.get('/admin',          authenticateAdmin, ctrl.listTasks);

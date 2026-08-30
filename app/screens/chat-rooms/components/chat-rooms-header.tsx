@@ -5,19 +5,16 @@ import MaskedView from '@react-native-masked-view/masked-view';
 const COIN_IMG = require('@/assets/tabs/coin.png');
 const LEADERBOARD_IMG = require('@/assets/tabs/leaderboard.png');
 const LEVEL_IMG = require('@/assets/tabs/profilelevel.png');
+const CHAT_IMG = require('@/assets/tabs/chatroom/chat.png');
 
 type ChatRoomsHeaderProps = {
-  avatarUri?: string;
-  onAvatarPress?: () => void;
   onStatsPress?: () => void;
-  onMicPress?: () => void;
+  onLeaderboardPress?: () => void;
+  onLevelPress?: () => void;
+  onChatPress?: () => void;
 };
 
-export function ChatRoomsHeader({
-  onAvatarPress,
-  onStatsPress,
-  onMicPress,
-}: ChatRoomsHeaderProps) {
+export function ChatRoomsHeader({ onStatsPress, onLeaderboardPress, onLevelPress, onChatPress }: ChatRoomsHeaderProps) {
   return (
     <View style={styles.container}>
       {/* Brand wordmark */}
@@ -40,17 +37,22 @@ export function ChatRoomsHeader({
       <View style={styles.rightIcons}>
         {/* Coin icon */}
         <TouchableOpacity onPress={onStatsPress} style={styles.iconButton} activeOpacity={0.75}>
-          <Image source={COIN_IMG} style={styles.coinImg} resizeMode="contain" />
+          <Image source={COIN_IMG} style={styles.iconImg} resizeMode="contain" />
         </TouchableOpacity>
 
         {/* Leaderboard icon */}
-        <TouchableOpacity onPress={onStatsPress} style={styles.iconButton} activeOpacity={0.75}>
-          <Image source={LEADERBOARD_IMG} style={styles.leaderboardImg} resizeMode="contain" />
+        <TouchableOpacity onPress={onLeaderboardPress} style={styles.iconButton} activeOpacity={0.75}>
+          <Image source={LEADERBOARD_IMG} style={styles.iconImg} resizeMode="contain" />
         </TouchableOpacity>
 
         {/* Level icon */}
-        <TouchableOpacity onPress={onMicPress} style={styles.iconButton} activeOpacity={0.85}>
-          <Image source={LEVEL_IMG} style={styles.levelImg} resizeMode="contain" />
+        <TouchableOpacity onPress={onLevelPress} style={styles.iconButton} activeOpacity={0.75}>
+          <Image source={LEVEL_IMG} style={styles.iconImg} resizeMode="contain" />
+        </TouchableOpacity>
+
+        {/* Chat icon */}
+        <TouchableOpacity onPress={onChatPress} style={styles.iconButton} activeOpacity={0.75}>
+          <Image source={CHAT_IMG} style={styles.iconImg} resizeMode="contain" />
         </TouchableOpacity>
       </View>
     </View>
@@ -141,16 +143,27 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     backgroundColor: '#F4F0FF',
   },
-  coinImg: {
-    width: 24,
-    height: 24,
+  iconImg: {
+    width: 22,
+    height: 22,
   },
-  leaderboardImg: {
-    width: 24,
-    height: 24,
+  avatarBtn: {
+    width: 36,
+    height: 36,
+    borderRadius: 18,
+    overflow: 'hidden',
+    borderWidth: 2,
+    borderColor: '#7A0EED',
   },
-  levelImg: {
-    width: 24,
-    height: 24,
+  avatar: {
+    width: '100%',
+    height: '100%',
+  },
+  avatarFallback: {
+    width: '100%',
+    height: '100%',
+    backgroundColor: '#EDE8F7',
+    alignItems: 'center',
+    justifyContent: 'center',
   },
 });

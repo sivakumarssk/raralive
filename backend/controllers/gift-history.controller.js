@@ -74,7 +74,8 @@ async function getMyGems(req, res, next) {
  * GET /api/wallet/me/gem-history
  * Returns gem earning history grouped by source: chatroom, friendzone, live
  * Chatroom gems come from room_gift_events (recipient = me).
- * FriendZone / Live: placeholder totals (0) until those features award gems.
+ * FriendZone gems come from friend_zone_calls (callee = me, gems_earned > 0).
+ * Live: placeholder totals (0) until that feature awards gems.
  */
 async function getMyGemHistory(req, res, next) {
   try {
@@ -102,11 +103,48 @@ async function getMyGemHistory(req, res, next) {
 
     const totalChatroomGems = events.reduce((s, e) => s + e.gems_earned, 0);
 
+    // Friend Zone gems have two sources, merged into one feed:
+    // 1. Per-minute call billing (friend_zone_calls.gems_earned, callee side)
+    // 2. In-call gifting (call_gift_events, recipient side) — same 1:5 ratio
+    const fzCalls = await db.query(
+      `SELECT c.id, c.call_type, c.duration_seconds, c.gems_earned, c.created_at,
+              caller.full_name AS caller_name, caller.username AS caller_username,
+              caller.avatar_url AS caller_avatar
+       FROM friend_zone_calls c
+       JOIN users caller ON caller.id = c.caller_id
+       WHERE c.callee_id = $1 AND c.gems_earned > 0
+       ORDER BY c.created_at DESC
+       LIMIT 200`,
+      [userId]
+    );
+    const callEvents = fzCalls.rows.map(ev => ({ ...ev, kind: 'call' }));
+
+    const fzGifts = await db.query(
+      `SELECT g.id, g.gift_name, g.gift_image_url, g.coins, g.quantity,
+              (g.coins * g.quantity * 5) AS gems_earned, g.created_at,
+              c.call_type,
+              sender.full_name AS sender_name, sender.username AS sender_username,
+              sender.avatar_url AS sender_avatar
+       FROM call_gift_events g
+       JOIN friend_zone_calls c ON c.id = g.call_id
+       JOIN users sender ON sender.id = g.sender_id
+       WHERE g.recipient_id = $1
+       ORDER BY g.created_at DESC
+       LIMIT 200`,
+      [userId]
+    );
+    const giftEvents = fzGifts.rows.map(ev => ({ ...ev, kind: 'gift' }));
+
+    const fzEvents = [...callEvents, ...giftEvents]
+      .sort((a, b) => new Date(b.created_at) - new Date(a.created_at))
+      .slice(0, 200);
+    const totalFriendZoneGems = fzEvents.reduce((s, e) => s + e.gems_earned, 0);
+
     return res.json({
       success: true,
       data: {
         chatroom: { total_gems: totalChatroomGems, events },
-        friendzone: { total_gems: 0, events: [] },
+        friendzone: { total_gems: totalFriendZoneGems, events: fzEvents },
         live: { total_gems: 0, events: [] },
       },
     });

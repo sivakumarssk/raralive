@@ -5,6 +5,8 @@ import { Image, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
 import type { SeatSlot } from '@/hooks/useRoomSocket';
 import { MEDIA_BASE } from '@/services/api';
 
+const COIN_IMG = require('@/assets/tabs/coin.png');
+
 export type HostInfo = {
   name: string;
   avatarUri?: string;
@@ -14,12 +16,17 @@ export type HostInfo = {
 export type SlotLayoutMap = Map<string, { x: number; y: number }>;
 
 export type BattleStageInfo = {
+  inviteId: string;
   ownRoomName: string;
   ownRoomImageUrl: string | null;
   rivalRoomName: string;
   rivalRoomImageUrl: string | null;
   timeDisplay: string;
   isFinished: boolean;
+  fromRoomId?: string;
+  toRoomId?: string;
+  fromHostUserId?: string;
+  toHostUserId?: string;
 };
 
 type RoomStageProps = {
@@ -54,7 +61,7 @@ function formatCoins(n: number) {
 function CoinBadge({ coins }: { coins: number }) {
   return (
     <View style={stage.coinBadge}>
-      <Text style={stage.coinBadgeEmoji}>🪙</Text>
+      <Image source={COIN_IMG} style={stage.coinBadgeImg} resizeMode="contain" />
       <Text style={stage.coinBadgeText}>{formatCoins(coins)}</Text>
     </View>
   );
@@ -85,7 +92,7 @@ function HostSlot({ hostInfo, isHost, isMuted, onToggleMute, onLayout, coins, sh
           <Ionicons name="moon-outline" size={18} color="#FFFFFF" />
         </View>
       )}
-      {isHost && isMuted && (
+      {isMuted && (
         <View style={stage.muteBadge}>
           <Ionicons name="mic-off" size={10} color="#FFFFFF" />
         </View>
@@ -95,8 +102,8 @@ function HostSlot({ hostInfo, isHost, isMuted, onToggleMute, onLayout, coins, sh
 
   const ringStyle = [
     stage.hostAvatarRing,
+    hasRoomBg ? stage.hostAvatarRingActive : stage.hostAvatarRingMuted,
     !hostInfo.isOnline && stage.hostAvatarRingOffline,
-    hasRoomBg && stage.hostAvatarRingBg,
   ];
   const measureLayout = (ref: View | null) => {
     if (!ref || !onLayout) return;
@@ -154,7 +161,10 @@ function OccupiedSlot({ slot, isMe, isMuted, onToggleMute, onLayout, coins, show
     ref.measureInWindow((x, y, w, h) => onLayout(x + w / 2, y + h / 2));
   };
 
-  const ringStyle = [stage.occupiedRing, hasRoomBg && stage.occupiedRingBg];
+  const ringStyle = [
+    stage.occupiedRing,
+    hasRoomBg ? stage.hostAvatarRingActive : stage.hostAvatarRingMuted,
+  ];
   const nameStyle = [stage.seatName, hasRoomBg && stage.nameOnBg];
 
   return (
@@ -171,6 +181,11 @@ function OccupiedSlot({ slot, isMe, isMuted, onToggleMute, onLayout, coins, show
       ) : (
         <View ref={measureLayout} style={ringStyle}>
           {avatar}
+          {isMuted && (
+            <View style={stage.muteBadge}>
+              <Ionicons name="mic-off" size={10} color="#FFFFFF" />
+            </View>
+          )}
         </View>
       )}
       <Text style={nameStyle} numberOfLines={1}>{slot.userName}</Text>
@@ -207,7 +222,7 @@ const MEMBER_INDICES = [1, 2, 3, 4, 5, 6, 7];
 
 export function RoomStage({
   hostInfo, seats, isHost, hideEmptySlots, onRequestSeat,
-  myUserId, isMuted, onToggleMute, isHostMuted, onSlotLayout, hostUserId,
+  myUserId, onToggleMute, isHostMuted, onSlotLayout, hostUserId,
   battleInfo, coinsByUserId, hasRoomBg, rewardFrameUrl,
 }: RoomStageProps) {
   const filledMap = new Map(
@@ -226,7 +241,7 @@ export function RoomStage({
           key={slotIndex}
           slot={occupied}
           isMe={isMe}
-          isMuted={isMuted}
+          isMuted={!!occupied.isMuted}
           onToggleMute={onToggleMute}
           onLayout={onSlotLayout ? (x, y) => onSlotLayout(occupied.userId, x, y) : undefined}
           coins={coins}
@@ -253,7 +268,7 @@ export function RoomStage({
         <HostSlot
           hostInfo={hostInfo}
           isHost={isHost}
-          isMuted={isHostMuted}
+          isMuted={isHost ? isHostMuted : !!(seats.find(s => s.slotIndex === 0)?.isMuted)}
           onToggleMute={isHost ? onToggleMute : undefined}
           onLayout={onSlotLayout && hostUserId ? (x, y) => onSlotLayout(hostUserId, x, y) : undefined}
           coins={hostCoins}
@@ -269,8 +284,10 @@ export function RoomStage({
     </>
   );
 
+  const containerStyle = [stage.container, !!battleInfo && stage.containerWithBattle];
+
   if (hasRoomBg) {
-    return <View style={stage.container}>{stageContent}</View>;
+    return <View style={containerStyle}>{stageContent}</View>;
   }
 
   return (
@@ -278,7 +295,7 @@ export function RoomStage({
       colors={['#DDD5F8', '#EDE8FF', '#F5F2FF']}
       start={{ x: 0, y: 0 }}
       end={{ x: 1, y: 1 }}
-      style={stage.container}>
+      style={containerStyle}>
       {stageContent}
     </LinearGradient>
   );
@@ -290,6 +307,10 @@ const stage = StyleSheet.create({
     paddingHorizontal: 12,
     gap: 12,
     overflow: 'hidden',
+  },
+  // Extra bottom room so the overlapping battle banner doesn't crowd the seat rows
+  containerWithBattle: {
+    paddingBottom: 44,
   },
   frameOverlay: {
     position: 'absolute',
@@ -314,21 +335,19 @@ const stage = StyleSheet.create({
     height: 60,
     borderRadius: 30,
     borderWidth: 2,
-    borderColor: '#FFD700',
+    borderColor: '#4A90E2',
     alignItems: 'center',
     justifyContent: 'center',
     position: 'relative',
   },
+  hostAvatarRingActive: {
+    borderColor: '#FFD700',
+  },
+  hostAvatarRingMuted: {
+    borderColor: '#4A90E2',
+  },
   hostAvatarRingOffline: {
     borderColor: '#ABADB2',
-  },
-  hostAvatarRingBg: {
-    borderColor: '#FFFFFF',
-    shadowColor: '#FFFFFF',
-    shadowOpacity: 0.5,
-    shadowRadius: 6,
-    shadowOffset: { width: 0, height: 0 },
-    elevation: 4,
   },
   hostAvatar: {
     width: 54,
@@ -368,13 +387,10 @@ const stage = StyleSheet.create({
     height: 60,
     borderRadius: 30,
     borderWidth: 2,
-    borderColor: '#FFD700',
+    borderColor: '#4A90E2',
     alignItems: 'center',
     justifyContent: 'center',
     position: 'relative',
-  },
-  occupiedRingBg: {
-    borderColor: '#FFFFFF',
   },
   seatAvatar: {
     width: 54,
@@ -474,17 +490,17 @@ const stage = StyleSheet.create({
   coinBadge: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 2,
-    backgroundColor: 'rgba(255,255,255,0.7)',
-    borderRadius: 8,
-    paddingHorizontal: 5,
-    paddingVertical: 2,
+    gap: 4,
+    backgroundColor: 'rgba(255,255,255,0.85)',
+    borderRadius: 10,
+    paddingHorizontal: 7,
+    paddingVertical: 3,
     borderWidth: 1,
     borderColor: 'rgba(122,14,237,0.15)',
   },
-  coinBadgeEmoji: { fontSize: 9 },
+  coinBadgeImg: { width: 14, height: 14 },
   coinBadgeText: {
-    fontSize: 9,
+    fontSize: 12,
     fontWeight: '800',
     color: '#7A0EED',
   },

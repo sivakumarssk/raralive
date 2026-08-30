@@ -26,8 +26,6 @@ type CoinPackage = {
   original_price: string | null; discount: string; highlighted: boolean;
 };
 
-const FLASH_SALE_DURATION = 6322;
-
 // ── Gem Tier Data ─────────────────────────────────────────────────────────────
 
 type Tier = { gems: number; payout: number; hostPct: number };
@@ -116,8 +114,37 @@ function formatPerGem(gems: number, payout: number): string {
 
 // ── Gem Tiers component ───────────────────────────────────────────────────────
 
+// Index where 55% tiers start
+const FIRST_55_IDX = ALL_TIERS.findIndex(t => t.hostPct === 55);
+
+function PctBadge({ pct, done }: { pct: number; done?: boolean }) {
+  const is55 = pct === 55;
+  return (
+    <View style={[tier.pctBadge, is55 ? tier.pctBadge55 : tier.pctBadge50, done && tier.pctBadgeDone]}>
+      <Text style={[tier.pctBadgeText, is55 ? tier.pctBadgeText55 : tier.pctBadgeText50, done && tier.pctBadgeTextDone]}>
+        {pct}%
+      </Text>
+    </View>
+  );
+}
+
+function UnlockBanner() {
+  return (
+    <LinearGradient
+      colors={['#7A0EED22', '#B5035722']}
+      start={{ x: 0, y: 0 }} end={{ x: 1, y: 0 }}
+      style={tier.unlockBanner}>
+      <Ionicons name="arrow-up-circle" size={16} color="#7A0EED" />
+      <Text style={tier.unlockText}>
+        Complete target &amp; unlock{' '}
+        <Text style={tier.unlockHighlight}>55% withdraw value</Text>
+      </Text>
+      <Ionicons name="chevron-forward" size={14} color="#B50357" />
+    </LinearGradient>
+  );
+}
+
 function GemTiers({ gemBalance }: { gemBalance: number }) {
-  // Highest tier index the user has fully reached
   const currentTierIdx = (() => {
     let idx = -1;
     for (let i = 0; i < ALL_TIERS.length; i++) {
@@ -126,86 +153,125 @@ function GemTiers({ gemBalance }: { gemBalance: number }) {
     return idx;
   })();
 
-  // Sliding window of 20: keep 1 completed row at top if any, rest are upcoming
   const windowStart  = Math.max(0, currentTierIdx);
   const windowEnd    = Math.min(ALL_TIERS.length, windowStart + WINDOW_SIZE);
   const visibleTiers = ALL_TIERS.slice(windowStart, windowEnd);
 
+  // Whether banner should appear inside visible window
+  const bannerAbsIdx = FIRST_55_IDX; // show banner just before first 55% row
+
+  const rows: React.ReactNode[] = [];
+  let bannerInserted = false;
+
+  visibleTiers.forEach((t, i) => {
+    const absIdx      = windowStart + i;
+    const isCompleted = absIdx <= currentTierIdx;
+    const isCurrent   = absIdx === currentTierIdx + 1;
+    const isLast      = i === visibleTiers.length - 1;
+
+    // Insert unlock banner before first 55% row (only if not yet in 55% zone)
+    if (!bannerInserted && absIdx === bannerAbsIdx && currentTierIdx < FIRST_55_IDX - 1) {
+      rows.push(<UnlockBanner key="unlock-banner" />);
+      bannerInserted = true;
+    }
+
+    if (isCompleted) {
+      const isTopCompleted = absIdx === currentTierIdx;
+      const handleWithdraw = () => {
+        const text = `Hi, I want to withdraw ${formatN(t.gems)} gems (₹${formatPayout(t.payout)}) on Rara Live.\nUsername: @${authStore.getUser()?.username ?? ''}`;
+        Linking.openURL(`https://wa.me/${WHATSAPP_NUMBER}?text=${encodeURIComponent(text)}`).catch(() => {});
+      };
+
+      rows.push(
+        <View key={absIdx} style={[tier.row, !isLast && tier.rowBorder, tier.rowDone]}>
+          <View style={tier.leftCol}>
+            <Ionicons name="checkmark-circle" size={15} color="#16A34A" style={{ marginRight: 6 }} />
+            <View>
+              <Text style={tier.gemsTextDone}>{formatN(t.gems)}</Text>
+              <Text style={tier.perGemDone}>{formatPerGem(t.gems, t.payout)}</Text>
+            </View>
+          </View>
+          <View style={tier.rightCol}>
+            <PctBadge pct={t.hostPct} done />
+            {isTopCompleted ? (
+              <TouchableOpacity activeOpacity={0.8} onPress={handleWithdraw} style={gem.withdrawBtn}>
+                <Ionicons name="cash-outline" size={13} color="#FFFFFF" />
+                <Text style={gem.withdrawText}>₹{formatPayout(t.payout)}</Text>
+              </TouchableOpacity>
+            ) : (
+              <View style={[tier.payoutBadge, tier.payoutBadgeDone]}>
+                <Text style={[tier.payoutBadgeText, tier.payoutBadgeTextDone]}>₹{formatPayout(t.payout)}</Text>
+              </View>
+            )}
+          </View>
+        </View>
+      );
+      return;
+    }
+
+    if (isCurrent) {
+      rows.push(
+        <LinearGradient
+          key={absIdx}
+          colors={['#1D6FE014', '#4A90E214']}
+          start={{ x: 0, y: 0 }} end={{ x: 1, y: 0 }}
+          style={[tier.row, !isLast && tier.rowBorder, tier.rowCurrent]}>
+          <View style={tier.leftCol}>
+            <Ionicons name="diamond" size={16} color="#1D6FE0" style={{ marginRight: 6 }} />
+            <View>
+              <Text style={tier.gemsTextCurrent}>{formatN(t.gems)}</Text>
+              <Text style={tier.perGemCurrent}>{formatPerGem(t.gems, t.payout)}</Text>
+            </View>
+          </View>
+          <View style={tier.rightCol}>
+            <PctBadge pct={t.hostPct} />
+            <View style={tier.payoutBadge}>
+              <Text style={tier.payoutBadgeText}>₹{formatPayout(t.payout)}</Text>
+            </View>
+          </View>
+        </LinearGradient>
+      );
+      return;
+    }
+
+    rows.push(
+      <View key={absIdx} style={[tier.row, !isLast && tier.rowBorder]}>
+        <View style={tier.leftCol}>
+          <Ionicons name="diamond" size={14} color="#4A90E2" style={{ marginRight: 6 }} />
+          <View>
+            <Text style={tier.gemsText}>{formatN(t.gems)}</Text>
+            <Text style={tier.perGemText}>{formatPerGem(t.gems, t.payout)}</Text>
+          </View>
+        </View>
+        <View style={tier.rightCol}>
+          <PctBadge pct={t.hostPct} />
+          <View style={[tier.payoutBadge, tier.payoutBadgeFuture]}>
+            <Text style={[tier.payoutBadgeText, tier.payoutBadgeTextFuture]}>₹{formatPayout(t.payout)}</Text>
+          </View>
+        </View>
+      </View>
+    );
+  });
+
   return (
     <ScrollView style={{ flex: 1 }} showsVerticalScrollIndicator={false} contentContainerStyle={tier.container}>
-      {/* Column headers */}
       <View style={tier.colHeader}>
         <Text style={tier.colLeft}>Getting Gems</Text>
-        <Text style={tier.colRight}>Host Payment</Text>
+        <Text style={tier.colRight}>Rate · Host Payment</Text>
       </View>
 
-      <View style={tier.list}>
-        {visibleTiers.map((t, i) => {
-          const absIdx      = windowStart + i;
-          const isCompleted = absIdx <= currentTierIdx;
-          const isCurrent   = absIdx === currentTierIdx + 1;
-          const isLast      = i === visibleTiers.length - 1;
+      <View style={tier.list}>{rows}</View>
 
-          if (isCompleted) {
-            return (
-              <View key={absIdx} style={[tier.row, !isLast && tier.rowBorder, tier.rowDone]}>
-                <View style={tier.leftCol}>
-                  <Ionicons name="checkmark-circle" size={15} color="#16A34A" style={{ marginRight: 6 }} />
-                  <View>
-                    <Text style={tier.gemsTextDone}>{formatN(t.gems)}</Text>
-                    <Text style={tier.perGemDone}>{formatPerGem(t.gems, t.payout)}</Text>
-                  </View>
-                </View>
-                <View style={[tier.payoutBadge, tier.payoutBadgeDone]}>
-                  <Text style={[tier.payoutBadgeText, tier.payoutBadgeTextDone]}>₹{formatPayout(t.payout)}</Text>
-                </View>
-              </View>
-            );
-          }
-
-          if (isCurrent) {
-            return (
-              <LinearGradient
-                key={absIdx}
-                colors={['#7A0EED14', '#B5035714']}
-                start={{ x: 0, y: 0 }} end={{ x: 1, y: 0 }}
-                style={[tier.row, !isLast && tier.rowBorder, tier.rowCurrent]}>
-                <View style={tier.leftCol}>
-                  <View style={tier.currDot} />
-                  <View>
-                    <Text style={tier.gemsTextCurrent}>{formatN(t.gems)}</Text>
-                    <Text style={tier.perGemCurrent}>{formatPerGem(t.gems, t.payout)}</Text>
-                  </View>
-                </View>
-                <LinearGradient
-                  colors={['#7A0EED', '#B50357']}
-                  start={{ x: 0, y: 0 }} end={{ x: 1, y: 0 }}
-                  style={tier.payoutBadge}>
-                  <Text style={tier.payoutBadgeText}>₹{formatPayout(t.payout)}</Text>
-                </LinearGradient>
-              </LinearGradient>
-            );
-          }
-
-          // future row — payout badge in purple tint
-          return (
-            <View key={absIdx} style={[tier.row, !isLast && tier.rowBorder]}>
-              <View style={tier.leftCol}>
-                <Ionicons name="diamond-outline" size={14} color="#C4B8E8" style={{ marginRight: 6 }} />
-                <View>
-                  <Text style={tier.gemsText}>{formatN(t.gems)}</Text>
-                  <Text style={tier.perGemText}>{formatPerGem(t.gems, t.payout)}</Text>
-                </View>
-              </View>
-              <View style={[tier.payoutBadge, tier.payoutBadgeFuture]}>
-                <Text style={[tier.payoutBadgeText, tier.payoutBadgeTextFuture]}>₹{formatPayout(t.payout)}</Text>
-              </View>
-            </View>
-          );
-        })}
+      <View style={gem.withdrawInfoCard}>
+        <View style={gem.withdrawInfoIconWrap}>
+          <Ionicons name="gift" size={20} color="#1D6FE0" />
+        </View>
+        <View style={{ flex: 1 }}>
+          <Text style={gem.withdrawInfoTitle}>Withdraw Value</Text>
+          <Text style={gem.withdrawInfoSub}>{ALL_TIERS[0].hostPct}% of gems will be added to your wallet balance.</Text>
+        </View>
+        <Ionicons name="chevron-forward" size={18} color="#ABADB2" />
       </View>
-
-      <Text style={tier.footer}>Gems are earned when viewers send you gifts in chat rooms</Text>
     </ScrollView>
   );
 }
@@ -217,9 +283,25 @@ type GiftEvent = {
   sender_name: string | null; sender_username: string | null; sender_avatar: string | null;
 };
 
+type FriendZoneCallEarning = {
+  kind: 'call';
+  id: string; call_type: 'audio' | 'video'; duration_seconds: number; gems_earned: number;
+  created_at: string;
+  caller_name: string | null; caller_username: string | null; caller_avatar: string | null;
+};
+
+type FriendZoneGiftEarning = {
+  kind: 'gift';
+  id: string; call_type: 'audio' | 'video'; gift_name: string; gift_image_url: string | null;
+  coins: number; quantity: number; gems_earned: number; created_at: string;
+  sender_name: string | null; sender_username: string | null; sender_avatar: string | null;
+};
+
+type FriendZoneEarning = FriendZoneCallEarning | FriendZoneGiftEarning;
+
 type GemHistory = {
   chatroom: { total_gems: number; events: GiftEvent[] };
-  friendzone: { total_gems: number; events: [] };
+  friendzone: { total_gems: number; events: FriendZoneEarning[] };
   live: { total_gems: number; events: [] };
 };
 
@@ -254,7 +336,7 @@ function GemTabSwitcher({ active, onChange }: { active: GemTab; onChange: (t: Ge
   );
 }
 
-// ── Placeholder for Friend Zone / Live ────────────────────────────────────────
+// ── Placeholder for Live ──────────────────────────────────────────────────────
 
 function ComingSoonGems({ icon, label }: { icon: string; label: string }) {
   return (
@@ -263,6 +345,58 @@ function ComingSoonGems({ icon, label }: { icon: string; label: string }) {
       <Text style={gem.emptyText}>No gems from {label} yet</Text>
       <Text style={gem.emptyHint}>Gems from {label} will appear here</Text>
     </View>
+  );
+}
+
+// ── Friend Zone earnings list ─────────────────────────────────────────────────
+
+function formatCallDuration(seconds: number): string {
+  const m = Math.floor(seconds / 60);
+  const s = seconds % 60;
+  return `${String(m).padStart(2, '0')}:${String(s).padStart(2, '0')}`;
+}
+
+function FriendZoneEarningsList({ events }: { events: FriendZoneEarning[] }) {
+  if (events.length === 0) {
+    return <ComingSoonGems icon="people-outline" label="Friend Zone" />;
+  }
+
+  return (
+    <ScrollView style={{ flex: 1 }} showsVerticalScrollIndicator={false} contentContainerStyle={tier.container}>
+      <View style={gem.group}>
+        {events.map((e, i) => {
+          const isGift = e.kind === 'gift';
+          const person = isGift
+            ? (e.sender_name || e.sender_username || 'Unknown')
+            : (e.caller_name || e.caller_username || 'Unknown');
+          return (
+            <View key={e.id} style={[gem.row, i < events.length - 1 && gem.rowBorder]}>
+              <View style={gem.giftImgWrap}>
+                <Ionicons
+                  name={isGift ? 'gift' : (e.call_type === 'video' ? 'videocam' : 'call')}
+                  size={18}
+                  color="#0EA5E9"
+                />
+              </View>
+              <View style={gem.rowInfo}>
+                <Text style={gem.rowTitle} numberOfLines={1}>{person}</Text>
+                <Text style={gem.rowSub}>
+                  {isGift
+                    ? `Sent ${e.quantity > 1 ? `${e.quantity}x ` : ''}${e.gift_name}`
+                    : `${e.call_type === 'video' ? 'Video call' : 'Audio call'} · ${formatCallDuration(e.duration_seconds)}`}
+                </Text>
+              </View>
+              <View style={gem.rowRight}>
+                <Text style={gem.rowGems}>+{formatGems(e.gems_earned)}</Text>
+                <Text style={gem.rowTime}>
+                  {new Date(e.created_at).toLocaleDateString('en-IN', { day: '2-digit', month: 'short' })}
+                </Text>
+              </View>
+            </View>
+          );
+        })}
+      </View>
+    </ScrollView>
   );
 }
 
@@ -277,16 +411,9 @@ const PILL_META: Record<PillKey, { label: string; color: string }> = {
   'live':        { label: 'Live',         color: '#E91E7F' },
 };
 
-function useCountdown(seconds: number) {
-  const [remaining, setRemaining] = useState(seconds);
-  useEffect(() => {
-    const interval = setInterval(() => setRemaining(p => (p > 0 ? p - 1 : 0)), 1000);
-    return () => clearInterval(interval);
-  }, []);
-  const h = Math.floor(remaining / 3600);
-  const m = Math.floor((remaining % 3600) / 60);
-  const s = remaining % 60;
-  return `${String(h).padStart(2, '0')}:${String(m).padStart(2, '0')}:${String(s).padStart(2, '0')}`;
+function nextTierFor(gems: number) {
+  for (const t of ALL_TIERS) { if (gems < t.gems) return t; }
+  return null;
 }
 
 function GemsTab({ gemBalance }: { gemBalance: number }) {
@@ -319,7 +446,8 @@ function GemsTab({ gemBalance }: { gemBalance: number }) {
     : activeGemTab === 'friend-zone' ? friendzoneGems
     : liveGems;
 
-  const { label: displayLabel, color: displayColor } = PILL_META[selectedPill];
+  const { label: displayLabel } = PILL_META[selectedPill];
+  const nt = nextTierFor(tierGems);
 
   const handlePillPress = (key: PillKey, tab?: GemTab) => {
     setSelectedPill(key);
@@ -330,20 +458,27 @@ function GemsTab({ gemBalance }: { gemBalance: number }) {
     <View style={{ flex: 1 }}>
       {/* Fixed header: balance card + pills + sub-tabs */}
       <View style={s.gemHeader}>
-        <View style={s.balanceCard}>
-          <Ionicons name="diamond" size={48} color={displayColor} />
-          <Text style={[s.balanceNumber, { color: displayColor }]}>{formatGems(displayGems)}</Text>
-          <Text style={s.balanceLabel}>{displayLabel}</Text>
-        </View>
+        <LinearGradient
+          colors={['#EAF4FF', '#DCEBFF']}
+          start={{ x: 0, y: 0 }} end={{ x: 1, y: 1 }}
+          style={gem.balanceCard}>
+          <View style={gem.balanceCardTop}>
+            <Ionicons name="diamond" size={14} color="#1D6FE0" />
+            <Text style={gem.balanceCardLabel}>{displayLabel}</Text>
+          </View>
+          <Text style={gem.balanceCardNumber}>{formatGems(displayGems)}</Text>
+          <Text style={gem.balanceCardInr}>≈ ₹{(displayGems * 0.0135).toFixed(2)}</Text>
+          <Image source={require('@/assets/tabs/wallet/gemscard.png')} style={gem.balanceCardImage} resizeMode="contain" />
+        </LinearGradient>
 
         <View style={gem.sourcePills}>
           <SourcePill
-            icon="chatbubbles" label="Chat Rooms" gems={chatroomGems} color="#7A0EED"
+            icon="chatbubble-ellipses" label="Chat Rooms" gems={chatroomGems} color="#1D6FE0"
             active={selectedPill === 'chat-rooms'}
             onPress={() => handlePillPress('chat-rooms', 'chat-rooms')}
           />
           <SourcePill
-            icon="people" label="Friend Zone" gems={friendzoneGems} color="#0EA5E9"
+            icon="people" label="Friend Zone" gems={friendzoneGems} color="#1D6FE0"
             active={selectedPill === 'friend-zone'}
             onPress={() => handlePillPress('friend-zone', 'friend-zone')}
           />
@@ -353,6 +488,23 @@ function GemsTab({ gemBalance }: { gemBalance: number }) {
             onPress={() => handlePillPress('live', 'live')}
           />
         </View>
+
+        {nt && (
+          <View style={gem.targetCard}>
+            <View style={gem.targetTop}>
+              <View style={gem.targetLeft}>
+                <Ionicons name="flag" size={13} color="#1D6FE0" />
+                <Text style={gem.targetText}>
+                  Next target: <Text style={gem.targetVal}>{formatN(nt.gems)} gems</Text>
+                </Text>
+              </View>
+              <Text style={gem.targetPct}>{nt.hostPct}% withdraw value</Text>
+            </View>
+            <View style={gem.targetTrack}>
+              <View style={[gem.targetFill, { width: `${Math.min(100, (tierGems / nt.gems) * 100)}%` }]} />
+            </View>
+          </View>
+        )}
 
         <GemTabSwitcher active={activeGemTab} onChange={setActiveGemTab} />
       </View>
@@ -366,7 +518,7 @@ function GemsTab({ gemBalance }: { gemBalance: number }) {
             <GemTiers gemBalance={tierGems} />
           )}
           {activeGemTab === 'friend-zone' && (
-            <ComingSoonGems icon="people-outline" label="Friend Zone" />
+            <FriendZoneEarningsList events={history?.friendzone.events ?? []} />
           )}
           {activeGemTab === 'live' && (
             <ComingSoonGems icon="radio-outline" label="Live" />
@@ -400,7 +552,6 @@ function SourcePill({ icon, label, gems, color, active = false, onPress }: {
 export function WalletScreen() {
   const router = useRouter();
   const [activeTab, setActiveTab] = useState<WalletTab>('coins');
-  const countdown = useCountdown(FLASH_SALE_DURATION);
   const username = authStore.getUser()?.username ?? '';
   const [coinBalance, setCoinBalance] = useState(0);
   const [gemBalance, setGemBalance] = useState(0);
@@ -446,22 +597,37 @@ export function WalletScreen() {
       {/* Coins tab */}
       {activeTab === 'coins' && (
         <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={s.scroll}>
-          <View style={s.balanceCard}>
-            <Image source={require('@/assets/tabs/coin.png')} style={s.coinIcon} resizeMode="contain" />
-            <Text style={s.balanceNumber}>{coinBalance.toLocaleString()}</Text>
-            <Text style={s.balanceLabel}>Coins</Text>
+          <LinearGradient
+            colors={['#7A0EED', '#E91E7F']}
+            start={{ x: 0, y: 0 }} end={{ x: 1, y: 1 }}
+            style={s.balanceCard}>
+            <View style={s.balanceCardTop}>
+              <Ionicons name="logo-usd" size={16} color="#FFD75E" />
+              <Text style={s.balanceCardLabel}>Total Coins</Text>
+            </View>
+            <Text style={s.balanceCardNumber}>{coinBalance.toLocaleString()}</Text>
+            <Image source={require('@/assets/tabs/wallet/walletcard.png')} style={s.coinIcon} resizeMode="contain" />
+          </LinearGradient>
+
+          <View style={s.spinCard}>
+            <View style={s.spinIconWrap}>
+              <Image source={require('@/assets/tabs/wallet/spin.png')} style={s.spinIcon} resizeMode="contain" />
+            </View>
+            <View style={s.spinTextWrap}>
+              <Text style={s.spinTitle}>Spin &amp; Win Coins</Text>
+              <Text style={s.spinSub}>Spin daily and win exciting coins</Text>
+            </View>
+            <TouchableOpacity activeOpacity={0.85} style={s.spinBtn}>
+              <LinearGradient
+                colors={['#7A0EED', '#B50357']}
+                start={{ x: 0, y: 0 }} end={{ x: 1, y: 0 }}
+                style={s.spinBtnGradient}>
+                <Text style={s.spinBtnText}>Spin Now</Text>
+              </LinearGradient>
+            </TouchableOpacity>
           </View>
 
-          <View style={s.flashRow}>
-            <View style={s.flashLeft}>
-              <Ionicons name="flash" size={18} color="#E91E7F" />
-              <Text style={s.flashTitle}>Flash Sale</Text>
-            </View>
-            <View style={s.timerBadge}>
-              <Ionicons name="time-outline" size={13} color="#E91E7F" />
-              <Text style={s.timerText}>{countdown}</Text>
-            </View>
-          </View>
+          <Text style={s.sectionHeading}>Buy Coins</Text>
 
           {pkgLoading ? (
             <ActivityIndicator color="#7A0EED" style={{ marginTop: 20 }} />
@@ -481,6 +647,18 @@ export function WalletScreen() {
 
 // ── Package Row ───────────────────────────────────────────────────────────────
 
+const PKG_ICONS: { max: number; image: number }[] = [
+  { max: 100,      image: require('@/assets/tabs/wallet/below100.png') },
+  { max: 1_000,    image: require('@/assets/tabs/wallet/below1000.png') },
+  { max: 5_000,    image: require('@/assets/tabs/wallet/below5000.png') },
+  { max: 10_000,   image: require('@/assets/tabs/wallet/below10000.png') },
+  { max: Infinity, image: require('@/assets/tabs/wallet/above10000.png') },
+];
+
+function pkgIconFor(coins: number) {
+  return (PKG_ICONS.find(t => coins <= t.max) ?? PKG_ICONS[PKG_ICONS.length - 1]).image;
+}
+
 function PackageRow({ pkg, username }: { pkg: CoinPackage; username: string }) {
   const price = parseFloat(pkg.price);
   const origPrice = pkg.original_price ? parseFloat(pkg.original_price) : null;
@@ -492,7 +670,11 @@ function PackageRow({ pkg, username }: { pkg: CoinPackage; username: string }) {
   };
 
   return (
-    <TouchableOpacity onPress={handlePress} activeOpacity={0.8} style={[s.pkgRow, pkg.highlighted && s.pkgRowHighlighted]}>
+    <TouchableOpacity onPress={handlePress} activeOpacity={0.8} style={s.pkgRow}>
+      <View style={s.pkgIconWrap}>
+        <Image source={pkgIconFor(pkg.coins)} style={s.pkgIcon} resizeMode="contain" />
+      </View>
+
       <View style={s.pkgLeft}>
         <View style={s.pkgCoinRow}>
           <Text style={s.pkgCoins}>{pkg.coins.toLocaleString()}</Text>
@@ -504,17 +686,11 @@ function PackageRow({ pkg, username }: { pkg: CoinPackage; username: string }) {
           </View>
         )}
       </View>
-      {pkg.highlighted ? (
-        <LinearGradient colors={['#B44FE8', '#7A0EED']} start={{ x: 0, y: 0 }} end={{ x: 1, y: 0 }} style={s.priceGradientBtn}>
-          <Text style={s.priceGradientText}>₹{price.toFixed(0)}</Text>
-          {origPrice && <Text style={s.origPriceGradient}> ₹{origPrice.toFixed(0)}—</Text>}
-        </LinearGradient>
-      ) : (
-        <View style={s.priceBtn}>
-          <Text style={s.priceText}>₹{price.toFixed(0)}</Text>
-          {origPrice && <Text style={s.origPrice}> ₹{origPrice.toFixed(0)}—</Text>}
-        </View>
-      )}
+
+      <View style={s.priceBtn}>
+        <Text style={s.priceText}>₹{price.toFixed(0)}</Text>
+        {origPrice && <Text style={s.origPrice}> ₹{origPrice.toFixed(0)}</Text>}
+      </View>
     </TouchableOpacity>
   );
 }
@@ -532,30 +708,47 @@ const s = StyleSheet.create({
   tabText: { fontSize: 14, fontWeight: '500', color: '#7A7A8A' },
   tabTextActive: { color: '#1C1E22', fontWeight: '700' },
   scroll: { paddingHorizontal: 16, paddingBottom: 40 },
-  balanceCard: { backgroundColor: '#FFFFFF', borderRadius: 20, paddingVertical: 24, alignItems: 'center', marginBottom: 16, gap: 4, shadowColor: '#7A0EED', shadowOpacity: 0.06, shadowRadius: 12, shadowOffset: { width: 0, height: 4 }, elevation: 3 },
-  coinIcon: { width: 56, height: 56, marginBottom: 6 },
+  balanceCard: { backgroundColor: '#FFFFFF', borderRadius: 20, paddingVertical: 24, alignItems: 'center', marginBottom: 16, gap: 4, shadowColor: '#7A0EED', shadowOpacity: 0.06, shadowRadius: 12, shadowOffset: { width: 0, height: 4 }, elevation: 3, overflow: 'hidden' },
+  coinIcon: { position: 'absolute', width: 192, height: 152, right: -20},
   balanceNumber: { fontSize: 34, fontWeight: '800', color: '#1C1E22' },
+  balanceTarget: { fontSize: 12, color: '#ABADB2', fontWeight: '400', marginTop: -2 },
   balanceLabel: { fontSize: 15, fontWeight: '400', color: '#7A7A8A' },
-  flashRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', backgroundColor: '#FFF0F7', borderRadius: 14, paddingHorizontal: 14, paddingVertical: 10, marginBottom: 14 },
-  flashLeft: { flexDirection: 'row', alignItems: 'center', gap: 6 },
-  flashTitle: { fontSize: 16, fontWeight: '700', color: '#1C1E22' },
-  timerBadge: { flexDirection: 'row', alignItems: 'center', gap: 4, backgroundColor: '#FFE0EF', paddingHorizontal: 10, paddingVertical: 5, borderRadius: 20 },
-  timerText: { fontSize: 13, fontWeight: '700', color: '#E91E7F' },
+
+  // Coins gradient card (Total Coins) — reference-styled, overlaps `balanceCard`'s dimensions
+  balanceCardTop: { flexDirection: 'row', alignItems: 'center', gap: 6, alignSelf: 'flex-start', marginLeft: 20, marginTop: 20 },
+  balanceCardLabel: { fontSize: 14, fontWeight: '600', color: '#FFFFFF' },
+  balanceCardNumber: { alignSelf: 'flex-start', marginLeft: 20, marginTop: 4, fontSize: 34, fontWeight: '800', color: '#FFFFFF' },
+
+  // Spin & Win banner
+  spinCard: {
+    flexDirection: 'row', alignItems: 'center', gap: 12,
+    backgroundColor: '#FFFFFF', borderRadius: 16, borderWidth: 1, borderColor: '#F6D8E8',
+    paddingHorizontal: 14, paddingVertical: 12, marginBottom: 20,
+    shadowColor: '#B50357', shadowOpacity: 0.06, shadowRadius: 10, shadowOffset: { width: 0, height: 3 }, elevation: 2,
+  },
+  spinIconWrap: { width: 44, height: 44, borderRadius: 22, backgroundColor: '#F3EFFE', alignItems: 'center', justifyContent: 'center' },
+  spinIcon: { width: 85, height: 85 },
+  spinTextWrap: { flex: 1, gap: 2 },
+  spinTitle: { fontSize: 14, fontWeight: '800', color: '#1C1E22' },
+  spinSub: { fontSize: 11, color: '#8A8A96', fontWeight: '400' },
+  spinBtn: { borderRadius: 20, overflow: 'hidden' },
+  spinBtnGradient: { paddingHorizontal: 16, paddingVertical: 9 },
+  spinBtnText: { fontSize: 13, fontWeight: '700', color: '#FFFFFF' },
+
+  sectionHeading: { fontSize: 16, fontWeight: '800', color: '#1C1E22', marginBottom: 12, marginTop: 4 },
   packageList: { gap: 10 },
-  pkgRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', backgroundColor: '#FFFFFF', borderRadius: 16, paddingHorizontal: 16, paddingVertical: 14, shadowColor: '#000', shadowOpacity: 0.04, shadowRadius: 6, shadowOffset: { width: 0, height: 2 }, elevation: 1 },
-  pkgRowHighlighted: { borderWidth: 1.5, borderColor: '#B44FE8' },
-  pkgLeft: { gap: 6 },
+  pkgRow: { flexDirection: 'row', alignItems: 'center', gap: 12, backgroundColor: '#FFFFFF', borderRadius: 16, paddingHorizontal: 14, paddingVertical: 12, shadowColor: '#000', shadowOpacity: 0.04, shadowRadius: 6, shadowOffset: { width: 0, height: 2 }, elevation: 1 },
+  pkgIconWrap: { width: 56, height: 56, borderRadius: 12, backgroundColor: '#FFF7E8', alignItems: 'center', justifyContent: 'center' },
+  pkgIcon: { width: 84, height: 84 },
+  pkgLeft: { flex: 1, gap: 6 },
   pkgCoinRow: { flexDirection: 'row', alignItems: 'baseline' },
-  pkgCoins: { fontSize: 22, fontWeight: '800', color: '#1C1E22' },
+  pkgCoins: { fontSize: 18, fontWeight: '800', color: '#1C1E22' },
   pkgCoinsLabel: { fontSize: 11, fontWeight: '600', color: '#7A7A8A', letterSpacing: 0.5 },
   discountBadge: { backgroundColor: '#E91E7F', borderRadius: 6, paddingHorizontal: 7, paddingVertical: 2, alignSelf: 'flex-start' },
   discountText: { fontSize: 11, fontWeight: '700', color: '#FFFFFF' },
-  priceBtn: { flexDirection: 'row', alignItems: 'baseline', backgroundColor: '#F3EFFE', paddingHorizontal: 14, paddingVertical: 10, borderRadius: 30 },
-  priceText: { fontSize: 16, fontWeight: '700', color: '#1C1E22' },
-  origPrice: { fontSize: 12, color: '#ABADB2', textDecorationLine: 'line-through' },
-  priceGradientBtn: { flexDirection: 'row', alignItems: 'baseline', paddingHorizontal: 16, paddingVertical: 10, borderRadius: 30 },
-  priceGradientText: { fontSize: 16, fontWeight: '700', color: '#FFFFFF' },
-  origPriceGradient: { fontSize: 12, color: 'rgba(255,255,255,0.65)', textDecorationLine: 'line-through' },
+  priceBtn: { flexDirection: 'row', alignItems: 'baseline', backgroundColor: '#7A0EED', paddingHorizontal: 16, paddingVertical: 10, borderRadius: 30 },
+  priceText: { fontSize: 15, fontWeight: '700', color: '#FFFFFF' },
+  origPrice: { fontSize: 11, color: 'rgba(255,255,255,0.7)', textDecorationLine: 'line-through' },
   gemHeader: { paddingHorizontal: 16, paddingTop: 0, paddingBottom: 0 },
 });
 
@@ -575,7 +768,7 @@ const tier = StyleSheet.create({
   rowDone:    { backgroundColor: '#F4FBF5' },
   rowCurrent: { borderLeftWidth: 3, borderLeftColor: '#7A0EED' },
   leftCol:    { flexDirection: 'row', alignItems: 'center' },
-  currDot:    { width: 8, height: 8, borderRadius: 4, backgroundColor: '#7A0EED', marginRight: 8 },
+  currDot:    { width: 8, height: 8, borderRadius: 4, backgroundColor: '#1D6FE0', marginRight: 8 },
 
   // future rows
   gemsText:    { fontSize: 14, fontWeight: '600', color: '#1C1E22' },
@@ -588,20 +781,39 @@ const tier = StyleSheet.create({
   payoutTextDone:{ fontSize: 14, fontWeight: '700', color: '#16A34A' },
 
   // current (next target) row
-  gemsTextCurrent:  { fontSize: 15, fontWeight: '800', color: '#7A0EED' },
-  perGemCurrent:    { fontSize: 11, color: '#A78BFA', fontWeight: '500', marginTop: 1 },
+  gemsTextCurrent:  { fontSize: 15, fontWeight: '800', color: '#1D6FE0' },
+  perGemCurrent:    { fontSize: 11, color: '#7FADE8', fontWeight: '500', marginTop: 1 },
 
   // payout badge — shared shape, different fills per state
-  payoutBadge:            { borderRadius: 20, paddingHorizontal: 13, paddingVertical: 6, alignItems: 'center', justifyContent: 'center' },
+  payoutBadge:            { borderRadius: 20, paddingHorizontal: 13, paddingVertical: 6, alignItems: 'center', justifyContent: 'center', backgroundColor: '#1D6FE0' },
   payoutBadgeText:        { fontSize: 13, fontWeight: '800', color: '#FFFFFF' },
   // done: green tint
   payoutBadgeDone:        { backgroundColor: '#16A34A' },
   payoutBadgeTextDone:    { color: '#FFFFFF' },
-  // future: soft purple pill
-  payoutBadgeFuture:      { backgroundColor: '#EDE8F8' },
-  payoutBadgeTextFuture:  { color: '#7A0EED', fontWeight: '700' },
+  // future: same solid blue pill as reference
+  payoutBadgeFuture:      { backgroundColor: '#1D6FE0' },
+  payoutBadgeTextFuture:  { color: '#FFFFFF', fontWeight: '800' },
 
-  footer: { textAlign: 'center', fontSize: 12, color: '#ABADB2', paddingHorizontal: 20, lineHeight: 17 },
+  rightCol: { flexDirection: 'row', alignItems: 'center', gap: 6 },
+
+  // % badge on each row
+  pctBadge:        { borderRadius: 6, paddingHorizontal: 6, paddingVertical: 2, borderWidth: 1 },
+  pctBadge50:      { backgroundColor: '#E4EFFD', borderColor: '#B8D3F5' },
+  pctBadge55:      { backgroundColor: '#FDE8F3', borderColor: '#F0A8D0' },
+  pctBadgeDone:    { backgroundColor: '#E8F5E9', borderColor: '#86EFAC' },
+  pctBadgeText:    { fontSize: 10, fontWeight: '800', letterSpacing: 0.3 },
+  pctBadgeText50:  { color: '#1D6FE0' },
+  pctBadgeText55:  { color: '#B50357' },
+  pctBadgeTextDone:{ color: '#16A34A' },
+
+  // Unlock banner between 50% and 55% groups
+  unlockBanner: {
+    flexDirection: 'row', alignItems: 'center', gap: 8,
+    borderRadius: 12, paddingHorizontal: 14, paddingVertical: 10,
+    marginVertical: 4,
+  },
+  unlockText:      { flex: 1, fontSize: 12, fontWeight: '600', color: '#1C1E22' },
+  unlockHighlight: { color: '#B50357', fontWeight: '800' },
 });
 
 // Gem sub-tab switcher styles
@@ -609,12 +821,44 @@ const gt = StyleSheet.create({
   wrapper: { flexDirection: 'row', backgroundColor: '#FFFFFF', borderBottomWidth: 1, borderBottomColor: '#EEEAF6', marginBottom: 16 },
   btn: { flex: 1, paddingVertical: 12, alignItems: 'center', position: 'relative' },
   label: { fontSize: 13, fontWeight: '500', color: '#ABADB2' },
-  labelActive: { color: '#7A0EED', fontWeight: '700' },
-  underline: { position: 'absolute', bottom: -1, left: 8, right: 8, height: 2.5, borderRadius: 2, backgroundColor: '#7A0EED' },
+  labelActive: { color: '#1D6FE0', fontWeight: '700' },
+  underline: { position: 'absolute', bottom: -1, left: 8, right: 8, height: 2.5, borderRadius: 2, backgroundColor: '#1D6FE0' },
 });
 
 // Gem content styles
 const gem = StyleSheet.create({
+  // Gems balance card (blue theme)
+  balanceCard: {
+    borderRadius: 20, padding: 20, marginBottom: 16, overflow: 'hidden',
+    shadowColor: '#1D6FE0', shadowOpacity: 0.1, shadowRadius: 12, shadowOffset: { width: 0, height: 4 }, elevation: 3,
+  },
+  balanceCardTop: { flexDirection: 'row', alignItems: 'center', gap: 6 },
+  balanceCardLabel: { fontSize: 13, fontWeight: '600', color: '#1D6FE0' },
+  balanceCardNumber: { fontSize: 32, fontWeight: '800', color: '#0D3B7A', marginTop: 6 },
+  balanceCardInr: { fontSize: 13, color: '#5A82AE', fontWeight: '500', marginTop: 2 },
+  balanceCardImage: { position: 'absolute', right: -10, bottom: -30, width: 180, height: 180 },
+
+  // Tappable withdraw pill on a completed tier row
+  withdrawBtn: {
+    flexDirection: 'row', alignItems: 'center', gap: 4,
+    borderRadius: 20, paddingHorizontal: 13, paddingVertical: 6,
+    backgroundColor: '#16A34A',
+  },
+  withdrawText: { fontSize: 13, fontWeight: '800', color: '#FFFFFF' },
+
+  // Next target progress card
+  targetCard: {
+    backgroundColor: '#FFFFFF', borderRadius: 14, padding: 14, marginBottom: 16,
+    shadowColor: '#000', shadowOpacity: 0.04, shadowRadius: 6, shadowOffset: { width: 0, height: 2 }, elevation: 1,
+  },
+  targetTop: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: 10 },
+  targetLeft: { flexDirection: 'row', alignItems: 'center', gap: 6 },
+  targetText: { fontSize: 12, color: '#60626A', fontWeight: '500' },
+  targetVal: { color: '#1D6FE0', fontWeight: '700' },
+  targetPct: { fontSize: 11, color: '#8A8A96', fontWeight: '600' },
+  targetTrack: { height: 6, borderRadius: 3, backgroundColor: '#EAF0F8', overflow: 'hidden' },
+  targetFill: { height: '100%', borderRadius: 3, backgroundColor: '#1D6FE0' },
+
   sourcePills: { flexDirection: 'row', gap: 8, marginBottom: 16 },
   pill: { flex: 1, flexDirection: 'row', alignItems: 'center', gap: 6, backgroundColor: '#FAFAFA', borderRadius: 12, padding: 10, borderWidth: 1 },
   pillText: { flex: 1 },
@@ -641,4 +885,14 @@ const gem = StyleSheet.create({
   empty: { alignItems: 'center', justifyContent: 'center', paddingVertical: 48, gap: 10 },
   emptyText: { fontSize: 14, color: '#B0AEC0', fontWeight: '500' },
   emptyHint: { fontSize: 12, color: '#C8C5D8', fontWeight: '400' },
+
+  // Withdraw value info card (bottom of tier list)
+  withdrawInfoCard: {
+    flexDirection: 'row', alignItems: 'center', gap: 12,
+    backgroundColor: '#FFFFFF', borderRadius: 16, padding: 14, marginTop: 4,
+    shadowColor: '#000', shadowOpacity: 0.04, shadowRadius: 6, shadowOffset: { width: 0, height: 2 }, elevation: 1,
+  },
+  withdrawInfoIconWrap: { width: 40, height: 40, borderRadius: 12, backgroundColor: '#E4EFFD', alignItems: 'center', justifyContent: 'center' },
+  withdrawInfoTitle: { fontSize: 13, fontWeight: '700', color: '#1C1E22' },
+  withdrawInfoSub: { fontSize: 11, color: '#ABADB2', fontWeight: '400', marginTop: 2 },
 });

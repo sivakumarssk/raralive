@@ -1,4 +1,4 @@
-const BASE_URL = `${import.meta.env.VITE_API_URL ?? 'http://192.168.0.8:5000'}/api`;
+const BASE_URL = `${import.meta.env.VITE_API_URL ?? 'http://192.168.0.9:5000'}/api`;
 
 const TOKEN_ERROR_MSGS = ['invalid or expired token', 'invalid token', 'expired token', 'token expired', 'jwt expired', 'unauthorized'];
 

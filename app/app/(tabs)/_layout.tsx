@@ -10,13 +10,13 @@ function TabBarBackground() {
 export default function TabsLayout() {
   const insets = useSafeAreaInsets();
   const bottomInset = Platform.OS === 'android' ? Math.max(insets.bottom, 12) : 0;
-  const barHeight = Platform.OS === 'ios' ? 80 : 56 + bottomInset;
+  const barHeight = Platform.OS === 'ios' ? 88 : 66 + bottomInset;
 
   return (
     <Tabs
       screenOptions={{
         headerShown: false,
-        tabBarStyle: [styles.tabBar, { height: barHeight, paddingBottom: Platform.OS === 'ios' ? 20 : bottomInset + 6 }],
+        tabBarStyle: [styles.tabBar, { height: barHeight, paddingBottom: Platform.OS === 'ios' ? 24 : bottomInset + 12 }],
         tabBarActiveTintColor: '#7A0EED',
         tabBarInactiveTintColor: '#ABADB2',
         tabBarLabelStyle: styles.tabLabel,
@@ -28,7 +28,7 @@ export default function TabsLayout() {
         options={{
           title: 'Home',
           tabBarIcon: ({ color, focused }) => (
-            <Ionicons name={focused ? 'home' : 'home-outline'} size={22} color={color} />
+            <Ionicons name={focused ? 'home' : 'home-outline'} size={26} color={color} />
           ),
         }}
       />
@@ -37,7 +37,7 @@ export default function TabsLayout() {
         options={{
           title: 'Explore',
           tabBarIcon: ({ color, focused }) => (
-            <Ionicons name={focused ? 'compass' : 'compass-outline'} size={22} color={color} />
+            <Ionicons name={focused ? 'compass' : 'compass-outline'} size={26} color={color} />
           ),
         }}
       />
@@ -46,7 +46,7 @@ export default function TabsLayout() {
         options={{
           title: 'Create',
           tabBarIcon: ({ color }) => (
-            <Ionicons name="add-circle-outline" size={26} color={color} />
+            <Ionicons name="add-circle-outline" size={30} color={color} />
           ),
         }}
       />
@@ -55,7 +55,7 @@ export default function TabsLayout() {
         options={{
           title: 'Live',
           tabBarIcon: ({ color, focused }) => (
-            <Ionicons name={focused ? 'radio' : 'radio-outline'} size={22} color={color} />
+            <Ionicons name={focused ? 'radio' : 'radio-outline'} size={26} color={color} />
           ),
         }}
       />
@@ -64,7 +64,7 @@ export default function TabsLayout() {
         options={{
           title: 'Profile',
           tabBarIcon: ({ color, focused }) => (
-            <Ionicons name={focused ? 'person' : 'person-outline'} size={22} color={color} />
+            <Ionicons name={focused ? 'person' : 'person-outline'} size={26} color={color} />
           ),
         }}
       />

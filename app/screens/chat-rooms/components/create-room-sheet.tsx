@@ -1,5 +1,6 @@
 import { Ionicons } from '@expo/vector-icons';
 import { LinearGradient } from 'expo-linear-gradient';
+import * as Location from 'expo-location';
 import { useEffect, useState } from 'react';
 import {
   ActivityIndicator,
@@ -32,8 +33,11 @@ type FormErrors = {
   name?: string;
   agentCode?: string;
   tags?: string;
+  location?: string;
   api?: string;
 };
+
+type LocationStatus = 'idle' | 'detecting' | 'done' | 'error';
 
 type CreateRoomSheetProps = {
   visible: boolean;
@@ -56,6 +60,11 @@ export function CreateRoomSheet({ visible, onClose, hasPublic, hasPrivate, onCre
   const [errors, setErrors] = useState<FormErrors>({});
   const [submitting, setSubmitting] = useState(false);
 
+  const [city, setCity] = useState('');
+  const [stateName, setStateName] = useState('');
+  const [district, setDistrict] = useState('');
+  const [locationStatus, setLocationStatus] = useState<LocationStatus>('idle');
+
   // Re-sync default when sheet opens
   useEffect(() => {
     if (visible) setVisibility(hasPublic ? 'private' : 'public');
@@ -77,6 +86,42 @@ export function CreateRoomSheet({ visible, onClose, hasPublic, hasPrivate, onCre
     return Object.keys(next).length === 0;
   };
 
+  const detectLocation = async () => {
+    setLocationStatus('detecting');
+    setErrors(p => ({ ...p, location: undefined }));
+    try {
+      const { status } = await Location.requestForegroundPermissionsAsync();
+      if (status !== 'granted') {
+        setLocationStatus('error');
+        setErrors(p => ({ ...p, location: 'Location permission denied. You can enter it manually.' }));
+        return;
+      }
+
+      const position = await Location.getCurrentPositionAsync({
+        accuracy: Location.Accuracy.Balanced,
+      });
+
+      const [place] = await Location.reverseGeocodeAsync({
+        latitude: position.coords.latitude,
+        longitude: position.coords.longitude,
+      });
+
+      if (!place) {
+        setLocationStatus('error');
+        setErrors(p => ({ ...p, location: 'Could not resolve address. You can enter it manually.' }));
+        return;
+      }
+
+      setCity(place.city || place.subregion || '');
+      setStateName(place.region || '');
+      setDistrict(place.district || place.subregion || '');
+      setLocationStatus('done');
+    } catch {
+      setLocationStatus('error');
+      setErrors(p => ({ ...p, location: 'Failed to detect location. You can enter it manually.' }));
+    }
+  };
+
   const handleCreate = async () => {
     if (!validate()) return;
     setSubmitting(true);
@@ -92,6 +137,9 @@ export function CreateRoomSheet({ visible, onClose, hasPublic, hasPrivate, onCre
           ...(visibility === 'public' && { agent_code: agentCode.trim() }),
           visibility,
           tags: selectedTags,
+          ...(city.trim() && { city: city.trim() }),
+          ...(stateName.trim() && { state: stateName.trim() }),
+          ...(district.trim() && { district: district.trim() }),
         }),
       });
       const json = await res.json();
@@ -113,6 +161,10 @@ export function CreateRoomSheet({ visible, onClose, hasPublic, hasPrivate, onCre
     setName('');
     setAgentCode('');
     setSelectedTags([]);
+    setCity('');
+    setStateName('');
+    setDistrict('');
+    setLocationStatus('idle');
     setErrors({});
     onClose();
   };
@@ -232,6 +284,75 @@ export function CreateRoomSheet({ visible, onClose, hasPublic, hasPrivate, onCre
               </View>
             )}
 
+            {/* Location — auto-detected city / state / district */}
+            <View style={sheet.field}>
+              <View style={sheet.labelRow}>
+                <Text style={sheet.label}>LOCATION</Text>
+              </View>
+
+              <TouchableOpacity
+                onPress={detectLocation}
+                activeOpacity={0.85}
+                disabled={locationStatus === 'detecting'}
+                style={sheet.detectBtn}>
+                {locationStatus === 'detecting' ? (
+                  <ActivityIndicator size="small" color="#7A0EED" />
+                ) : (
+                  <Ionicons name="locate-outline" size={18} color="#7A0EED" />
+                )}
+                <Text style={sheet.detectBtnText}>
+                  {locationStatus === 'detecting'
+                    ? 'Detecting your location…'
+                    : locationStatus === 'done'
+                    ? 'Detected — tap to re-detect'
+                    : 'Auto-detect my location'}
+                </Text>
+              </TouchableOpacity>
+
+              {errors.location ? <Text style={sheet.errorText}>{errors.location}</Text> : null}
+
+              {(locationStatus === 'done' || locationStatus === 'error' || city || stateName || district) && (
+                <View style={sheet.locationFields}>
+                  <View style={[sheet.inputBox, sheet.locationInputBox]}>
+                    <Ionicons name="business-outline" size={16} color="#7A0EED" />
+                    <TextInput
+                      style={sheet.input}
+                      placeholder="City"
+                      placeholderTextColor="#ABADB2"
+                      value={city}
+                      onChangeText={setCity}
+                      returnKeyType="done"
+                      underlineColorAndroid="transparent"
+                    />
+                  </View>
+                  <View style={[sheet.inputBox, sheet.locationInputBox]}>
+                    <Ionicons name="map-outline" size={16} color="#7A0EED" />
+                    <TextInput
+                      style={sheet.input}
+                      placeholder="District"
+                      placeholderTextColor="#ABADB2"
+                      value={district}
+                      onChangeText={setDistrict}
+                      returnKeyType="done"
+                      underlineColorAndroid="transparent"
+                    />
+                  </View>
+                  <View style={[sheet.inputBox, sheet.locationInputBox]}>
+                    <Ionicons name="flag-outline" size={16} color="#7A0EED" />
+                    <TextInput
+                      style={sheet.input}
+                      placeholder="State"
+                      placeholderTextColor="#ABADB2"
+                      value={stateName}
+                      onChangeText={setStateName}
+                      returnKeyType="done"
+                      underlineColorAndroid="transparent"
+                    />
+                  </View>
+                </View>
+              )}
+            </View>
+
             {/* Tags */}
             <View style={sheet.field}>
               <Text style={sheet.label}>SELECT TAGS</Text>
@@ -338,6 +459,14 @@ const sheet = StyleSheet.create({
   radioTitle: { fontSize: 13, fontWeight: '600', color: '#60626A' },
   radioTitleActive: { color: '#7A0EED', fontWeight: '700' },
   radioSub: { fontSize: 11, color: '#ABADB2' },
+  detectBtn: {
+    flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8,
+    height: 46, borderRadius: 12, backgroundColor: '#F4EEFF',
+    borderWidth: 1, borderColor: '#E0CFFF',
+  },
+  detectBtnText: { fontSize: 13, fontWeight: '600', color: '#7A0EED' },
+  locationFields: { gap: 10, marginTop: 4 },
+  locationInputBox: { height: 46 },
   tagsWrap: { flexDirection: 'row', flexWrap: 'wrap', gap: 8, marginTop: 4 },
   tag: {
     flexDirection: 'row', alignItems: 'center',

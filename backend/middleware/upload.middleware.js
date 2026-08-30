@@ -103,4 +103,20 @@ const uploadTask = multer({
   limits: { fileSize: 10 * 1024 * 1024 },
 });
 
-module.exports = { upload, uploadGift, uploadShopGift, uploadPost, uploadProfile, uploadTask };
+// Friend Zone application photos — up to 3 images per submission
+const uploadFriendZone = multer({
+  storage: makeStorage('friend-zone', 'fz'),
+  fileFilter(_req, file, cb) {
+    if (file.mimetype.startsWith('image/')) cb(null, true);
+    else cb(new Error('Only image files are allowed.'));
+  },
+  limits: { fileSize: 10 * 1024 * 1024 },
+});
+
+// Chat media — images, audio (voice notes), video, and arbitrary files (docs/PDFs)
+const uploadChatMedia = multer({
+  storage: makeStorage('chat-media', 'chat'),
+  limits: { fileSize: 50 * 1024 * 1024 },
+});
+
+module.exports = { upload, uploadGift, uploadShopGift, uploadPost, uploadProfile, uploadTask, uploadFriendZone, uploadChatMedia };

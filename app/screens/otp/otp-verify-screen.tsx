@@ -16,6 +16,7 @@ import { GradientButton } from '@/components/ui/gradient-button';
 import { ScreenBackground } from '@/components/ui/screen-background';
 import { apiCompleteProfile, apiVerifyOtp } from '@/services/api';
 import { authStore } from '@/store/auth-store';
+import { friendZoneSocketStore } from '@/store/friend-zone-socket-store';
 
 function generateUsername(fullName: string): string {
   const base = fullName
@@ -112,6 +113,7 @@ export function OtpVerifyScreen({ onVerifyContinue }: OtpVerifyScreenProps) {
 
     if (result.data.token) {
       authStore.setToken(result.data.token);
+      friendZoneSocketStore.connect();
     }
     const userId = authStore.getUserId() ?? '';
     const pendingName = authStore.getPendingName();

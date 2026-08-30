@@ -13,11 +13,21 @@ const shopGiftRoutes = require('./shop-gift.routes');
 const taskRoutes = require('./task.routes');
 const postRoutes = require('./post.routes');
 const battleRoutes = require('./battle.routes');
+const bannerRoutes = require('./banner.routes');
+const friendZoneRoutes = require('./friend-zone.routes');
+const chatRoutes = require('./chat.routes');
+const goLiveRoutes = require('./go-live.routes');
 
 const router = express.Router();
 
 router.get('/health', (req, res) => {
   res.json({ success: true, message: 'Rara Live API is running.' });
+});
+
+// Temporary debug route for diagnosing Friend Zone presence sync.
+router.get('/debug/fz-presence', (req, res) => {
+  const { debugFriendZonePresence } = require('../socket');
+  res.json({ success: true, data: debugFriendZonePresence() });
 });
 
 router.use('/auth', authRoutes);
@@ -38,5 +48,9 @@ router.use('/shop-gifts', shopGiftRoutes);
 router.use('/tasks', taskRoutes);
 router.use('/posts', postRoutes);
 router.use('/battle', battleRoutes);
+router.use('/banners', bannerRoutes);
+router.use('/friend-zone', friendZoneRoutes);
+router.use('/chat', chatRoutes);
+router.use('/go-live', goLiveRoutes);
 
 module.exports = router;

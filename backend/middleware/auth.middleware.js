@@ -55,4 +55,14 @@ function authenticateAgency(req, res, next) {
   }
 }
 
-module.exports = { authenticate, authenticateAdmin, authenticateAgency };
+function optionalAuth(req, res, next) {
+  const header = req.headers.authorization;
+  if (!header || !header.startsWith('Bearer ')) return next();
+  try {
+    const payload = jwt.verify(header.slice(7), process.env.JWT_SECRET);
+    req.user = { id: payload.sub };
+  } catch { /* ignore invalid token */ }
+  next();
+}
+
+module.exports = { authenticate, authenticateAdmin, authenticateAgency, optionalAuth };

@@ -321,6 +321,18 @@ async function checkFollow(req, res, next) {
   } catch (error) { next(error); }
 }
 
+/** GET /api/auth/users/:userId — public profile of any user */
+async function getPublicUser(req, res, next) {
+  try {
+    const { userId } = req.params;
+    const profile = await userModel.getProfileWithStats(userId);
+    if (!profile) return res.status(404).json({ success: false, message: 'User not found.' });
+    // strip private fields
+    const { phone, email, is_phone_verified, ...pub } = profile;
+    return res.json({ success: true, data: pub });
+  } catch (error) { next(error); }
+}
+
 /** PATCH /api/auth/language */
 async function setLanguage(req, res, next) {
   try {
@@ -354,4 +366,5 @@ module.exports = {
   followUser,
   unfollowUser,
   checkFollow,
+  getPublicUser,
 };

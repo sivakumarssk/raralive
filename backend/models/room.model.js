@@ -5,7 +5,7 @@ function generateRoomCode() {
   return 'RM-' + crypto.randomBytes(3).toString('hex').toUpperCase();
 }
 
-async function createRoom({ roomName, description, agencyId, hostUserId, roomImageUrl, visibility, createdBy }) {
+async function createRoom({ roomName, description, agencyId, hostUserId, roomImageUrl, visibility, city, state, district, createdBy }) {
   // Ensure unique room_code
   let roomCode;
   for (let i = 0; i < 10; i++) {
@@ -16,10 +16,10 @@ async function createRoom({ roomName, description, agencyId, hostUserId, roomIma
 
   try {
     const result = await db.query(
-      `INSERT INTO rooms (room_code, room_name, description, agency_id, host_user_id, room_image_url, visibility, created_by)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
-       RETURNING id, room_code, room_name, description, agency_id, host_user_id, room_image_url, visibility, status, created_at`,
-      [roomCode, roomName, description || null, agencyId, hostUserId, roomImageUrl || null, visibility || 'public', createdBy || null]
+      `INSERT INTO rooms (room_code, room_name, description, agency_id, host_user_id, room_image_url, visibility, city, state, district, created_by)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+       RETURNING id, room_code, room_name, description, agency_id, host_user_id, room_image_url, visibility, status, city, state, district, created_at`,
+      [roomCode, roomName, description || null, agencyId, hostUserId, roomImageUrl || null, visibility || 'public', city || null, state || null, district || null, createdBy || null]
     );
     return result.rows[0];
   } catch (err) {

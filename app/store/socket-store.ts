@@ -1,9 +1,17 @@
 import { io, type Socket } from 'socket.io-client';
 
-import { MEDIA_BASE } from '@/services/api';
+import { BASE_URL, MEDIA_BASE } from '@/services/api';
 import { authStore } from '@/store/auth-store';
+import { getUserLevel } from '@/utils/userLevel';
 import type { ChatMessage } from '@/screens/room-detail/room-detail.data';
 import type { SeatSlot, HostStatus, IncomingSeatRequest, SeatRequestResult } from '@/hooks/useRoomSocket';
+
+export type IncomingStageInvite = {
+  slotIndex: number;
+  hostSocketId: string;
+  hostName: string;
+  hostAvatarUrl: string | null;
+};
 
 type SocketState = {
   socket: Socket | null;
@@ -15,7 +23,9 @@ type SocketState = {
   hostStatus: HostStatus;
   incomingRequest: IncomingSeatRequest | null;
   seatRequestResult: SeatRequestResult | null;
+  incomingStageInvite: IncomingStageInvite | null;
   roomLevel: number;
+  myCoinsSpent: number;
 };
 
 const state: SocketState = {
@@ -28,25 +38,71 @@ const state: SocketState = {
   hostStatus: { isOnline: false, userName: 'Host', avatarUrl: null },
   incomingRequest: null,
   seatRequestResult: null,
+  incomingStageInvite: null,
   roomLevel: 0,
+  myCoinsSpent: 0,
 };
 
 const listeners = new Set<() => void>();
 function notify() { listeners.forEach(fn => fn()); }
 
 const walletBalanceListeners = new Set<(coins: number) => void>();
+const coinsGiftedListeners = new Set<(coinsGifted: number) => void>();
 const giftErrorListeners = new Set<(message: string) => void>();
+const joinBlockedListeners = new Set<(message: string) => void>();
+const kickedListeners = new Set<(message: string) => void>();
+const reopenBattleListeners = new Set<() => void>();
 const levelUpListeners = new Set<(level: number) => void>();
 const taskCompletedListeners = new Set<(data: { task_id: string; title: string; reward_bg_url: string | null; reward_frame_url: string | null }) => void>();
-const rewardAppliedListeners = new Set<(data: { reward_bg_url: string | null; reward_frame_url: string | null }) => void>();
+const rewardAppliedListeners = new Set<(data: { reward_bg_url: string | null; reward_frame_url: string | null; completed_by?: string; task_title?: string }) => void>();
+
+export type BattleInvitePayload = {
+  invite_id: string;
+  from_room_id: string;
+  from_room_name: string;
+  from_room_image_url: string | null;
+  duration_minutes: number;
+};
+const battleInviteListeners = new Set<(data: BattleInvitePayload) => void>();
+const battleInviteAcceptedListeners = new Set<(data: { invite_id: string; to_room_name: string }) => void>();
+const battleInviteDeclinedListeners = new Set<(data: { invite_id: string; to_room_name: string }) => void>();
+const battleInviteCancelledListeners = new Set<(data: { invite_id: string; from_room_name: string }) => void>();
+const battleScoresListeners = new Set<(data: { invite_id: string; left: number; right: number }) => void>();
+const battleStartedListeners = new Set<(data: { invite_id: string; from_room_id: string; to_room_id: string }) => void>();
+const removedFromStageListeners = new Set<() => void>();
+const broadcastLikesListeners = new Set<(likesCount: number) => void>();
+const broadcastLikeStateListeners = new Set<(liked: boolean) => void>();
+const pinnedCommentListeners = new Set<(messageId: string | null) => void>();
+const commentDeletedListeners = new Set<(messageId: string) => void>();
+const reportCommentResultListeners = new Set<(ok: boolean) => void>();
 
 export function onWalletUpdate(fn: (coins: number) => void) {
   walletBalanceListeners.add(fn);
   return () => walletBalanceListeners.delete(fn);
 }
+export function onCoinsGiftedUpdate(fn: (coinsGifted: number) => void) {
+  coinsGiftedListeners.add(fn);
+  return () => coinsGiftedListeners.delete(fn);
+}
+export function getMyCoinsGifted() { return state.myCoinsSpent; }
 export function onGiftError(fn: (message: string) => void) {
   giftErrorListeners.add(fn);
   return () => { giftErrorListeners.delete(fn); };
+}
+export function onJoinBlocked(fn: (message: string) => void) {
+  joinBlockedListeners.add(fn);
+  return () => { joinBlockedListeners.delete(fn); };
+}
+export function onKickedFromRoom(fn: (message: string) => void) {
+  kickedListeners.add(fn);
+  return () => { kickedListeners.delete(fn); };
+}
+export function onReopenBattle(fn: () => void) {
+  reopenBattleListeners.add(fn);
+  return () => { reopenBattleListeners.delete(fn); };
+}
+export function triggerReopenBattle() {
+  reopenBattleListeners.forEach(fn => fn());
 }
 export function onLevelUp(fn: (level: number) => void) {
   levelUpListeners.add(fn);
@@ -56,9 +112,57 @@ export function onTaskCompleted(fn: (data: { task_id: string; title: string; rew
   taskCompletedListeners.add(fn);
   return () => { taskCompletedListeners.delete(fn); };
 }
-export function onRewardApplied(fn: (data: { reward_bg_url: string | null; reward_frame_url: string | null }) => void) {
+export function onRewardApplied(fn: (data: { reward_bg_url: string | null; reward_frame_url: string | null; completed_by?: string; task_title?: string }) => void) {
   rewardAppliedListeners.add(fn);
   return () => { rewardAppliedListeners.delete(fn); };
+}
+export function onBattleInvite(fn: (data: BattleInvitePayload) => void) {
+  battleInviteListeners.add(fn);
+  return () => { battleInviteListeners.delete(fn); };
+}
+export function onBattleInviteAccepted(fn: (data: { invite_id: string; to_room_name: string }) => void) {
+  battleInviteAcceptedListeners.add(fn);
+  return () => { battleInviteAcceptedListeners.delete(fn); };
+}
+export function onBattleInviteDeclined(fn: (data: { invite_id: string; to_room_name: string }) => void) {
+  battleInviteDeclinedListeners.add(fn);
+  return () => { battleInviteDeclinedListeners.delete(fn); };
+}
+export function onBattleInviteCancelled(fn: (data: { invite_id: string; from_room_name: string }) => void) {
+  battleInviteCancelledListeners.add(fn);
+  return () => { battleInviteCancelledListeners.delete(fn); };
+}
+export function onBattleScores(fn: (data: { invite_id: string; left: number; right: number }) => void) {
+  battleScoresListeners.add(fn);
+  return () => { battleScoresListeners.delete(fn); };
+}
+export function onBattleStarted(fn: (data: { invite_id: string; from_room_id: string; to_room_id: string }) => void) {
+  battleStartedListeners.add(fn);
+  return () => { battleStartedListeners.delete(fn); };
+}
+export function onRemovedFromStage(fn: () => void) {
+  removedFromStageListeners.add(fn);
+  return () => { removedFromStageListeners.delete(fn); };
+}
+export function onBroadcastLikesUpdate(fn: (likesCount: number) => void) {
+  broadcastLikesListeners.add(fn);
+  return () => { broadcastLikesListeners.delete(fn); };
+}
+export function onBroadcastLikeState(fn: (liked: boolean) => void) {
+  broadcastLikeStateListeners.add(fn);
+  return () => { broadcastLikeStateListeners.delete(fn); };
+}
+export function onPinnedCommentUpdate(fn: (messageId: string | null) => void) {
+  pinnedCommentListeners.add(fn);
+  return () => { pinnedCommentListeners.delete(fn); };
+}
+export function onCommentDeleted(fn: (messageId: string) => void) {
+  commentDeletedListeners.add(fn);
+  return () => { commentDeletedListeners.delete(fn); };
+}
+export function onReportCommentResult(fn: (ok: boolean) => void) {
+  reportCommentResultListeners.add(fn);
+  return () => { reportCommentResultListeners.delete(fn); };
 }
 
 function resolveAvatarUrl(url: string | null | undefined): string {
@@ -68,6 +172,42 @@ function resolveAvatarUrl(url: string | null | undefined): string {
 }
 
 const GIFT_RE = /^__gift__(.+)__to__(.+)__img__(.*)__bg__([^_]*)(.*)$/;
+
+async function fetchMyCoinsSpent() {
+  const token = authStore.getToken();
+  if (!token) return;
+  try {
+    const res = await fetch(`${BASE_URL}/wallet/me`, { headers: { Authorization: `Bearer ${token}` } });
+    const json = await res.json();
+    console.log('[Socket] /wallet/me response:', JSON.stringify(json?.data));
+    if (json.success) {
+      const d = json.data;
+      const spent = d.coins_gifted ?? d.coins_spent ?? d.coinsSpent ?? 0;
+      console.log('[Socket] coins_gifted:', d.coins_gifted, 'resolved:', spent, '→ level:', getUserLevel(spent));
+      setMyCoinsSpent(spent);
+    }
+  } catch (e) {
+    console.log('[Socket] fetchMyCoinsSpent error:', e);
+  }
+}
+
+export function setMyCoinsSpent(coins: number) {
+  state.myCoinsSpent = coins;
+  const myId = authStore.getUserId();
+  const myUser = authStore.getUser();
+  const myNames = [myUser?.fullName, myUser?.username].filter(Boolean);
+  const myLevel = getUserLevel(coins);
+  console.log('[Socket] setMyCoinsSpent:', coins, '→ level:', myLevel, 'myNames:', myNames);
+  // Re-patch level on ALL existing messages from current user
+  state.messages = state.messages.map(m => {
+    const isMe = (m.user?.id && m.user.id === myId) ||
+                 (!m.user?.id && !!m.user?.name && myNames.includes(m.user.name));
+    return isMe ? { ...m, user: { ...m.user!, level: myLevel } } : m;
+  });
+  // Notify all useUserLevel hooks
+  coinsGiftedListeners.forEach(fn => fn(coins));
+  notify();
+}
 
 function resolveMessageAvatar(msg: ChatMessage): ChatMessage {
   const resolved = msg.user
@@ -142,6 +282,7 @@ export const socketStore = {
     socket.on('connect', () => {
       state.connected = true;
       socket.emit('join_room', { roomId });
+      fetchMyCoinsSpent();
       notify();
     });
 
@@ -150,18 +291,52 @@ export const socketStore = {
       notify();
     });
 
+    socket.on('join_blocked', ({ message }: { message: string }) => {
+      joinBlockedListeners.forEach(fn => fn(message));
+    });
+
+    socket.on('kicked_from_room', ({ message }: { message: string }) => {
+      kickedListeners.forEach(fn => fn(message));
+    });
+
     socket.on('chat_history', (history: ChatMessage[]) => {
-      state.messages = history.map(resolveMessageAvatar);
+      const resolved = history.map(resolveMessageAvatar);
+      // Deduplicate by ID
+      const seen = new Set<string>();
+      state.messages = resolved.filter(m => {
+        if (!m.id || seen.has(m.id)) return false;
+        seen.add(m.id);
+        return true;
+      });
       notify();
     });
 
     socket.on('chat_message', (msg: ChatMessage) => {
-      state.messages = [...state.messages, resolveMessageAvatar(msg)];
+      // Deduplicate — skip if message ID already exists
+      if (msg.id && state.messages.some(m => m.id === msg.id)) return;
+
+      let resolved = resolveMessageAvatar(msg);
+      const myId = authStore.getUserId();
+      const myUser = authStore.getUser();
+      const myNames = [myUser?.fullName, myUser?.username].filter(Boolean);
+      const isMe = (resolved.user?.id && resolved.user.id === myId) ||
+                   (!resolved.user?.id && !!resolved.user?.name && myNames.includes(resolved.user.name));
+      if (isMe) {
+        const myLevel = getUserLevel(state.myCoinsSpent);
+        resolved = { ...resolved, user: { ...resolved.user!, level: myLevel } };
+      }
+      state.messages = [...state.messages, resolved];
       notify();
     });
 
     socket.on('wallet_update', ({ coins }: { coins: number }) => {
       walletBalanceListeners.forEach(fn => fn(coins));
+      // Re-fetch coins_gifted so level updates in real-time after every gift
+      fetchMyCoinsSpent();
+    });
+
+    socket.on('user_level_update', ({ coins_spent }: { coins_spent: number }) => {
+      setMyCoinsSpent(coins_spent);
     });
 
     socket.on('gift_error', ({ message }: { message: string }) => {
@@ -179,9 +354,32 @@ export const socketStore = {
       taskCompletedListeners.forEach(fn => fn(data));
     });
 
-    socket.on('reward_applied', (data: { reward_bg_url: string | null; reward_frame_url: string | null }) => {
-      console.log('[SOCKET] reward_applied received:', JSON.stringify(data));
+    socket.on('reward_applied', (data: { reward_bg_url: string | null; reward_frame_url: string | null; completed_by?: string; task_title?: string }) => {
       rewardAppliedListeners.forEach(fn => fn(data));
+    });
+
+    socket.on('battle_invite', (data: BattleInvitePayload) => {
+      battleInviteListeners.forEach(fn => fn(data));
+    });
+
+    socket.on('battle_invite_accepted', (data: { invite_id: string; to_room_name: string }) => {
+      battleInviteAcceptedListeners.forEach(fn => fn(data));
+    });
+
+    socket.on('battle_invite_declined', (data: { invite_id: string; to_room_name: string }) => {
+      battleInviteDeclinedListeners.forEach(fn => fn(data));
+    });
+
+    socket.on('battle_invite_cancelled', (data: { invite_id: string; from_room_name: string }) => {
+      battleInviteCancelledListeners.forEach(fn => fn(data));
+    });
+
+    socket.on('battle_scores', (data: { invite_id: string; left: number; right: number }) => {
+      battleScoresListeners.forEach(fn => fn(data));
+    });
+
+    socket.on('battle_started', (data: { invite_id: string; from_room_id: string; to_room_id: string }) => {
+      battleStartedListeners.forEach(fn => fn(data));
     });
 
     socket.on('online_count', ({ count }: { count: number }) => {
@@ -208,6 +406,37 @@ export const socketStore = {
       state.seatRequestResult = result;
       notify();
     });
+
+    socket.on('incoming_stage_invite', (invite: IncomingStageInvite) => {
+      state.incomingStageInvite = invite;
+      notify();
+    });
+
+    socket.on('removed_from_stage', () => {
+      removedFromStageListeners.forEach(fn => fn());
+    });
+
+    socket.on('broadcast_likes_update', ({ likesCount }: { roomId: string; likesCount: number }) => {
+      broadcastLikesListeners.forEach(fn => fn(likesCount));
+    });
+
+    socket.on('broadcast_like_state', ({ liked }: { roomId: string; liked: boolean }) => {
+      broadcastLikeStateListeners.forEach(fn => fn(liked));
+    });
+
+    socket.on('pinned_comment_update', ({ messageId }: { roomId: string; messageId: string | null }) => {
+      pinnedCommentListeners.forEach(fn => fn(messageId));
+    });
+
+    socket.on('comment_deleted', ({ messageId }: { roomId: string; messageId: string }) => {
+      state.messages = state.messages.filter(m => m.id !== messageId);
+      notify();
+      commentDeletedListeners.forEach(fn => fn(messageId));
+    });
+
+    socket.on('report_comment_result', ({ ok }: { ok: boolean }) => {
+      reportCommentResultListeners.forEach(fn => fn(ok));
+    });
   },
 
   leave() {
@@ -223,7 +452,34 @@ export const socketStore = {
     state.hostStatus = { isOnline: false, userName: 'Host', avatarUrl: null };
     state.incomingRequest = null;
     state.seatRequestResult = null;
+    state.incomingStageInvite = null;
     notify();
+  },
+
+  emitMuteState(isMuted: boolean) {
+    const roomId = state.roomId;
+    if (!roomId) return;
+    state.socket?.emit('user_mute', { roomId, isMuted });
+  },
+
+  likeBroadcast(roomId: string) {
+    state.socket?.emit('like_broadcast', { roomId });
+  },
+
+  pinComment(roomId: string, messageId: string) {
+    state.socket?.emit('pin_comment', { roomId, messageId });
+  },
+
+  unpinComment(roomId: string) {
+    state.socket?.emit('unpin_comment', { roomId });
+  },
+
+  deleteComment(roomId: string, messageId: string) {
+    state.socket?.emit('delete_comment', { roomId, messageId });
+  },
+
+  reportComment(roomId: string, messageId: string, messageText: string, reportedUserId?: string, reason?: string) {
+    state.socket?.emit('report_comment', { roomId, messageId, messageText, reportedUserId, reason });
   },
 
   sendMessage(roomId: string, text: string) {
@@ -255,6 +511,35 @@ export const socketStore = {
     });
     state.incomingRequest = null;
     notify();
+  },
+
+  inviteToStage(roomId: string, toUserId: string, slotIndex: number) {
+    state.socket?.emit('invite_to_stage', { roomId, toUserId, slotIndex });
+  },
+
+  acceptStageInvite(roomId: string, slotIndex: number, hostSocketId: string) {
+    state.socket?.emit('accept_stage_invite', { roomId, slotIndex, hostSocketId });
+    state.incomingStageInvite = null;
+    notify();
+  },
+
+  rejectStageInvite(roomId: string, hostSocketId: string) {
+    state.socket?.emit('reject_stage_invite', { roomId, hostSocketId });
+    state.incomingStageInvite = null;
+    notify();
+  },
+
+  clearStageInvite() {
+    state.incomingStageInvite = null;
+    notify();
+  },
+
+  leaveStage(roomId: string) {
+    state.socket?.emit('leave_stage', { roomId });
+  },
+
+  removeFromStage(roomId: string, slotIndex: number) {
+    state.socket?.emit('remove_from_stage', { roomId, slotIndex });
   },
 
   clearSeatRequestResult() {

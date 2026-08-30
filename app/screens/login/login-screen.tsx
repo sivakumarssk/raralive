@@ -20,6 +20,7 @@ import { OutlineButton } from '@/components/ui/outline-button';
 import { ScreenBackground } from '@/components/ui/screen-background';
 import { apiLogin } from '@/services/api';
 import { authStore } from '@/store/auth-store';
+import { friendZoneSocketStore } from '@/store/friend-zone-socket-store';
 
 type LoginScreenProps = {
   onSkip?: () => void;
@@ -82,6 +83,7 @@ export function LoginScreen({ onSkip, onRegister, onLogin, onForgotPassword }: L
       avatarUrl: result.data.user.avatar_url,
       isPhoneVerified: result.data.user.is_phone_verified,
     });
+    friendZoneSocketStore.connect();
     onLogin?.();
   };
 

@@ -21,6 +21,7 @@ import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context'
 
 import { BASE_URL, MEDIA_BASE } from '@/services/api';
 import { authStore } from '@/store/auth-store';
+import { UserLevelBadge } from '@/components/UserLevel';
 
 const SCREEN_W = Dimensions.get('window').width;
 const COVER_H = 180;
@@ -407,6 +408,10 @@ export default function ProfileScreen() {
                 <Ionicons name="checkmark" size={9} color="#FFFFFF" />
               </View>
             )}
+            {/* Level badge floating at bottom-centre of avatar */}
+            <TouchableOpacity style={s.levelBadgeAbs} onPress={() => router.push('/id-level' as any)} activeOpacity={0.85}>
+              <UserLevelBadge size="xl" />
+            </TouchableOpacity>
           </View>
           <View style={s.statsRow}>
             <StatBox value={profile.followers_count} label="Followers" />
@@ -430,10 +435,13 @@ export default function ProfileScreen() {
           {profile.bio ? <Text style={s.bio}>{profile.bio}</Text> : null}
         </View>
 
-        {/* Edit + share */}
+        {/* Edit + chat + share */}
         <View style={s.actionRow}>
           <TouchableOpacity style={s.editBtn} onPress={() => router.push('/profile/edit' as any)} activeOpacity={0.85}>
             <Text style={s.editBtnText}>Edit Profile</Text>
+          </TouchableOpacity>
+          <TouchableOpacity style={s.shareBtn} onPress={() => router.push('/chat' as any)} activeOpacity={0.85}>
+            <Ionicons name="chatbubble-ellipses-outline" size={18} color="#7A0EED" />
           </TouchableOpacity>
           <TouchableOpacity style={s.shareBtn} activeOpacity={0.85}>
             <Ionicons name="share-social-outline" size={18} color="#7A0EED" />
@@ -488,7 +496,8 @@ const s = StyleSheet.create({
   menuBtn:   { position: 'absolute', top: 14, right: 14, width: 36, height: 36, borderRadius: 18, backgroundColor: 'rgba(0,0,0,0.35)', alignItems: 'center', justifyContent: 'center' },
 
   avatarRow:      { flexDirection: 'row', alignItems: 'center', paddingHorizontal: 16, marginTop: -(AVATAR_SIZE / 2), gap: 12 },
-  avatarWrap:     { position: 'relative' },
+  avatarWrap:     { position: 'relative', width: AVATAR_SIZE, height: AVATAR_SIZE },
+  levelBadgeAbs:  { position: 'absolute', bottom: -65, left: (AVATAR_SIZE - 100) / 2 },
   avatar:         { width: AVATAR_SIZE, height: AVATAR_SIZE, borderRadius: AVATAR_SIZE / 2, borderWidth: 3, borderColor: '#FFFFFF', alignItems: 'center', justifyContent: 'center' },
   avatarInitials: { fontSize: 28, fontWeight: '800', color: '#FFFFFF' },
   verifiedDot:    { position: 'absolute', bottom: 4, right: 4, width: 20, height: 20, borderRadius: 10, backgroundColor: '#059669', borderWidth: 2, borderColor: '#FFFFFF', alignItems: 'center', justifyContent: 'center' },
@@ -499,7 +508,7 @@ const s = StyleSheet.create({
   statLabel:   { fontSize: 11, color: '#ABADB2', fontWeight: '600', marginTop: 1 },
   statDivider: { width: 1, height: 28, backgroundColor: '#EBEBEB' },
 
-  nameBlock:   { paddingHorizontal: 18, marginTop: 12, gap: 4 },
+  nameBlock:   { paddingHorizontal: 18, marginTop: 48, gap: 4 },
   displayName: { fontSize: 19, fontWeight: '800', color: '#1C1E22' },
   username:    { fontSize: 13, color: '#7A0EED', fontWeight: '600' },
   genderBadge: { flexDirection: 'row', alignItems: 'center', gap: 4, alignSelf: 'flex-start', backgroundColor: '#F4EEFF', borderRadius: 20, paddingHorizontal: 9, paddingVertical: 3 },

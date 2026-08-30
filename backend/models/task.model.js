@@ -97,8 +97,8 @@ async function incrementProgress(userId, taskId, amount, targetCount, roomId = n
        SELECT completed FROM task_progress
        WHERE user_id=$1 AND task_id=$2 AND period_start=$3
      )
-     INSERT INTO task_progress (user_id, task_id, period_start, progress, room_id)
-     VALUES ($1,$2,$3,$4,$6)
+     INSERT INTO task_progress (user_id, task_id, period_start, progress, completed, reward_claimed, completed_at, room_id)
+     VALUES ($1, $2, $3, $4::int, ($4::int >= $5::int), ($4::int >= $5::int), CASE WHEN $4::int >= $5::int THEN NOW() ELSE NULL END, $6)
      ON CONFLICT (user_id, task_id, period_start)
      DO UPDATE SET
        progress = LEAST(task_progress.progress + $4, $5),

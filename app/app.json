@@ -46,7 +46,10 @@
         "android.permission.READ_MEDIA_VISUAL_USER_SELECTED",
         "android.permission.READ_EXTERNAL_STORAGE",
         "android.permission.WRITE_EXTERNAL_STORAGE",
-        "android.permission.CAMERA"
+        "android.permission.CAMERA",
+        "android.permission.POST_NOTIFICATIONS",
+        "android.permission.ACCESS_COARSE_LOCATION",
+        "android.permission.ACCESS_FINE_LOCATION"
       ]
     },
     "web": {
@@ -74,7 +77,10 @@
           "photosPermission": "Allow RaraLive to access your photos and videos.",
           "savePhotosPermission": "Allow RaraLive to save photos.",
           "isAccessMediaLocationEnabled": true,
-          "granularPermissions": ["READ_MEDIA_IMAGES", "READ_MEDIA_VIDEO"]
+          "granularPermissions": [
+            "READ_MEDIA_IMAGES",
+            "READ_MEDIA_VIDEO"
+          ]
         }
       ],
       [
@@ -82,6 +88,21 @@
         {
           "photosPermission": "Allow RaraLive to access your photos.",
           "cameraPermission": "Allow RaraLive to access your camera."
+        }
+      ],
+      "expo-video",
+      "expo-notifications",
+      "expo-audio",
+      [
+        "expo-camera",
+        {
+          "cameraPermission": "Allow RaraLive to access your camera for video calls."
+        }
+      ],
+      [
+        "expo-location",
+        {
+          "locationAlwaysAndWhenInUsePermission": "Allow RaraLive to access your location to auto-fill your room's city, state, and district."
         }
       ]
     ],

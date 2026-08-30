@@ -5,6 +5,7 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 
 import { GradientWordmark } from '@/components/gradient-wordmark';
 import { authStore } from '@/store/auth-store';
+import { friendZoneSocketStore } from '@/store/friend-zone-socket-store';
 
 export default function SplashScreen() {
   const [trackWidth, setTrackWidth] = useState(0);
@@ -13,6 +14,12 @@ export default function SplashScreen() {
   useEffect(() => {
     const timeout = setTimeout(async () => {
       const hasToken = await authStore.hydrate();
+      // _layout.tsx tries to connect the Friend Zone socket on mount, but
+      // that happens before hydrate() has loaded the token from storage, so
+      // that first attempt is always a no-op on a cold start into an
+      // already-logged-in session. Connect here once the token is actually
+      // available.
+      if (hasToken) friendZoneSocketStore.connect();
       router.replace(hasToken ? '/(tabs)' : '/login' as never);
     }, 2200);
 

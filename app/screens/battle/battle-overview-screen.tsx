@@ -1,9 +1,10 @@
 import { Ionicons } from '@expo/vector-icons';
 import { LinearGradient } from 'expo-linear-gradient';
 import { router, useLocalSearchParams } from 'expo-router';
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import {
   ActivityIndicator,
+  Animated,
   Image,
   StyleSheet,
   Text,
@@ -11,9 +12,9 @@ import {
   View,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
-import { AppScreenHeader } from '@/components/ui/app-screen-header';
 import { BASE_URL, MEDIA_BASE } from '@/services/api';
 import { authStore } from '@/store/auth-store';
+import { onBattleInviteAccepted, onBattleInviteDeclined, triggerReopenBattle } from '@/store/socket-store';
 
 type InviteDetail = {
   id: string;
@@ -34,423 +35,349 @@ type InviteDetail = {
   to_host_username: string | null;
 };
 
-function RoomCard({
-  imageUrl,
-  roomName,
-  hostName,
-  side,
-}: {
+function resolveUrl(url: string | null | undefined): string | null {
+  if (!url) return null;
+  return url.startsWith('http') ? url : `${MEDIA_BASE}/${url.replace(/^\//, '')}`;
+}
+
+function RoomShield({ imageUrl, roomName, label, color }: {
   imageUrl: string | null;
   roomName: string;
-  hostName: string | null;
-  side: 'left' | 'right';
+  label: string;
+  color: string;
 }) {
-  const resolved = imageUrl
-    ? imageUrl.startsWith('http') ? imageUrl : `${MEDIA_BASE}/${imageUrl.replace(/^\//, '')}`
-    : null;
-
-  const color = side === 'left' ? '#3B82F6' : '#F59E0B';
-  const label = side === 'left' ? 'Challenger' : 'Defender';
-
+  const resolved = resolveUrl(imageUrl);
   return (
-    <View style={[styles.roomCard, { borderColor: color }]}>
-      <View style={[styles.roomCardBadge, { backgroundColor: color }]}>
-        <Text style={styles.roomCardBadgeText}>{label}</Text>
+    <View style={shield.wrap}>
+      <Text style={shield.label}>{label}</Text>
+      <View style={[shield.ring, { borderColor: color }]}>
+        {resolved ? (
+          <Image source={{ uri: resolved }} style={shield.avatar} />
+        ) : (
+          <View style={[shield.avatar, { backgroundColor: color + '33', alignItems: 'center', justifyContent: 'center' }]}>
+            <Text style={[shield.initial, { color }]}>{roomName[0]?.toUpperCase()}</Text>
+          </View>
+        )}
       </View>
-      {resolved ? (
-        <Image source={{ uri: resolved }} style={styles.roomAvatar} />
-      ) : (
-        <View style={[styles.roomAvatar, styles.roomAvatarFallback, { backgroundColor: color + '22' }]}>
-          <Text style={[styles.roomAvatarInitial, { color }]}>{roomName[0]?.toUpperCase()}</Text>
-        </View>
-      )}
-      <Text style={styles.roomName} numberOfLines={2}>{roomName}</Text>
-      <Text style={styles.hostName} numberOfLines={1}>
-        {hostName ?? 'Host'}
-      </Text>
+      <Text style={shield.name} numberOfLines={2}>{roomName}</Text>
     </View>
   );
 }
 
 export function BattleOverviewScreen() {
-  const { inviteId } = useLocalSearchParams<{ inviteId: string }>();
+  const { inviteId, fromRoomId } = useLocalSearchParams<{ inviteId: string; fromRoomId?: string }>();
   const currentUserId = authStore.getUserId() ?? '';
 
   const [invite, setInvite] = useState<InviteDetail | null>(null);
   const [loading, setLoading] = useState(true);
-  const [actionLoading, setActionLoading] = useState(false);
-  const [error, setError] = useState<string | null>(null);
+  const [countdown, setCountdown] = useState(10);
+  const pulseAnim = useRef(new Animated.Value(1)).current;
+  const hourglassAnim = useRef(new Animated.Value(0)).current;
+  const scaleAnim = useRef(new Animated.Value(1)).current;
 
   const fetchInvite = useCallback(async () => {
     if (!inviteId) return;
-    setLoading(true);
-    setError(null);
     try {
       const token = authStore.getToken();
       const r = await fetch(`${BASE_URL}/battle/invite/${inviteId}`, {
         headers: token ? { Authorization: `Bearer ${token}` } : {},
       });
       const json = await r.json();
-      if (json.success) {
-        setInvite(json.data);
-      } else {
-        setError(json.message ?? 'Failed to load invite.');
-      }
-    } catch {
-      setError('Network error. Please try again.');
-    }
+      if (json.success) setInvite(json.data);
+    } catch {}
     setLoading(false);
   }, [inviteId]);
 
+  useEffect(() => { fetchInvite(); }, [fetchInvite]);
+
   useEffect(() => {
-    fetchInvite();
-  }, [fetchInvite]);
+    const loop = Animated.loop(
+      Animated.sequence([
+        Animated.timing(pulseAnim, { toValue: 1.18, duration: 600, useNativeDriver: true }),
+        Animated.timing(pulseAnim, { toValue: 1, duration: 600, useNativeDriver: true }),
+      ])
+    );
+    loop.start();
+    return () => loop.stop();
+  }, [pulseAnim]);
 
-  const handleAccept = async () => {
-    if (!invite) return;
-    setActionLoading(true);
+  useEffect(() => {
+    const unsubA = onBattleInviteAccepted(({ invite_id }) => {
+      if (invite_id === inviteId) fetchInvite();
+    });
+    const unsubD = onBattleInviteDeclined(({ invite_id }) => {
+      if (invite_id === inviteId) fetchInvite();
+    });
+    return () => { unsubA(); unsubD(); };
+  }, [inviteId, fetchInvite]);
+
+  useEffect(() => {
+    if (!invite || invite.status !== 'pending') return;
+    setCountdown(10);
+    const interval = setInterval(() => {
+      setCountdown(prev => prev <= 1 ? 0 : prev - 1);
+    }, 1000);
+    return () => clearInterval(interval);
+  }, [invite?.status]);
+
+  // Hourglass flip animation on each tick
+  useEffect(() => {
+    if (countdown <= 0 || invite?.status !== 'pending') return;
+    Animated.parallel([
+      Animated.sequence([
+        Animated.timing(hourglassAnim, { toValue: 1, duration: 300, useNativeDriver: true }),
+        Animated.timing(hourglassAnim, { toValue: 0, duration: 300, useNativeDriver: true }),
+      ]),
+      Animated.sequence([
+        Animated.timing(scaleAnim, { toValue: 1.15, duration: 150, useNativeDriver: true }),
+        Animated.timing(scaleAnim, { toValue: 1, duration: 150, useNativeDriver: true }),
+      ]),
+    ]).start();
+  }, [countdown]);
+
+  useEffect(() => {
+    if (countdown === 0 && invite?.status === 'pending') {
+      triggerReopenBattle();
+      router.back();
+    }
+  }, [countdown]);
+
+  const isInviter = invite?.from_user_id === currentUserId;
+
+  const handleCancel = async () => {
     try {
       const token = authStore.getToken();
-      const r = await fetch(`${BASE_URL}/battle/accept`, {
+      await fetch(`${BASE_URL}/battle/decline`, {
         method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          ...(token ? { Authorization: `Bearer ${token}` } : {}),
-        },
-        body: JSON.stringify({ invite_id: invite.id }),
+        headers: { 'Content-Type': 'application/json', ...(token ? { Authorization: `Bearer ${token}` } : {}) },
+        body: JSON.stringify({ invite_id: inviteId }),
       });
-      const json = await r.json();
-      if (json.success) {
-        setInvite(prev => prev ? { ...prev, status: 'accepted' } : prev);
-      }
     } catch {}
-    setActionLoading(false);
-  };
-
-  const handleDecline = async () => {
-    if (!invite) return;
-    setActionLoading(true);
-    try {
-      const token = authStore.getToken();
-      const r = await fetch(`${BASE_URL}/battle/decline`, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          ...(token ? { Authorization: `Bearer ${token}` } : {}),
-        },
-        body: JSON.stringify({ invite_id: invite.id }),
-      });
-      const json = await r.json();
-      if (json.success) {
-        router.back();
-      }
-    } catch {}
-    setActionLoading(false);
+    router.back();
   };
 
   const handleStart = async () => {
     if (!invite) return;
-    setActionLoading(true);
     try {
       const token = authStore.getToken();
       const r = await fetch(`${BASE_URL}/battle/start`, {
         method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          ...(token ? { Authorization: `Bearer ${token}` } : {}),
-        },
+        headers: { 'Content-Type': 'application/json', ...(token ? { Authorization: `Bearer ${token}` } : {}) },
         body: JSON.stringify({ invite_id: invite.id }),
       });
       const json = await r.json();
-      if (json.success) {
-        router.replace(`/battle/live?inviteId=${invite.id}` as any);
-      }
+      // Room's own battle banner picks up the newly-started battle via its polling
+      if (json.success) router.back();
     } catch {}
-    setActionLoading(false);
   };
 
-  const isInviter  = invite?.from_user_id === currentUserId;
-  const isInvitee  = invite?.to_user_id   === currentUserId;
+  if (loading) {
+    return (
+      <SafeAreaView style={s.root} edges={['top']}>
+        <ActivityIndicator color="#7A0EED" size="large" style={{ marginTop: 80 }} />
+      </SafeAreaView>
+    );
+  }
+
+  const status = invite?.status ?? 'pending';
+  const isPending = status === 'pending';
+  const isAccepted = status === 'accepted';
+
+  const fromName = invite?.from_room_name ?? '';
+  const toName = invite?.to_room_name ?? '';
+  const fromImg = invite?.from_room_image_url ?? null;
+  const toImg = invite?.to_room_image_url ?? null;
+  const duration = invite?.duration_minutes ?? 0;
 
   return (
-    <SafeAreaView style={styles.safe} edges={['top']}>
-      <AppScreenHeader
-        title="Battle"
-        onBack={() => router.back()}
-        backgroundColor="#F5F3FA"
-      />
+    <SafeAreaView style={s.root} edges={['top', 'bottom']}>
+      {/* Header */}
+      <View style={s.header}>
+        <TouchableOpacity onPress={() => router.back()} style={s.headerBtn} hitSlop={8}>
+          <Ionicons name="arrow-back" size={22} color="#1C1E22" />
+        </TouchableOpacity>
+        <Text style={s.headerTitle}>Battle</Text>
+      </View>
 
-      {loading ? (
-        <View style={styles.centerWrap}>
-          <ActivityIndicator color="#7A0EED" size="large" />
+      {/* Stage card */}
+      <View style={s.stageCard}>
+        {/* Status pill */}
+        <View style={[s.statusPill, isPending ? s.pendingPill : isAccepted ? s.acceptedPill : s.declinedPill]}>
+          <Text style={[s.statusText, isPending ? s.pendingText : isAccepted ? s.acceptedText : s.declinedText]}>
+            {isPending ? 'PENDING' : isAccepted ? 'ACCEPTED' : 'DECLINED'}
+          </Text>
         </View>
-      ) : error ? (
-        <View style={styles.centerWrap}>
-          <Ionicons name="alert-circle-outline" size={48} color="#E14C57" />
-          <Text style={styles.errorText}>{error}</Text>
-          <TouchableOpacity style={styles.retryBtn} onPress={fetchInvite}>
-            <Text style={styles.retryBtnText}>Retry</Text>
+
+        {/* Duration */}
+        <Text style={s.duration}>{duration} min battle</Text>
+
+        {/* VS row */}
+        <View style={s.vsRow}>
+          <RoomShield imageUrl={fromImg} roomName={fromName} label="Challenger" color="#3B82F6" />
+
+          <Animated.View style={[s.vsCircle, { transform: [{ scale: pulseAnim }] }]}>
+            <LinearGradient colors={['#7A0EED', '#B50357']} style={s.vsGrad}>
+              <Text style={s.vsText}>VS</Text>
+            </LinearGradient>
+          </Animated.View>
+
+          <RoomShield imageUrl={toImg} roomName={toName} label="Defender" color="#F59E0B" />
+        </View>
+
+        {/* Waiting timer */}
+        {isPending && isInviter && (
+          <View style={s.waitWrap}>
+            <Animated.View style={[s.timerCircle, {
+              transform: [
+                { scale: scaleAnim },
+                { rotate: hourglassAnim.interpolate({ inputRange: [0, 1], outputRange: ['0deg', '180deg'] }) },
+              ],
+            }]}>
+              <Text style={s.timerIcon}>⏳</Text>
+            </Animated.View>
+            <Text style={s.timerCount}>{countdown}</Text>
+            <Text style={s.timerLabel}>seconds remaining</Text>
+            <Text style={s.waitText}>Waiting for the other room to accept</Text>
+          </View>
+        )}
+        {isAccepted && isInviter && (
+          <Text style={[s.waitText, { color: '#22C55E' }]}>Other room accepted! Start the battle.</Text>
+        )}
+        {status === 'declined' && (
+          <Text style={[s.waitText, { color: '#E14C57' }]}>The invite was declined.</Text>
+        )}
+      </View>
+
+      {/* Actions — light bg */}
+      <View style={s.actions}>
+        {isInviter && isAccepted && (
+          <TouchableOpacity activeOpacity={0.85} style={s.startBtn} onPress={handleStart}>
+            <LinearGradient colors={['#7A0EED', '#B50357']} start={{ x: 0, y: 0 }} end={{ x: 1, y: 0 }} style={s.startGrad}>
+              <Ionicons name="flash" size={18} color="#FFFFFF" />
+              <Text style={s.startBtnText}>Start Battle</Text>
+            </LinearGradient>
           </TouchableOpacity>
-        </View>
-      ) : invite ? (
-        <View style={styles.body}>
-          {/* Status chip */}
-          <View style={[styles.statusChip, statusChipColor(invite.status)]}>
-            <Text style={styles.statusChipText}>{invite.status.toUpperCase()}</Text>
-          </View>
+        )}
 
-          {/* Duration */}
-          <Text style={styles.durationLabel}>{invite.duration_minutes} min battle</Text>
+        {isPending && (
+          <TouchableOpacity activeOpacity={0.85} style={s.cancelBtn} onPress={handleCancel}>
+            <Text style={s.cancelBtnText}>Cancel Invite</Text>
+          </TouchableOpacity>
+        )}
 
-          {/* Rooms side by side */}
-          <View style={styles.vsRow}>
-            <RoomCard
-              imageUrl={invite.from_room_image_url}
-              roomName={invite.from_room_name}
-              hostName={invite.from_host_name ?? invite.from_host_username}
-              side="left"
-            />
-
-            {/* VS chip */}
-            <View style={styles.vsChip}>
-              <View style={styles.vsLine} />
-              <LinearGradient
-                colors={['#7A0EED', '#B50357']}
-                start={{ x: 0, y: 0 }} end={{ x: 1, y: 1 }}
-                style={styles.vsCircle}>
-                <Text style={styles.vsText}>VS</Text>
-              </LinearGradient>
-              <View style={styles.vsLine} />
-            </View>
-
-            <RoomCard
-              imageUrl={invite.to_room_image_url}
-              roomName={invite.to_room_name}
-              hostName={invite.to_host_name ?? invite.to_host_username}
-              side="right"
-            />
-          </View>
-
-          {/* Action area */}
-          <View style={styles.actionArea}>
-            {/* Inviter actions */}
-            {isInviter && invite.status === 'accepted' && (
-              <TouchableOpacity
-                style={[styles.primaryBtn, { backgroundColor: '#7A0EED' }]}
-                activeOpacity={0.85}
-                onPress={handleStart}
-                disabled={actionLoading}>
-                {actionLoading
-                  ? <ActivityIndicator color="#FFFFFF" />
-                  : <Text style={styles.primaryBtnText}>Start Battle ⚔️</Text>}
-              </TouchableOpacity>
-            )}
-
-            {isInviter && invite.status === 'pending' && (
-              <View style={styles.waitingWrap}>
-                <ActivityIndicator color="#7A0EED" style={{ marginBottom: 8 }} />
-                <Text style={styles.waitingText}>Waiting for the other room to accept…</Text>
-              </View>
-            )}
-
-            {/* Invitee actions */}
-            {isInvitee && invite.status === 'pending' && (
-              <View style={styles.inviteeActions}>
-                <TouchableOpacity
-                  style={[styles.primaryBtn, { backgroundColor: '#3B82F6', flex: 1 }]}
-                  activeOpacity={0.85}
-                  onPress={handleAccept}
-                  disabled={actionLoading}>
-                  {actionLoading
-                    ? <ActivityIndicator color="#FFFFFF" />
-                    : <Text style={styles.primaryBtnText}>Accept ✅</Text>}
-                </TouchableOpacity>
-                <TouchableOpacity
-                  style={[styles.secondaryBtn, { flex: 1 }]}
-                  activeOpacity={0.85}
-                  onPress={handleDecline}
-                  disabled={actionLoading}>
-                  <Text style={styles.secondaryBtnText}>Decline</Text>
-                </TouchableOpacity>
-              </View>
-            )}
-
-            {isInvitee && invite.status === 'accepted' && (
-              <View style={styles.waitingWrap}>
-                <Text style={styles.waitingText}>You accepted! Waiting for the host to start…</Text>
-              </View>
-            )}
-
-            {invite.status === 'active' && (
-              <TouchableOpacity
-                style={[styles.primaryBtn, { backgroundColor: '#7A0EED' }]}
-                activeOpacity={0.85}
-                onPress={() => router.replace(`/battle/live?inviteId=${invite.id}` as any)}>
-                <Text style={styles.primaryBtnText}>Join Live Battle ⚔️</Text>
-              </TouchableOpacity>
-            )}
-
-            {(invite.status === 'declined' || invite.status === 'finished') && (
-              <View style={styles.waitingWrap}>
-                <Text style={styles.waitingText}>
-                  {invite.status === 'declined' ? 'This battle was declined.' : 'This battle has finished.'}
-                </Text>
-              </View>
-            )}
-          </View>
-        </View>
-      ) : null}
+        {(status === 'declined' || status === 'finished') && (
+          <TouchableOpacity activeOpacity={0.85} style={s.cancelBtn} onPress={() => router.back()}>
+            <Text style={s.cancelBtnText}>Go Back</Text>
+          </TouchableOpacity>
+        )}
+      </View>
     </SafeAreaView>
   );
 }
 
-function statusChipColor(status: string) {
-  switch (status) {
-    case 'pending':  return { backgroundColor: '#FEF3C7' };
-    case 'accepted': return { backgroundColor: '#DCFCE7' };
-    case 'active':   return { backgroundColor: '#DBEAFE' };
-    case 'declined': return { backgroundColor: '#FEE2E2' };
-    case 'finished': return { backgroundColor: '#F3F4F6' };
-    default:         return { backgroundColor: '#F3F4F6' };
-  }
-}
+const shield = StyleSheet.create({
+  wrap: { flex: 1, alignItems: 'center', gap: 10 },
+  label: { fontSize: 10, fontWeight: '700', color: '#ABADB2', letterSpacing: 1, textTransform: 'uppercase' },
+  ring: {
+    width: 84, height: 84, borderRadius: 42, borderWidth: 3,
+    alignItems: 'center', justifyContent: 'center',
+    shadowColor: '#7A0EED', shadowOpacity: 0.1, shadowRadius: 10, elevation: 4,
+  },
+  avatar: { width: 74, height: 74, borderRadius: 37 },
+  initial: { fontSize: 28, fontWeight: '900' },
+  name: { fontSize: 12, fontWeight: '700', color: '#1C1E22', textAlign: 'center', lineHeight: 16, paddingHorizontal: 4 },
+});
 
-const styles = StyleSheet.create({
-  safe:       { flex: 1, backgroundColor: '#F5F3FA' },
-  centerWrap: { flex: 1, alignItems: 'center', justifyContent: 'center', gap: 12, paddingHorizontal: 32 },
-  errorText:  { fontSize: 15, color: '#E14C57', textAlign: 'center', fontWeight: '600' },
-  retryBtn:   { paddingHorizontal: 28, paddingVertical: 10, borderRadius: 20, backgroundColor: '#7A0EED' },
-  retryBtnText: { color: '#FFFFFF', fontWeight: '700', fontSize: 14 },
+const s = StyleSheet.create({
+  root: { flex: 1, backgroundColor: '#FFFFFF' },
 
-  body: {
-    flex: 1,
-    paddingHorizontal: 20,
-    paddingTop: 12,
+  header: {
+    flexDirection: 'row', alignItems: 'center',
+    paddingHorizontal: 16, paddingVertical: 12,
+    backgroundColor: '#FFFFFF',
+  },
+  headerBtn: { width: 36, height: 36, alignItems: 'center', justifyContent: 'center' },
+  headerTitle: { flex: 1, fontSize: 18, fontWeight: '700', color: '#1C1E22' },
+
+  stageCard: {
+    marginHorizontal: 16, marginTop: 8,
+    paddingTop: 24, paddingBottom: 28, paddingHorizontal: 20,
     alignItems: 'center',
+    backgroundColor: '#FFFFFF',
+    borderRadius: 20,
+    shadowColor: '#7A0EED', shadowOpacity: 0.07, shadowRadius: 12,
+    shadowOffset: { width: 0, height: 4 }, elevation: 3,
   },
 
-  statusChip: {
-    paddingHorizontal: 14, paddingVertical: 5,
-    borderRadius: 20, marginBottom: 8,
+  statusPill: {
+    paddingHorizontal: 20, paddingVertical: 6,
+    borderRadius: 20, marginBottom: 10,
+    borderWidth: 1,
   },
-  statusChipText: {
-    fontSize: 11, fontWeight: '800', color: '#374151', letterSpacing: 0.8,
-  },
+  pendingPill: { backgroundColor: '#FFF8E1', borderColor: '#FBBF24' },
+  acceptedPill: { backgroundColor: '#ECFDF5', borderColor: '#22C55E' },
+  declinedPill: { backgroundColor: '#FEF2F2', borderColor: '#F87171' },
+  statusText: { fontSize: 11, fontWeight: '800', letterSpacing: 1.5 },
+  pendingText: { color: '#B45309' },
+  acceptedText: { color: '#16A34A' },
+  declinedText: { color: '#DC2626' },
 
-  durationLabel: {
-    fontSize: 22, fontWeight: '900', color: '#1C1E22', marginBottom: 28,
-    letterSpacing: -0.4,
+  duration: {
+    fontSize: 14, fontWeight: '700', color: '#ABADB2',
+    marginBottom: 24, letterSpacing: 0.3,
   },
 
   vsRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    width: '100%',
-    gap: 8,
-    marginBottom: 36,
-  },
-
-  roomCard: {
-    flex: 1,
-    backgroundColor: '#FFFFFF',
-    borderRadius: 20,
-    borderWidth: 2,
-    padding: 16,
-    alignItems: 'center',
-    gap: 8,
-    shadowColor: '#4A0099',
-    shadowOpacity: 0.08,
-    shadowRadius: 8,
-    shadowOffset: { width: 0, height: 3 },
-    elevation: 3,
-    position: 'relative',
-    overflow: 'hidden',
-  },
-  roomCardBadge: {
-    position: 'absolute',
-    top: 0, left: 0, right: 0,
-    paddingVertical: 4,
-    alignItems: 'center',
-  },
-  roomCardBadgeText: {
-    fontSize: 9, fontWeight: '800', color: '#FFFFFF', letterSpacing: 0.6,
-  },
-  roomAvatar: {
-    width: 72, height: 72, borderRadius: 36, marginTop: 20,
-  },
-  roomAvatarFallback: {
-    alignItems: 'center', justifyContent: 'center',
-  },
-  roomAvatarInitial: {
-    fontSize: 28, fontWeight: '800',
-  },
-  roomName: {
-    fontSize: 13, fontWeight: '700', color: '#1C1E22', textAlign: 'center',
-  },
-  hostName: {
-    fontSize: 11, color: '#ABADB2', fontWeight: '500',
-  },
-
-  vsChip: {
-    alignItems: 'center',
-    gap: 4,
-    zIndex: 1,
-  },
-  vsLine: {
-    width: 2, height: 28, backgroundColor: '#D8D3EE', borderRadius: 1,
+    flexDirection: 'row', alignItems: 'center',
+    paddingHorizontal: 4, marginBottom: 24,
   },
   vsCircle: {
-    width: 50, height: 50, borderRadius: 25,
+    width: 52, height: 52, borderRadius: 26, overflow: 'hidden',
+    shadowColor: '#7A0EED', shadowOpacity: 0.4, shadowRadius: 12,
+    elevation: 8, marginHorizontal: 10,
+  },
+  vsGrad: { flex: 1, alignItems: 'center', justifyContent: 'center' },
+  vsText: { fontSize: 14, fontWeight: '900', color: '#FFFFFF', letterSpacing: 1 },
+
+  waitWrap: { alignItems: 'center', gap: 6 },
+  timerCircle: {
+    width: 64, height: 64, borderRadius: 32,
+    backgroundColor: '#F3EFFE',
     alignItems: 'center', justifyContent: 'center',
-    shadowColor: '#7A0EED', shadowOpacity: 0.4, shadowRadius: 10, shadowOffset: { width: 0, height: 2 }, elevation: 6,
+    borderWidth: 2, borderColor: '#EDE8F7',
+    marginBottom: 4,
   },
-  vsText: {
-    fontSize: 14, fontWeight: '900', color: '#FFFFFF', letterSpacing: 0.8,
+  timerIcon: { fontSize: 30 },
+  timerCount: {
+    fontSize: 42, fontWeight: '900', color: '#7A0EED',
+    letterSpacing: -1, fontVariant: ['tabular-nums' as const],
+  },
+  timerLabel: { fontSize: 12, fontWeight: '600', color: '#ABADB2', marginBottom: 4 },
+  waitText: {
+    fontSize: 13, fontWeight: '500', color: '#60626A',
+    textAlign: 'center', lineHeight: 18,
   },
 
-  actionArea: {
-    width: '100%',
+  actions: {
+    flex: 1, justifyContent: 'flex-end',
+    paddingHorizontal: 24, paddingBottom: 32, gap: 12,
   },
 
-  primaryBtn: {
-    width: '100%',
+  startBtn: {
+    borderRadius: 16, overflow: 'hidden',
+    shadowColor: '#7A0EED', shadowOpacity: 0.3, shadowRadius: 12, elevation: 6,
+  },
+  startGrad: {
+    flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8,
     paddingVertical: 16,
-    borderRadius: 16,
-    alignItems: 'center',
-    marginBottom: 12,
-    shadowColor: '#7A0EED',
-    shadowOpacity: 0.25,
-    shadowRadius: 8,
-    shadowOffset: { width: 0, height: 3 },
-    elevation: 4,
   },
-  primaryBtnText: {
-    fontSize: 16, fontWeight: '800', color: '#FFFFFF', letterSpacing: 0.3,
-  },
+  startBtnText: { fontSize: 16, fontWeight: '800', color: '#FFFFFF' },
 
-  secondaryBtn: {
-    paddingVertical: 16,
-    borderRadius: 16,
-    alignItems: 'center',
-    borderWidth: 1.5,
-    borderColor: '#E14C57',
-    marginBottom: 12,
+  cancelBtn: {
+    paddingVertical: 14, borderRadius: 16,
+    borderWidth: 1.5, borderColor: '#EDE8F7',
+    alignItems: 'center', backgroundColor: '#FFFFFF',
+    shadowColor: '#7A0EED', shadowOpacity: 0.06, shadowRadius: 6, elevation: 1,
   },
-  secondaryBtnText: {
-    fontSize: 16, fontWeight: '700', color: '#E14C57',
-  },
-
-  inviteeActions: {
-    flexDirection: 'row',
-    gap: 12,
-  },
-
-  waitingWrap: {
-    alignItems: 'center',
-    paddingVertical: 20,
-    gap: 8,
-  },
-  waitingText: {
-    fontSize: 14, color: '#60626A', textAlign: 'center', fontWeight: '500',
-  },
+  cancelBtnText: { fontSize: 15, fontWeight: '700', color: '#60626A' },
 });

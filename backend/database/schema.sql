@@ -100,6 +100,9 @@ CREATE TABLE IF NOT EXISTS rooms (
   room_image_url  TEXT,
   visibility      VARCHAR(10) NOT NULL DEFAULT 'public' CHECK (visibility IN ('public', 'private')),
   status          VARCHAR(20) NOT NULL DEFAULT 'active' CHECK (status IN ('active', 'closed', 'banned')),
+  city            VARCHAR(120),
+  state           VARCHAR(120),
+  district        VARCHAR(120),
   created_by      UUID REFERENCES admins(id) ON DELETE SET NULL,
   created_at      TIMESTAMPTZ NOT NULL DEFAULT NOW(),
   updated_at      TIMESTAMPTZ NOT NULL DEFAULT NOW()
@@ -305,3 +308,45 @@ CREATE TABLE IF NOT EXISTS task_progress (
   updated_at  TIMESTAMPTZ NOT NULL DEFAULT NOW(),
   UNIQUE (user_id, task_id, period_start)
 );
+
+-- Direct-message conversations (1:1). user_a_id is always the lower UUID of
+-- the pair so a conversation between two users is unique regardless of who
+-- started it. status tracks the request/accept/reject flow: the conversation
+-- starts 'pending' when user_a_id != initiated_by (the other party hasn't
+-- accepted yet); 'accepted' once they reply/accept; 'rejected' rows are
+-- deleted outright rather than kept around (see chat.model.js).
+CREATE TABLE IF NOT EXISTS conversations (
+  id                UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  user_a_id         UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  user_b_id         UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  initiated_by      UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  status            VARCHAR(20) NOT NULL DEFAULT 'pending' CHECK (status IN ('pending','accepted')),
+  last_message_at   TIMESTAMPTZ,
+  last_message_preview TEXT,
+  created_at        TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  updated_at        TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  CHECK (user_a_id < user_b_id),
+  UNIQUE (user_a_id, user_b_id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_conversations_user_a ON conversations (user_a_id, status, last_message_at DESC);
+CREATE INDEX IF NOT EXISTS idx_conversations_user_b ON conversations (user_b_id, status, last_message_at DESC);
+
+-- Direct messages within a conversation
+CREATE TABLE IF NOT EXISTS direct_messages (
+  id              UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  conversation_id UUID NOT NULL REFERENCES conversations(id) ON DELETE CASCADE,
+  sender_id       UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  type            VARCHAR(20) NOT NULL DEFAULT 'text'
+                     CHECK (type IN ('text','image','audio','video','file','sticker')),
+  text            TEXT,
+  media_url       TEXT,
+  media_name      TEXT,
+  media_mime      TEXT,
+  media_duration_ms INTEGER,
+  sticker_id      TEXT,
+  read_at         TIMESTAMPTZ,
+  created_at      TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS idx_direct_messages_conversation ON direct_messages (conversation_id, created_at DESC);

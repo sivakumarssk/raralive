@@ -214,4 +214,28 @@ async function getComments(req, res, next) {
   } catch (err) { next(err); }
 }
 
-module.exports = { createPost, getFeed, getMyPosts, toggleLike, checkLiked, addComment, getComments };
+/** GET /api/posts/user/:userId — public posts of any user */
+async function getUserPosts(req, res, next) {
+  try {
+    const r = await db.query(
+      `SELECT p.id, p.caption, p.category, p.tags, p.allow_comments,
+              p.likes_count, p.comments_count, p.created_at,
+              u.id AS user_id, u.full_name, u.username, u.avatar_url,
+              json_agg(
+                json_build_object('id', pm.id, 'media_url', pm.media_url,
+                  'media_type', pm.media_type, 'sort_order', pm.sort_order)
+                ORDER BY pm.sort_order
+              ) AS media
+       FROM posts p
+       JOIN users u ON u.id = p.user_id
+       LEFT JOIN post_media pm ON pm.post_id = p.id
+       WHERE p.user_id = $1
+       GROUP BY p.id, u.id
+       ORDER BY p.created_at DESC`,
+      [req.params.userId]
+    );
+    return res.json({ success: true, data: r.rows });
+  } catch (err) { next(err); }
+}
+
+module.exports = { createPost, getFeed, getMyPosts, getUserPosts, toggleLike, checkLiked, addComment, getComments };

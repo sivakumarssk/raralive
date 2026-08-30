@@ -1,10 +1,13 @@
 import { Ionicons } from '@expo/vector-icons';
 import { LinearGradient } from 'expo-linear-gradient';
 import * as MediaLibrary from 'expo-media-library';
+import { useVideoPlayer, VideoView } from 'expo-video';
 import { router } from 'expo-router';
 import { useCallback, useEffect, useRef, useState } from 'react';
+import { useFocusEffect } from 'expo-router';
 import {
   ActivityIndicator,
+  Alert,
   Animated,
   Dimensions,
   FlatList,
@@ -25,7 +28,6 @@ import { authStore } from '@/store/auth-store';
 
 const COIN_IMG = require('@/assets/tabs/coin.png') as number;
 const { width: SCREEN_W } = Dimensions.get('window');
-const POST_IMG_H = SCREEN_W * 0.62;
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
@@ -96,6 +98,11 @@ type HomeTab = typeof TABS[number];
 
 function HeaderRight() {
   const [unreadCount, setUnreadCount] = useState(0);
+  const user = authStore.getUser();
+  const avatarUrl = user?.avatarUrl
+    ? (user.avatarUrl.startsWith('http') ? user.avatarUrl : `${MEDIA_BASE}/${user.avatarUrl.replace(/^\//, '')}`)
+    : null;
+  const initials = (user?.fullName || user?.username || '?')[0]?.toUpperCase() ?? '?';
 
   const fetchUnread = useCallback(async () => {
     try {
@@ -130,6 +137,18 @@ function HeaderRight() {
         {unreadCount > 0 && (
           <View style={hdr.badge}>
             <Text style={hdr.badgeText}>{badgeLabel}</Text>
+          </View>
+        )}
+      </TouchableOpacity>
+      <TouchableOpacity
+        style={hdr.avatarBtn}
+        activeOpacity={0.85}
+        onPress={() => router.push('/(tabs)/profile' as any)}>
+        {avatarUrl ? (
+          <Image source={{ uri: avatarUrl }} style={hdr.avatar} />
+        ) : (
+          <View style={hdr.avatarFallback}>
+            <Text style={hdr.avatarInitial}>{initials}</Text>
           </View>
         )}
       </TouchableOpacity>
@@ -375,22 +394,29 @@ function CommentsSheet({ visible, postId, allowComments, onClose, onCountChange 
 
 // ── Post card ─────────────────────────────────────────────────────────────────
 
-const MAX_IMG_H = SCREEN_W * 1.25; // max ~5:4 tall
-const MIN_IMG_H = SCREEN_W * 0.56; // min ~16:9 wide
+const VIDEO_H   = SCREEN_W * 1.25; // fixed 4:5 portrait for all videos (Instagram-style)
+const MAX_IMG_H = SCREEN_W * 1.25; // image cap at 4:5 portrait
+const MIN_IMG_H = SCREEN_W * 0.5;  // image floor at 2:1 landscape
 
-function PostCard({ post, currentUserId, onOpenComments }: {
+function PostCard({ post, currentUserId, onOpenComments, following, onFollowChange }: {
   post: FeedPost;
   currentUserId: string;
   onOpenComments: (postId: string, allowComments: boolean) => void;
+  following: boolean;
+  onFollowChange: (userId: string, nowFollowing: boolean) => void;
 }) {
+  const firstMedia = post.media?.[0];
+  const mediaUri = firstMedia ? resolveMedia(firstMedia.media_url) : null;
+  const isVideo = firstMedia?.media_type === 'video';
+
   const [liked, setLiked] = useState(false);
   const [likesCount, setLikesCount] = useState(post.likes_count);
   const [commentsCount] = useState(post.comments_count);
   const [downloading, setDownloading] = useState(false);
   const [mediaError, setMediaError] = useState(false);
-  const [mediaHeight, setMediaHeight] = useState(POST_IMG_H);
-  const [following, setFollowing] = useState(false);
+  const [mediaHeight, setMediaHeight] = useState(isVideo ? VIDEO_H : SCREEN_W);
   const [followLoading, setFollowLoading] = useState(false);
+  const [videoPlaying, setVideoPlaying] = useState(false);
   const likeScale = useRef(new Animated.Value(1)).current;
   const initDone = useRef(false);
 
@@ -399,26 +425,39 @@ function PostCard({ post, currentUserId, onOpenComments }: {
   const initial = displayName[0]?.toUpperCase() ?? '?';
   const color = avatarColor(post.user_id);
   const avatarUri = resolveMedia(post.avatar_url);
-  const firstMedia = post.media?.[0];
-  const mediaUri = firstMedia ? resolveMedia(firstMedia.media_url) : null;
-  const isVideo = firstMedia?.media_type === 'video';
 
-  // Measure actual image size and fit height to aspect ratio
+  const videoPlayer = useVideoPlayer(isVideo && mediaUri ? { uri: mediaUri } : null, p => {
+    p.loop = true;
+    p.muted = false;
+  });
+
+  // Measure actual image size and fit height to natural aspect ratio
   useEffect(() => {
     if (!mediaUri || isVideo) return;
     Image.getSize(
       mediaUri,
       (w, h) => {
         if (!w || !h) return;
-        const ratio = h / w;
-        const computed = SCREEN_W * ratio;
-        setMediaHeight(Math.min(MAX_IMG_H, Math.max(MIN_IMG_H, computed)));
+        const natural = SCREEN_W * (h / w);
+        setMediaHeight(Math.min(MAX_IMG_H, Math.max(MIN_IMG_H, natural)));
       },
       () => {},
     );
   }, [mediaUri, isVideo]);
 
-  // Fetch liked + follow state once on mount
+  // Pause video when user switches away from this tab
+  useFocusEffect(
+    useCallback(() => {
+      return () => {
+        if (isVideo && videoPlayer) {
+          videoPlayer.pause();
+          setVideoPlaying(false);
+        }
+      };
+    }, [isVideo, videoPlayer]),
+  );
+
+  // Fetch liked state once on mount
   useEffect(() => {
     if (initDone.current) return;
     initDone.current = true;
@@ -428,20 +467,14 @@ function PostCard({ post, currentUserId, onOpenComments }: {
       .then(r => r.json())
       .then(j => { if (j.success) setLiked(j.data.liked); })
       .catch(() => {});
-    if (!isOwnPost) {
-      fetch(`${BASE_URL}/auth/follow/${post.user_id}`, { headers: { Authorization: `Bearer ${token}` } })
-        .then(r => r.json())
-        .then(j => { if (j.success) setFollowing(j.following); })
-        .catch(() => {});
-    }
-  }, [post.id, post.user_id, isOwnPost]);
+  }, [post.id]);
 
   const handleFollow = async () => {
     if (followLoading || isOwnPost) return;
     const token = authStore.getToken();
     if (!token) return;
     const wasFollowing = following;
-    setFollowing(!wasFollowing);
+    onFollowChange(post.user_id, !wasFollowing);
     setFollowLoading(true);
     try {
       await fetch(`${BASE_URL}/auth/follow/${post.user_id}`, {
@@ -449,7 +482,7 @@ function PostCard({ post, currentUserId, onOpenComments }: {
         headers: { Authorization: `Bearer ${token}` },
       });
     } catch {
-      setFollowing(wasFollowing);
+      onFollowChange(post.user_id, wasFollowing);
     } finally {
       setFollowLoading(false);
     }
@@ -488,14 +521,24 @@ function PostCard({ post, currentUserId, onOpenComments }: {
     if (!mediaUri || downloading) return;
     setDownloading(true);
     try {
-      const { status } = await MediaLibrary.requestPermissionsAsync(false);
-      if (status !== 'granted') return;
+      const { status } = await MediaLibrary.requestPermissionsAsync();
+      if (status !== 'granted') {
+        Alert.alert('Permission needed', 'Allow gallery access to save the file.');
+        return;
+      }
       const ext = isVideo ? 'mp4' : 'jpg';
-      const { File, Paths } = await import('expo-file-system');
-      const destFile = new File(Paths.cache, `rara_${post.id}.${ext}`);
-      await File.downloadFileAsync(mediaUri, destFile);
-      await MediaLibrary.saveToLibraryAsync(destFile.uri);
-    } catch { /* silent */ } finally {
+      const { downloadAsync, cacheDirectory } = await import('expo-file-system/legacy');
+      const destUri = `${cacheDirectory}rara_${post.id}.${ext}`;
+      const result = await downloadAsync(mediaUri, destUri);
+      if (result.status === 200) {
+        await MediaLibrary.saveToLibraryAsync(destUri);
+        Alert.alert('Saved!', `${isVideo ? 'Video' : 'Image'} saved to your gallery.`);
+      } else {
+        Alert.alert('Error', 'Could not download the file.');
+      }
+    } catch {
+      Alert.alert('Error', 'Could not save the file.');
+    } finally {
       setDownloading(false);
     }
   };
@@ -504,11 +547,16 @@ function PostCard({ post, currentUserId, onOpenComments }: {
     <View style={card.container}>
       {/* Card header */}
       <View style={card.header}>
-        <Avatar initial={initial} color={color} uri={avatarUri} />
-        <View style={card.headerText}>
-          <Text style={card.username}>{displayName}</Text>
-          <Text style={card.time}>{timeAgo(post.created_at)}</Text>
-        </View>
+        <TouchableOpacity
+          style={card.avatarNameRow}
+          onPress={() => router.push(`/user/${post.user_id}` as any)}
+          activeOpacity={0.8}>
+          <Avatar initial={initial} color={color} uri={avatarUri} />
+          <View style={card.headerText}>
+            <Text style={card.username}>{displayName}</Text>
+            <Text style={card.time}>{timeAgo(post.created_at)}</Text>
+          </View>
+        </TouchableOpacity>
         {!isOwnPost && (
           <TouchableOpacity
             style={[card.followBtn, following && card.followingBtn]}
@@ -525,25 +573,48 @@ function PostCard({ post, currentUserId, onOpenComments }: {
       </View>
 
       {/* Media */}
-      <View style={[card.media, { height: mediaHeight, backgroundColor: '#0D0D1A' }]}>
+      <View style={[card.media, { height: mediaHeight }]}>
         {mediaUri && !mediaError ? (
-          <Image
-            source={{ uri: mediaUri }}
-            style={{ width: SCREEN_W, height: mediaHeight }}
-            resizeMode="contain"
-            onError={() => setMediaError(true)}
-          />
+          isVideo ? (
+            <VideoView
+              player={videoPlayer}
+              style={{ width: SCREEN_W, height: mediaHeight }}
+              contentFit="cover"
+              nativeControls={false}
+            />
+          ) : (
+            <Image
+              source={{ uri: mediaUri }}
+              style={{ width: SCREEN_W, height: mediaHeight }}
+              resizeMode="cover"
+              onError={() => setMediaError(true)}
+            />
+          )
         ) : (
           <View style={[card.mediaPlaceholder, { height: mediaHeight }]}>
             <Ionicons name={isVideo ? 'videocam-outline' : 'image-outline'} size={40} color="rgba(255,255,255,0.3)" />
           </View>
         )}
         {isVideo && !mediaError && (
-          <View style={card.playOverlay}>
-            <View style={card.playCircle}>
-              <Ionicons name="play" size={28} color="#FFFFFF" style={{ paddingLeft: 3 }} />
-            </View>
-          </View>
+          <TouchableOpacity
+            style={card.playOverlay}
+            activeOpacity={0.8}
+            onPress={() => {
+              if (videoPlaying) {
+                videoPlayer.pause();
+                setVideoPlaying(false);
+              } else {
+                videoPlayer.play();
+                setVideoPlaying(true);
+              }
+            }}
+          >
+            {!videoPlaying && (
+              <View style={card.playCircle}>
+                <Ionicons name="play" size={28} color="#FFFFFF" style={{ paddingLeft: 3 }} />
+              </View>
+            )}
+          </TouchableOpacity>
         )}
       </View>
 
@@ -599,6 +670,13 @@ export function HomeScreen() {
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
 
+  // Follow state shared across all posts — keyed by userId
+  const [followMap, setFollowMap] = useState<Record<string, boolean>>({});
+
+  const handleFollowChange = useCallback((userId: string, nowFollowing: boolean) => {
+    setFollowMap(prev => ({ ...prev, [userId]: nowFollowing }));
+  }, []);
+
   // Sheet state — single instance for all posts
   const [sheetPostId, setSheetPostId] = useState<string | null>(null);
   const [sheetAllowComments, setSheetAllowComments] = useState(true);
@@ -621,12 +699,28 @@ export function HomeScreen() {
     try {
       const r = await fetch(`${BASE_URL}/posts/feed?limit=30`);
       const j = await r.json();
-      if (j.success) setPosts(j.data);
+      if (j.success) {
+        const feedPosts: FeedPost[] = j.data;
+        setPosts(feedPosts);
+        // Batch-fetch follow state for all unique post authors (except self)
+        const token = authStore.getToken();
+        if (token) {
+          const userIds = [...new Set(feedPosts.map(p => p.user_id).filter(id => id !== currentUserId))];
+          const map: Record<string, boolean> = {};
+          await Promise.all(userIds.map(uid =>
+            fetch(`${BASE_URL}/auth/follow/${uid}`, { headers: { Authorization: `Bearer ${token}` } })
+              .then(r2 => r2.json())
+              .then(j2 => { if (j2.success) map[uid] = j2.following; })
+              .catch(() => {})
+          ));
+          setFollowMap(prev => ({ ...prev, ...map }));
+        }
+      }
     } catch { /* silent */ } finally {
       setLoading(false);
       setRefreshing(false);
     }
-  }, []);
+  }, [currentUserId]);
 
   useEffect(() => { loadFeed(); }, [loadFeed]);
 
@@ -666,6 +760,8 @@ export function HomeScreen() {
                 post={item}
                 currentUserId={currentUserId}
                 onOpenComments={openComments}
+                following={!!followMap[item.user_id]}
+                onFollowChange={handleFollowChange}
               />
             )}
           />
@@ -711,6 +807,16 @@ const hdr = StyleSheet.create({
   badgeText: {
     fontSize: 9, fontWeight: '800', color: '#FFFFFF', lineHeight: 11,
   },
+  avatarBtn: {
+    width: 34, height: 34, borderRadius: 17,
+    overflow: 'hidden', borderWidth: 2, borderColor: '#7A0EED',
+  },
+  avatar: { width: '100%', height: '100%' },
+  avatarFallback: {
+    width: '100%', height: '100%',
+    backgroundColor: '#EDE8F7', alignItems: 'center', justifyContent: 'center',
+  },
+  avatarInitial: { fontSize: 14, fontWeight: '800', color: '#7A0EED' },
 });
 
 const tabs = StyleSheet.create({
@@ -735,7 +841,8 @@ const cap = StyleSheet.create({
 
 const card = StyleSheet.create({
   container:  { backgroundColor: '#FFFFFF', shadowColor: '#4A0099', shadowOpacity: 0.05, shadowRadius: 8, shadowOffset: { width: 0, height: 2 }, elevation: 2 },
-  header:     { flexDirection: 'row', alignItems: 'center', paddingHorizontal: 16, paddingVertical: 12, gap: 10 },
+  header:        { flexDirection: 'row', alignItems: 'center', paddingHorizontal: 16, paddingVertical: 12, gap: 10 },
+  avatarNameRow: { flexDirection: 'row', alignItems: 'center', gap: 10, flex: 1 },
   headerText: { flex: 1 },
   username:   { fontSize: 14, fontWeight: '700', color: '#1C1E22' },
   time:       { fontSize: 12, color: '#ABADB2', marginTop: 1 },

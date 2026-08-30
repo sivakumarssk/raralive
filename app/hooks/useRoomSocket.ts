@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react';
-import { getSocketState, socketStore, subscribeSocket } from '@/store/socket-store';
+import { getSocketState, socketStore, subscribeSocket, type IncomingStageInvite } from '@/store/socket-store';
+export type { IncomingStageInvite };
 
 export type SeatSlot = {
   slotIndex: number;
@@ -7,6 +8,7 @@ export type SeatSlot = {
   userName: string;
   avatarUrl: string | null;
   isHost: boolean;
+  isMuted?: boolean;
 };
 
 export type HostStatus = {
@@ -63,5 +65,17 @@ export function useRoomSocket(roomId: string) {
     acceptSeatRequest: (req: IncomingSeatRequest) => socketStore.acceptSeatRequest(roomId, req),
     rejectSeatRequest: (req: IncomingSeatRequest) => socketStore.rejectSeatRequest(roomId, req),
     clearSeatRequestResult: () => socketStore.clearSeatRequestResult(),
+    inviteToStage: (toUserId: string, slotIndex: number) => socketStore.inviteToStage(roomId, toUserId, slotIndex),
+    incomingStageInvite: state.incomingStageInvite,
+    acceptStageInvite: (slotIndex: number, hostSocketId: string) => socketStore.acceptStageInvite(roomId, slotIndex, hostSocketId),
+    rejectStageInvite: (hostSocketId: string) => socketStore.rejectStageInvite(roomId, hostSocketId),
+    clearStageInvite: () => socketStore.clearStageInvite(),
+    leaveStage: () => socketStore.leaveStage(roomId),
+    removeFromStage: (slotIndex: number) => socketStore.removeFromStage(roomId, slotIndex),
+    pinComment: (messageId: string) => socketStore.pinComment(roomId, messageId),
+    unpinComment: () => socketStore.unpinComment(roomId),
+    deleteComment: (messageId: string) => socketStore.deleteComment(roomId, messageId),
+    reportComment: (messageId: string, messageText: string, reportedUserId?: string, reason?: string) =>
+      socketStore.reportComment(roomId, messageId, messageText, reportedUserId, reason),
   };
 }

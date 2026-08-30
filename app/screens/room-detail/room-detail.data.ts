@@ -13,7 +13,7 @@ export type RoomSeat = {
 export type ChatMessage = {
   id: string;
   type: 'join' | 'message' | 'gift';
-  user?: { name: string; avatarUri: string; level: number; levelColor?: string };
+  user?: { id?: string; name: string; avatarUri: string; level: number; levelColor?: string };
   text?: string;
   // gift event
   giftName?: string;

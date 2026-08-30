@@ -256,4 +256,28 @@ async function getWinners(req, res, next) {
   } catch (err) { next(err); }
 }
 
-module.exports = { listTasks, createTask, updateTask, deleteTask, getMyTasks, claimReward, getActiveReward, getTopHosts, getWinners };
+async function getTopGifters(req, res, next) {
+  try {
+    const now = new Date();
+    const day = now.getDay();
+    const diff = day === 0 ? -6 : 1 - day;
+    const weekStart = new Date(now);
+    weekStart.setDate(now.getDate() + diff);
+    weekStart.setHours(0, 0, 0, 0);
+
+    const r = await db.query(
+      `SELECT u.id, u.full_name, u.username, u.avatar_url,
+              SUM(e.coins * e.quantity)::int AS total_coins
+       FROM room_gift_events e
+       JOIN users u ON u.id = e.sender_id
+       WHERE e.created_at >= $1
+       GROUP BY u.id, u.full_name, u.username, u.avatar_url
+       ORDER BY total_coins DESC
+       LIMIT 20`,
+      [weekStart.toISOString()]
+    );
+    return res.json({ success: true, data: r.rows });
+  } catch (err) { next(err); }
+}
+
+module.exports = { listTasks, createTask, updateTask, deleteTask, getMyTasks, claimReward, getActiveReward, getTopHosts, getWinners, getTopGifters };

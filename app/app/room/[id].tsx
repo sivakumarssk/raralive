@@ -6,7 +6,7 @@ import { BASE_URL } from '@/services/api';
 
 export default function RoomDetailPage() {
   const router = useRouter();
-  const { id } = useLocalSearchParams<{ id: string }>();
+  const { id, openBattle } = useLocalSearchParams<{ id: string; openBattle?: string }>();
 
   // If id looks like a room code (RM-XXXXXX), resolve it to a UUID first
   const isRoomCode = id?.startsWith('RM-');
@@ -35,6 +35,7 @@ export default function RoomDetailPage() {
     <RoomDetailScreen
       roomId={resolvedId}
       onBack={() => router.back()}
+      openBattle={openBattle === '1'}
     />
   );
 }

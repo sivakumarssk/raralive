@@ -4,6 +4,7 @@ import { StatusBar } from 'expo-status-bar';
 import { router, useFocusEffect } from 'expo-router';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import {
+  Alert,
   BackHandler,
   Image,
   ImageBackground,
@@ -15,14 +16,14 @@ import {
   StyleSheet,
   Text,
   TouchableOpacity,
+  useWindowDimensions,
   View,
 } from 'react-native';
 import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
-
 import { useAgoraVoice } from '@/hooks/useAgoraVoice';
 import { agoraStore } from '@/store/agora-store';
-import { socketStore, onGiftError, onLevelUp, onTaskCompleted, onRewardApplied, subscribeSocket, getSocketState } from '@/store/socket-store';
-import { type IncomingSeatRequest, useRoomSocket } from '@/hooks/useRoomSocket';
+import { socketStore, onGiftError, onLevelUp, onTaskCompleted, onRewardApplied, onBattleInvite, onBattleInviteAccepted, onBattleInviteDeclined, onBattleInviteCancelled, onBattleStarted, onJoinBlocked, onKickedFromRoom, onReopenBattle, subscribeSocket, getSocketState, type BattleInvitePayload } from '@/store/socket-store';
+import { type IncomingSeatRequest, type IncomingStageInvite, useRoomSocket } from '@/hooks/useRoomSocket';
 import { BASE_URL, MEDIA_BASE } from '@/services/api';
 import { authStore } from '@/store/auth-store';
 import { roomStore } from '@/store/room-store';
@@ -38,7 +39,7 @@ import { GiftFlyAnimation, type FlyItem, type SlotPosition } from './components/
 import { BattleBanner } from './components/battle-banner';
 import { RoomHeader } from './components/room-header';
 import { RoomStage, type HostInfo, type BattleStageInfo } from './components/room-stage';
-import { RoomLevelUp } from './components/room-level-up';
+import { RoomLevelUp, prefetchUpcomingGroupBadges } from './components/room-level-up';
 import { type GiftItem } from './room-detail.data';
 
 const FLOATING_ACTIONS = [
@@ -57,11 +58,13 @@ type RoomInfo = {
   host_avatar_url: string | null;
   current_level: number;
   total_coins_received: number;
+  visibility?: 'public' | 'private';
 };
 
 type RoomDetailScreenProps = {
   roomId?: string;
   onBack?: () => void;
+  openBattle?: boolean;
 };
 
 function resolveAvatar(url: string | null | undefined): string | undefined {
@@ -70,26 +73,49 @@ function resolveAvatar(url: string | null | undefined): string | undefined {
   catch { return `${MEDIA_BASE}/${url.replace(/^\//, '')}`; }
 }
 
-export function RoomDetailScreen({ roomId = '', onBack }: RoomDetailScreenProps) {
+export function RoomDetailScreen({ roomId = '', onBack, openBattle }: RoomDetailScreenProps) {
   const insets = useSafeAreaInsets();
   const scrollRef = useRef<ScrollView>(null);
+  const { width: screenWidth } = useWindowDimensions();
+  // BattleBanner scales its internal layout off a 1080px reference (see
+  // battle-banner.tsx REF/scale) — its bridge sits `progressTop` px down
+  // from the banner's own top edge, out of a total `cardHeight` px tall
+  // banner. Mirroring that same math here (instead of a fixed pixel
+  // offset) keeps the bridge line flush with the stage's bottom edge
+  // across every screen width, not just the device it was eyeballed on.
+  const battleBannerScale = Math.min(1.15, screenWidth / 1080);
+  const battleBannerCardHeight = 270 * battleBannerScale;
+  const battleBannerBridgeTop = 110 * battleBannerScale;
+  // Extra downward nudge so the banner sits clear of the audio stage above
+  // it instead of overlapping its bottom edge.
+  const battleOverlayExtraDrop = 24 * battleBannerScale;
+  const battleOverlayBottom = battleBannerBridgeTop - battleBannerCardHeight - battleOverlayExtraDrop;
   const [showDailyTask, setShowDailyTask] = useState(false);
   const [showCoinBox, setShowCoinBox] = useState(false);
-  const [showBattle, setShowBattle] = useState(false);
+  const [showBattle, setShowBattle] = useState(!!openBattle);
+  const [showNoBattle, setShowNoBattle] = useState(false);
   const [showGiftShop, setShowGiftShop] = useState(false);
   const [keyboardVisible, setKeyboardVisible] = useState(false);
   const [keyboardHeight, setKeyboardHeight] = useState(0);
   const [roomInfo, setRoomInfo] = useState<RoomInfo | null>(null);
+
+  useEffect(() => {
+    if (roomInfo?.current_level != null) prefetchUpcomingGroupBadges(roomInfo.current_level);
+  }, [roomInfo?.current_level]);
+
   const [showExitModal, setShowExitModal] = useState(false);
   const [showCoHostModal, setShowCoHostModal] = useState(false);
   const [seatToast, setSeatToast] = useState<string | null>(null);
 
   // Battle stage info (VS bar in audio box)
   const [battleStageInfo, setBattleStageInfo] = useState<BattleStageInfo | null>(null);
+  const battleStageRef = useRef<BattleStageInfo | null>(null);
   const battleEndsAtRef = useRef<number | null>(null);
   // Coin totals per userId received as gifts in this room
   const [coinsByUserId, setCoinsByUserId] = useState<Map<string, number>>(new Map());
   const seenGiftIds = useRef(new Set<string>());
+  // Top gifters (senders) tracking: userId → { name, avatarUri, coins }
+  const [giftersByUserId, setGiftersByUserId] = useState<Map<string, { name: string; avatarUri: string; coins: number }>>(new Map());
 
   // Gift target picker + fly animation (gift bar)
   const [pendingGift, setPendingGift] = useState<GiftItem | null>(null);
@@ -111,6 +137,13 @@ export function RoomDetailScreen({ roomId = '', onBack }: RoomDetailScreenProps)
   // Increments to trigger DailyTaskModal task list refresh
   const [taskRefreshKey, setTaskRefreshKey] = useState(0);
 
+  // Daily task completion congrats overlay
+  const [taskCongrats, setTaskCongrats] = useState<{ completedBy: string; taskTitle: string; bgUrl: string | null; frameUrl: string | null } | null>(null);
+
+  // Incoming battle invite popup (host-only)
+  const [incomingBattleInvite, setIncomingBattleInvite] = useState<BattleInvitePayload | null>(null);
+  const battleInviteTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
   useEffect(() => {
     const unsub = onLevelUp(level => {
       setLevelUpData({ level });
@@ -121,13 +154,17 @@ export function RoomDetailScreen({ roomId = '', onBack }: RoomDetailScreenProps)
 
   // Real-time reward visuals — applied immediately when host completes task or claims reward
   useEffect(() => {
-    const unsub = onRewardApplied(({ reward_bg_url, reward_frame_url }) => {
-      console.log('[ROOM] onRewardApplied triggered: bg=', reward_bg_url, 'frame=', reward_frame_url);
+    const unsub = onRewardApplied(({ reward_bg_url, reward_frame_url, completed_by, task_title }) => {
       const bg = reward_bg_url ? `${MEDIA_BASE}/${reward_bg_url.replace(/^\//, '')}` : null;
       const frame = reward_frame_url ? `${MEDIA_BASE}/${reward_frame_url.replace(/^\//, '')}` : null;
-      console.log('[ROOM] setting rewardBgUrl=', bg, 'rewardFrameUrl=', frame);
       setRewardBgUrl(bg);
       setRewardFrameUrl(frame);
+      // Refresh task list so lock updates
+      setTaskRefreshKey(k => k + 1);
+      if (completed_by) {
+        setTaskCongrats({ completedBy: completed_by, taskTitle: task_title ?? 'Daily Task', bgUrl: bg, frameUrl: frame });
+        setTimeout(() => setTaskCongrats(null), 10000);
+      }
     });
     return unsub;
   }, []);
@@ -138,6 +175,44 @@ export function RoomDetailScreen({ roomId = '', onBack }: RoomDetailScreenProps)
       setTaskRefreshKey(k => k + 1);
     });
     return unsub;
+  }, []);
+
+  // Incoming battle invite — show popup only to host, auto-dismiss after 10s
+  const isHostRef = useRef(false);
+  useEffect(() => {
+    const unsub = onBattleInvite((data) => {
+      if (!isHostRef.current) return;
+      setIncomingBattleInvite(data);
+      if (battleInviteTimerRef.current) clearTimeout(battleInviteTimerRef.current);
+      battleInviteTimerRef.current = setTimeout(() => {
+        setIncomingBattleInvite(null);
+      }, 10000);
+    });
+    return unsub;
+  }, []);
+
+  // Inviter cancelled — dismiss the incoming popup on receiver side
+  useEffect(() => {
+    const unsub = onBattleInviteCancelled(({ from_room_name }) => {
+      setIncomingBattleInvite(null);
+      if (battleInviteTimerRef.current) clearTimeout(battleInviteTimerRef.current);
+      setSeatToast(`${from_room_name} cancelled the battle invite.`);
+      setTimeout(() => setSeatToast(null), 3000);
+    });
+    return unsub;
+  }, []);
+
+  // Battle invite result — accepted or declined (toast for context, main handling in overview screen)
+  useEffect(() => {
+    const unsubA = onBattleInviteAccepted(({ to_room_name }) => {
+      setSeatToast(`${to_room_name} accepted the battle!`);
+      setTimeout(() => setSeatToast(null), 3000);
+    });
+    const unsubD = onBattleInviteDeclined(({ to_room_name }) => {
+      setSeatToast(`${to_room_name} declined the battle.`);
+      setTimeout(() => setSeatToast(null), 3000);
+    });
+    return () => { unsubA(); unsubD(); };
   }, []);
 
   // Fetch active battle for this room by checking notifications for an active invite
@@ -198,13 +273,24 @@ export function RoomDetailScreen({ roomId = '', onBack }: RoomDetailScreenProps)
         const durMs     = (d.duration_minutes ?? 0) * 60_000;
         const endsAtMs  = startedAt ? startedAt + durMs : null;
 
+        // If end time is already in the past, skip — unseen-result API handles navigation
+        if (endsAtMs && endsAtMs <= Date.now()) {
+          if (!cancelled) { battleEndsAtRef.current = null; setBattleStageInfo(null); }
+          return;
+        }
+
         if (!cancelled) {
           battleEndsAtRef.current = endsAtMs;
           setBattleStageInfo({
+            inviteId: match.data.invite_id,
             ownRoomName: ownName ?? '', ownRoomImageUrl: ownImg ?? null,
             rivalRoomName: rivalName ?? '', rivalRoomImageUrl: rivalImg ?? null,
             timeDisplay: '00:00',
             isFinished: false,
+            fromRoomId: d.from_room_id,
+            toRoomId: d.to_room_id,
+            fromHostUserId: d.from_user_id,
+            toHostUserId: d.to_user_id,
           });
         }
       } catch { if (!cancelled) setBattleStageInfo(null); }
@@ -212,7 +298,10 @@ export function RoomDetailScreen({ roomId = '', onBack }: RoomDetailScreenProps)
 
     fetchBattle();
     const pollId = setInterval(fetchBattle, 15_000);
-    return () => { cancelled = true; clearInterval(pollId); };
+    // Trigger immediately when a battle is accepted or started
+    const unsubAccepted = onBattleInviteAccepted(() => fetchBattle());
+    const unsubStarted = onBattleStarted(() => fetchBattle());
+    return () => { cancelled = true; clearInterval(pollId); unsubAccepted(); unsubStarted(); };
   }, [roomId]);
 
   // Live countdown tick — runs off battleEndsAtRef so timer never resets on re-render
@@ -222,10 +311,10 @@ export function RoomDetailScreen({ roomId = '', onBack }: RoomDetailScreenProps)
       if (!endsAtMs) return;
       const secsLeft = Math.max(0, Math.floor((endsAtMs - Date.now()) / 1000));
       if (secsLeft === 0) {
-        // Battle ended — clear all battle UI and coin counts
         battleEndsAtRef.current = null;
         setBattleStageInfo(null);
         setCoinsByUserId(new Map());
+        setGiftersByUserId(new Map());
         seenGiftIds.current.clear();
         return;
       }
@@ -241,25 +330,38 @@ export function RoomDetailScreen({ roomId = '', onBack }: RoomDetailScreenProps)
     return () => clearInterval(id);
   }, []);
 
-  // Track gift coins per recipient from socket messages
+  // Track gift coins per recipient + per sender from socket messages
   useEffect(() => {
     const unsub = subscribeSocket(() => {
       const { messages } = getSocketState();
       messages.forEach(msg => {
         if (msg.type !== 'gift') return;
-        if (!msg.giftRecipientId || !msg.giftCoins) return;
         if (seenGiftIds.current.has(msg.id)) return;
         seenGiftIds.current.add(msg.id);
+        if (!msg.giftRecipientId || !msg.giftCoins) return;
         const total = (msg.giftCoins ?? 0) * (msg.giftQty ?? 1);
+        // Track coins per recipient (for battle bar width)
         setCoinsByUserId(prev => {
           const next = new Map(prev);
           next.set(msg.giftRecipientId!, (next.get(msg.giftRecipientId!) ?? 0) + total);
           return next;
         });
+        // Track coins per sender (for top gifters list)
+        if (msg.user?.id) {
+          setGiftersByUserId(prev => {
+            const next = new Map(prev);
+            const existing = next.get(msg.user!.id!) ?? { name: msg.user!.name, avatarUri: msg.user!.avatarUri, coins: 0 };
+            next.set(msg.user!.id!, { ...existing, coins: existing.coins + total });
+            return next;
+          });
+        }
       });
     });
     return unsub;
   }, []);
+
+  // Keep ref in sync
+  useEffect(() => { battleStageRef.current = battleStageInfo; }, [battleStageInfo]);
 
   // Fetch all gifts for the inline picker
   useEffect(() => {
@@ -269,9 +371,9 @@ export function RoomDetailScreen({ roomId = '', onBack }: RoomDetailScreenProps)
       .catch(() => {});
   }, []);
 
-  // Cached coin balance — fetched on mount and refreshed after each gift send
+  // Cached coin balance — refreshed every time the screen comes into focus
   const coinBalanceRef = useRef<number>(9999);
-  useEffect(() => {
+  const fetchCoinBalance = useCallback(() => {
     const token = authStore.getToken();
     if (!token) return;
     fetch(`${BASE_URL}/wallet/me`, { headers: { Authorization: `Bearer ${token}` } })
@@ -279,6 +381,7 @@ export function RoomDetailScreen({ roomId = '', onBack }: RoomDetailScreenProps)
       .then(j => { if (j.success) coinBalanceRef.current = j.data.coins ?? 0; })
       .catch(() => {});
   }, []);
+  useFocusEffect(useCallback(() => { fetchCoinBalance(); }, [fetchCoinBalance]));
 
   useEffect(() => {
     const unsub = onGiftError(() => {
@@ -287,17 +390,36 @@ export function RoomDetailScreen({ roomId = '', onBack }: RoomDetailScreenProps)
     return unsub;
   }, []);
 
+  useEffect(() => {
+    const unsub1 = onJoinBlocked(() => {
+      Alert.alert('Blocked', 'You are blocked from this room.', [
+        { text: 'OK', onPress: () => { agoraStore.leave(); socketStore.leave(); roomStore.clear(); onBack?.(); } },
+      ]);
+    });
+    const unsub2 = onKickedFromRoom(() => {
+      Alert.alert('Removed', 'You have been blocked and removed from this room.', [
+        { text: 'OK', onPress: () => { agoraStore.leave(); socketStore.leave(); roomStore.clear(); onBack?.(); } },
+      ]);
+    });
+    const unsub3 = onReopenBattle(() => {
+      setShowBattle(true);
+    });
+    return () => { unsub1(); unsub2(); unsub3(); };
+  }, []);
+
   const {
     messages, onlineCount,
     seats, hostStatus,
     incomingRequest, seatRequestResult,
     sendMessage, requestSeat,
     acceptSeatRequest, rejectSeatRequest,
-    clearSeatRequestResult,
+    clearSeatRequestResult, inviteToStage,
+    incomingStageInvite, acceptStageInvite, rejectStageInvite, clearStageInvite,
   } = useRoomSocket(roomId);
 
   const currentUserId = authStore.getUserId() ?? '';
   const isHost = roomInfo ? roomInfo.host_user_id === currentUserId : false;
+  isHostRef.current = isHost;
   // Which slot (1–7) does the current user occupy? null if not on stage
   const mySlotIndex = seats.find(s => s.slotIndex !== 0 && s.userId === currentUserId)?.slotIndex ?? null;
   const iAmOnStage = mySlotIndex !== null;
@@ -397,14 +519,27 @@ export function RoomDetailScreen({ roomId = '', onBack }: RoomDetailScreenProps)
   const handleSend = (text: string) => sendMessage(text);
   const handleBackPress = () => setShowExitModal(true);
 
-  // Build gift targets: host first, then on-stage seats
+  const handleBattlePress = () => {
+    if (battleStageInfo?.inviteId) {
+      // Battle ongoing — battle banner (tap it) shows live status and gifters
+      return;
+    } else if (isHost) {
+      // Host, no battle — open invite modal
+      setShowBattle(true);
+    } else {
+      // Non-host, no battle
+      setShowNoBattle(true);
+    }
+  };
+
+  // Build gift targets: host first (only if online), then on-stage seats
   const giftTargets: GiftTarget[] = [
-    {
+    ...(hostInfo.isOnline ? [{
       userId: roomInfo?.host_user_id ?? '',
       name: hostInfo.name,
       avatarUrl: roomInfo?.host_avatar_url ?? null,
       isHost: true,
-    },
+    }] : []),
     ...seats
       .filter(s => s.slotIndex !== 0 && s.userId !== roomInfo?.host_user_id)
       .map(s => ({ userId: s.userId, name: s.userName, avatarUrl: s.avatarUrl, isHost: false })),
@@ -412,8 +547,8 @@ export function RoomDetailScreen({ roomId = '', onBack }: RoomDetailScreenProps)
 
   const handleGiftPress = (gift: GiftItem) => {
     setPendingGift(gift);
-    // Pre-select host
-    setSelectedTargetId(roomInfo?.host_user_id ?? null);
+    // Pre-select first available target (host if online, otherwise first on-stage user)
+    setSelectedTargetId(giftTargets[0]?.userId ?? null);
     setShowGiftPicker(true);
   };
 
@@ -430,18 +565,27 @@ export function RoomDetailScreen({ roomId = '', onBack }: RoomDetailScreenProps)
 
     const target = giftTargets.find(t => t.userId === selectedTargetId);
     const hostUserId = roomInfo?.host_user_id ?? selectedTargetId;
+    const giftTargetId = selectedTargetId ?? hostUserId;
     // Encode all data the socket needs for wallet debit + gift event
+    // recipientid = host (for wallet/gems), giftfor = actual target (for stage display)
     sendMessage(
       `__gift__🎁__to__${target?.name ?? 'someone'}__img__${pendingGift.image_url ?? ''}__bg__${pendingGift.bg_color}` +
       `__giftid__${pendingGift.id}__coins__${pendingGift.coins}__qty__${qty}` +
-      `__senderid__${currentUserId}__recipientid__${hostUserId}`
+      `__senderid__${currentUserId}__recipientid__${hostUserId}__giftfor__${giftTargetId}`
     );
     // Optimistically deduct from local balance
     coinBalanceRef.current = Math.max(0, coinBalanceRef.current - totalCost);
 
+    const targetPos = slotPositions.current.get(giftTargetId) ?? undefined;
     setFlyItems(prev => [
       ...prev,
-      { id: `${Date.now()}-${Math.random()}`, gift: pendingGift, qty },
+      {
+        id: `${Date.now()}-${Math.random()}`,
+        gift: pendingGift,
+        qty,
+        targetUserId: hostUserId,
+        targetPos,
+      },
     ]);
   };
 
@@ -495,27 +639,37 @@ export function RoomDetailScreen({ roomId = '', onBack }: RoomDetailScreenProps)
         onBack={handleBackPress}
         onShare={handleShare}
         onMore={() => {}}
-      />
-
-      <RoomStage
-        hostInfo={hostInfo}
-        seats={seats}
         isHost={isHost}
-        hideEmptySlots={iAmOnStage}
-        onRequestSeat={requestSeat}
-        myUserId={currentUserId}
-        isMuted={isMuted}
-        isHostMuted={isHost ? isMuted : undefined}
-        onToggleMute={toggleMute}
-        hostUserId={roomInfo?.host_user_id}
-        onSlotLayout={(userId, x, y) => { slotPositions.current.set(userId, { x, y }); }}
-        battleInfo={battleStageInfo}
-        coinsByUserId={coinsByUserId}
-        hasRoomBg={!!rewardBgUrl}
-        rewardFrameUrl={rewardFrameUrl}
+        seats={seats}
+        onInviteToStage={(userId, slotIndex) => inviteToStage(userId, slotIndex)}
       />
 
-      <BattleBanner roomId={roomId} />
+      <View style={styles.stageWrap}>
+        <RoomStage
+          hostInfo={hostInfo}
+          seats={seats}
+          isHost={isHost}
+          hideEmptySlots={iAmOnStage}
+          onRequestSeat={requestSeat}
+          myUserId={currentUserId}
+          isMuted={isMuted}
+          isHostMuted={isHost ? isMuted : undefined}
+          onToggleMute={toggleMute}
+          hostUserId={roomInfo?.host_user_id}
+          onSlotLayout={(userId, x, y) => { slotPositions.current.set(userId, { x, y }); }}
+          battleInfo={battleStageInfo}
+          coinsByUserId={coinsByUserId}
+          hasRoomBg={!!rewardBgUrl}
+          rewardFrameUrl={rewardFrameUrl}
+        />
+
+        {/* Battle banner overlays the bottom of the stage, on top of the seat grid.
+            bottom is computed (not hardcoded) so the banner's internal bridge line
+            lands flush on the stage's bottom edge across all screen widths. */}
+        <View style={[styles.battleOverlay, { bottom: battleOverlayBottom }]} pointerEvents="box-none">
+          <BattleBanner roomId={roomId} coinsByUserId={coinsByUserId} giftersByUserId={giftersByUserId} />
+        </View>
+      </View>
 
       {/* Chat area — scroll only, no floating icons here */}
       <View style={[styles.chatArea, rewardBgUrl && { backgroundColor: 'transparent' }]}>
@@ -525,7 +679,7 @@ export function RoomDetailScreen({ roomId = '', onBack }: RoomDetailScreenProps)
           contentContainerStyle={styles.scrollContent}
           showsVerticalScrollIndicator={false}
           keyboardShouldPersistTaps="handled">
-          <ChatFeed messages={messages} />
+          <ChatFeed messages={messages} hasRoomBg={!!rewardBgUrl} />
         </ScrollView>
 
         {/* Toast inside chat area */}
@@ -537,24 +691,39 @@ export function RoomDetailScreen({ roomId = '', onBack }: RoomDetailScreenProps)
       </View>
 
       <View style={{ marginBottom: keyboardHeight }}>
-        {/* Host incoming seat request banner */}
-        {isHost && incomingRequest && (
-          <SeatRequestBanner
-            request={incomingRequest}
-            onAccept={() => acceptSeatRequest(incomingRequest)}
-            onReject={() => rejectSeatRequest(incomingRequest)}
-          />
-        )}
         {!keyboardVisible && (
           <GiftBar onGiftPress={handleGiftPress} hasRoomBg={!!rewardBgUrl} />
         )}
         <ChatInputBar
           onSend={handleSend}
           onGiftOpen={() => setShowGiftShop(true)}
-          onBattlePress={() => setShowBattle(true)}
+          onBattlePress={handleBattlePress}
           hasRoomBg={!!rewardBgUrl}
+          showBattle={roomInfo?.visibility !== 'private'}
         />
       </View>
+
+      {/* Seat request banner — absolute so it always floats above floating icons */}
+      {isHost && incomingRequest && (
+        <View style={banner.floatingWrap}>
+          <SeatRequestBanner
+            request={incomingRequest}
+            onAccept={() => acceptSeatRequest(incomingRequest)}
+            onReject={() => rejectSeatRequest(incomingRequest)}
+          />
+        </View>
+      )}
+
+      {/* Stage invite banner — shown to the invited user (non-host) */}
+      {!isHost && incomingStageInvite && (
+        <View style={banner.floatingWrap}>
+          <StageInviteBanner
+            invite={incomingStageInvite}
+            onAccept={() => acceptStageInvite(incomingStageInvite.slotIndex, incomingStageInvite.hostSocketId)}
+            onReject={() => rejectStageInvite(incomingStageInvite.hostSocketId)}
+          />
+        </View>
+      )}
 
       {/* Floating action icons — anchored to root, never affected by keyboard */}
       <View style={styles.floatingBar} pointerEvents="box-none">
@@ -580,7 +749,26 @@ export function RoomDetailScreen({ roomId = '', onBack }: RoomDetailScreenProps)
 
       <DailyTaskModal visible={showDailyTask} onClose={() => setShowDailyTask(false)} roomId={roomId} refreshKey={taskRefreshKey} />
       <CoinBoxModal visible={showCoinBox} onClose={() => setShowCoinBox(false)} />
-      <BattleModal visible={showBattle} onClose={() => setShowBattle(false)} roomId={roomId} />
+
+      {/* No battle modal — non-host when no active battle */}
+      <Modal visible={showNoBattle} transparent animationType="fade" onRequestClose={() => setShowNoBattle(false)}>
+        <TouchableOpacity style={modal.overlay} activeOpacity={1} onPress={() => setShowNoBattle(false)} />
+        <View style={modal.sheet}>
+          <View style={modal.handle} />
+          <Text style={{ fontSize: 40, marginBottom: 4 }}>⚔️</Text>
+          <Text style={modal.title}>No Battle Right Now</Text>
+          <Text style={modal.subtitle}>There is no active battle in this room at the moment.</Text>
+          <TouchableOpacity onPress={() => setShowNoBattle(false)} style={modal.cancelBtn}>
+            <Text style={modal.exitLabel}>Close</Text>
+          </TouchableOpacity>
+        </View>
+      </Modal>
+      <BattleModal
+        visible={showBattle}
+        onClose={() => setShowBattle(false)}
+        roomId={roomId}
+        roomImageUrl={roomInfo?.room_image_url ?? null}
+      />
       <GiftShopModal
         visible={showGiftShop}
         onClose={() => setShowGiftShop(false)}
@@ -590,14 +778,15 @@ export function RoomDetailScreen({ roomId = '', onBack }: RoomDetailScreenProps)
           name: hostInfo.name,
           avatarUrl: roomInfo?.host_avatar_url ?? null,
         }}
-        onSendGift={(gift, targetName, qty) => {
+        isHostOnline={hostInfo.isOnline}
+        onSendGift={(gift, targetName, qty, targetUserId) => {
           setFullscreenGift({ imageUrl: gift.image_url, bgColor: gift.bg_color });
           const hostUserId = roomInfo?.host_user_id ?? '';
-          // Send as single message with total qty — socket handles wallet debit × qty
+          const giftTargetId = targetUserId || hostUserId;
           sendMessage(
             `__gift__🎁__to__${targetName}__img__${gift.image_url ?? ''}__bg__${gift.bg_color}` +
             `__giftid__${gift.id}__coins__${gift.coins}__qty__${qty}` +
-            `__senderid__${currentUserId}__recipientid__${hostUserId}`
+            `__senderid__${currentUserId}__recipientid__${hostUserId}__giftfor__${giftTargetId}`
           );
         }}
       />
@@ -633,6 +822,120 @@ export function RoomDetailScreen({ roomId = '', onBack }: RoomDetailScreenProps)
         items={flyItems}
         onItemDone={id => setFlyItems(prev => prev.filter(i => i.id !== id))}
       />
+
+      {/* Daily task congrats overlay — shown to all users for 10s */}
+      {taskCongrats && (
+        <TouchableOpacity
+          style={congratsStyles.overlay}
+          activeOpacity={1}
+          onPress={() => setTaskCongrats(null)}>
+          <View style={congratsStyles.card}>
+            <Text style={congratsStyles.emoji}>🎉</Text>
+            <Text style={congratsStyles.title}>Congratulations!</Text>
+            <Text style={congratsStyles.sub}>Daily task is completed</Text>
+
+            {/* Reward cards */}
+            <View style={congratsStyles.rewardRow}>
+              {taskCongrats.bgUrl && (
+                <View style={congratsStyles.rewardCard}>
+                  <Image source={{ uri: taskCongrats.bgUrl }} style={congratsStyles.rewardCardImg} resizeMode="cover" />
+                  <View style={congratsStyles.rewardCardTag}>
+                    <Text style={congratsStyles.rewardCardTagText}>1d</Text>
+                  </View>
+                </View>
+              )}
+              {taskCongrats.frameUrl && (
+                <View style={congratsStyles.rewardCard}>
+                  <Image source={{ uri: taskCongrats.frameUrl }} style={congratsStyles.rewardCardImg} resizeMode="cover" />
+                  <View style={congratsStyles.rewardCardTag}>
+                    <Text style={congratsStyles.rewardCardTagText}>1d</Text>
+                  </View>
+                </View>
+              )}
+            </View>
+
+            <Text style={congratsStyles.hint}>Rewards applied! Tap to dismiss</Text>
+          </View>
+        </TouchableOpacity>
+      )}
+
+      {/* Incoming battle invite popup — host only, auto-dismisses after 10s, anchored to bottom */}
+      {incomingBattleInvite && (
+        <View style={battleInvitePopup.overlay} pointerEvents="box-none">
+          <View style={battleInvitePopup.card}>
+            <Text style={battleInvitePopup.title}>⚔️ Battle Challenge!</Text>
+            <View style={battleInvitePopup.roomRow}>
+              {incomingBattleInvite.from_room_image_url ? (
+                <Image
+                  source={{ uri: incomingBattleInvite.from_room_image_url.startsWith('http')
+                    ? incomingBattleInvite.from_room_image_url
+                    : `${MEDIA_BASE}/${incomingBattleInvite.from_room_image_url.replace(/^\//, '')}` }}
+                  style={battleInvitePopup.avatar}
+                />
+              ) : (
+                <View style={[battleInvitePopup.avatar, battleInvitePopup.avatarFallback]}>
+                  <Text style={battleInvitePopup.avatarInitial}>
+                    {incomingBattleInvite.from_room_name[0]?.toUpperCase()}
+                  </Text>
+                </View>
+              )}
+              <Text style={battleInvitePopup.roomName} numberOfLines={2}>
+                {incomingBattleInvite.from_room_name}
+              </Text>
+            </View>
+            <Text style={battleInvitePopup.sub}>
+              {incomingBattleInvite.duration_minutes} min battle • Tap to accept or decline
+            </Text>
+            <View style={battleInvitePopup.btnRow}>
+              <TouchableOpacity
+                activeOpacity={0.85}
+                style={[battleInvitePopup.btn, battleInvitePopup.declineBtn]}
+                onPress={async () => {
+                  const id = incomingBattleInvite.invite_id;
+                  setIncomingBattleInvite(null);
+                  if (battleInviteTimerRef.current) clearTimeout(battleInviteTimerRef.current);
+                  try {
+                    const token = authStore.getToken();
+                    await fetch(`${BASE_URL}/battle/decline`, {
+                      method: 'POST',
+                      headers: { 'Content-Type': 'application/json', ...(token ? { Authorization: `Bearer ${token}` } : {}) },
+                      body: JSON.stringify({ invite_id: id }),
+                    });
+                  } catch {}
+                }}>
+                <Text style={battleInvitePopup.declineBtnText}>Decline</Text>
+              </TouchableOpacity>
+              <TouchableOpacity
+                activeOpacity={0.85}
+                style={[battleInvitePopup.btn, battleInvitePopup.acceptBtn]}
+                onPress={async () => {
+                  const id = incomingBattleInvite.invite_id;
+                  setIncomingBattleInvite(null);
+                  if (battleInviteTimerRef.current) clearTimeout(battleInviteTimerRef.current);
+                  try {
+                    const token = authStore.getToken();
+                    const r = await fetch(`${BASE_URL}/battle/accept`, {
+                      method: 'POST',
+                      headers: { 'Content-Type': 'application/json', ...(token ? { Authorization: `Bearer ${token}` } : {}) },
+                      body: JSON.stringify({ invite_id: id }),
+                    });
+                    const json = await r.json();
+                    if (json.success) {
+                      setSeatToast('Battle accepted!');
+                    } else {
+                      setSeatToast(json.message || 'Battle was cancelled.');
+                    }
+                    setTimeout(() => setSeatToast(null), 3000);
+                  } catch {}
+                }}>
+                <Text style={battleInvitePopup.acceptBtnText}>Accept</Text>
+              </TouchableOpacity>
+            </View>
+            <View style={battleInvitePopup.handle} />
+          </View>
+        </View>
+      )}
+
 
       {/* Exit / Minimize modal */}
       <Modal visible={showExitModal} transparent animationType="fade" onRequestClose={() => setShowExitModal(false)}>
@@ -747,12 +1050,161 @@ function SeatRequestBanner({ request, onAccept, onReject }: {
   );
 }
 
+function StageInviteBanner({ invite, onAccept, onReject }: {
+  invite: IncomingStageInvite;
+  onAccept: () => void;
+  onReject: () => void;
+}) {
+  const uri = resolveAvatar(invite.hostAvatarUrl);
+  return (
+    <View style={banner.container}>
+      {uri ? (
+        <Image source={{ uri }} style={banner.avatar} />
+      ) : (
+        <View style={[banner.avatar, banner.avatarFallback]}>
+          <Text style={banner.initial}>{invite.hostName[0]?.toUpperCase()}</Text>
+        </View>
+      )}
+      <View style={banner.info}>
+        <Text style={banner.name} numberOfLines={1}>{invite.hostName}</Text>
+        <Text style={banner.sub}>invited you to the stage</Text>
+      </View>
+      <TouchableOpacity onPress={onReject} style={banner.rejectBtn}>
+        <Ionicons name="close" size={18} color="#E14C57" />
+      </TouchableOpacity>
+      <TouchableOpacity onPress={onAccept} style={banner.acceptBtn}>
+        <LinearGradient colors={['#7A0EED', '#B50357']} start={{ x: 0, y: 0 }} end={{ x: 1, y: 0 }} style={banner.acceptGrad}>
+          <Text style={banner.acceptText}>Accept</Text>
+        </LinearGradient>
+      </TouchableOpacity>
+    </View>
+  );
+}
+
+const congratsStyles = StyleSheet.create({
+  overlay: {
+    ...StyleSheet.absoluteFillObject,
+    backgroundColor: 'rgba(0,0,0,0.6)',
+    zIndex: 998,
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingHorizontal: 28,
+  },
+  card: {
+    backgroundColor: '#FFFFFF',
+    borderRadius: 24,
+    paddingVertical: 28,
+    paddingHorizontal: 24,
+    alignItems: 'center',
+    width: '100%',
+    shadowColor: '#7A0EED',
+    shadowOpacity: 0.3,
+    shadowRadius: 20,
+    elevation: 12,
+  },
+  emoji: { fontSize: 48, marginBottom: 8 },
+  title: { fontSize: 22, fontWeight: '900', color: '#1C1E22', marginBottom: 4 },
+  sub: { fontSize: 14, color: '#60626A', textAlign: 'center', lineHeight: 20, marginBottom: 16 },
+  name: { fontWeight: '800', color: '#7A0EED' },
+  rewardRow: { flexDirection: 'row', gap: 12, marginBottom: 16 },
+  rewardCard: {
+    width: 72, height: 72, borderRadius: 14, overflow: 'hidden',
+    backgroundColor: '#E0DDED', position: 'relative',
+    borderWidth: 2, borderColor: '#C4B8E8',
+  },
+  rewardCardImg: { width: '100%', height: '100%' },
+  rewardCardTag: {
+    position: 'absolute', top: 4, right: 4,
+    backgroundColor: 'rgba(0,0,0,0.55)', borderRadius: 6,
+    paddingHorizontal: 5, paddingVertical: 1,
+  },
+  rewardCardTagText: { fontSize: 9, fontWeight: '800', color: '#FFFFFF' },
+  hint: { fontSize: 11, color: '#ABADB2', fontWeight: '500' },
+});
+
+const battleInvitePopup = StyleSheet.create({
+  overlay: {
+    position: 'absolute',
+    top: 0, bottom: 0, left: 0, right: 0,
+    zIndex: 999,
+    justifyContent: 'center',
+    alignItems: 'center',
+    backgroundColor: 'rgba(0,0,0,0.45)',
+  },
+  card: {
+    backgroundColor: '#FFFFFF',
+    borderRadius: 24,
+    paddingHorizontal: 24,
+    paddingTop: 24,
+    paddingBottom: 24,
+    alignItems: 'center',
+    width: '88%',
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 8 },
+    shadowOpacity: 0.2,
+    shadowRadius: 16,
+    elevation: 20,
+  },
+  handle: {
+    width: 40, height: 4, borderRadius: 2,
+    backgroundColor: '#E0DDED', marginTop: 16,
+  },
+  title: {
+    fontSize: 18, fontWeight: '800', color: '#1C1E22', marginBottom: 16,
+  },
+  roomRow: {
+    flexDirection: 'row', alignItems: 'center', gap: 12, marginBottom: 8, width: '100%',
+  },
+  avatar: {
+    width: 52, height: 52, borderRadius: 26,
+  },
+  avatarFallback: {
+    backgroundColor: '#EDE8F7', alignItems: 'center', justifyContent: 'center',
+  },
+  avatarInitial: {
+    fontSize: 20, fontWeight: '800', color: '#7A0EED',
+  },
+  roomName: {
+    flex: 1, fontSize: 15, fontWeight: '700', color: '#1C1E22',
+  },
+  sub: {
+    fontSize: 13, color: '#ABADB2', fontWeight: '500', marginBottom: 20,
+  },
+  btnRow: {
+    flexDirection: 'row', gap: 12, width: '100%',
+  },
+  btn: {
+    flex: 1, paddingVertical: 13, borderRadius: 14, alignItems: 'center',
+  },
+  declineBtn: {
+    backgroundColor: '#F5F3FF', borderWidth: 1.5, borderColor: '#E0DCF0',
+  },
+  declineBtnText: {
+    fontSize: 14, fontWeight: '700', color: '#7A0EED',
+  },
+  acceptBtn: {
+    backgroundColor: '#7A0EED',
+  },
+  acceptBtnText: {
+    fontSize: 14, fontWeight: '700', color: '#FFFFFF',
+  },
+});
+
 const styles = StyleSheet.create({
   root: { flex: 1, backgroundColor: 'transparent' },
   defaultBg: { flex: 1, backgroundColor: '#FFFFFF' },
   flex: { flex: 1 },
   bgOverlay: { backgroundColor: 'rgba(0,0,0,0.25)' },
   scrollContent: { paddingBottom: 8 },
+  stageWrap: {
+    position: 'relative',
+  },
+  battleOverlay: {
+    position: 'absolute',
+    left: 0,
+    right: 0,
+    zIndex: 6,
+  },
   chatArea: {
     flex: 1,
   },
@@ -791,6 +1243,14 @@ const styles = StyleSheet.create({
 });
 
 const banner = StyleSheet.create({
+  floatingWrap: {
+    position: 'absolute',
+    left: 0,
+    right: 0,
+    bottom: 160,
+    zIndex: 20,
+    elevation: 20,
+  },
   container: {
     flexDirection: 'row',
     alignItems: 'center',

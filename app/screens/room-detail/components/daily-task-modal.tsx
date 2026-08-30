@@ -20,7 +20,7 @@ const COIN_IMG = require('@/assets/tabs/coin.png');
 const { height: SCREEN_H } = Dimensions.get('window');
 const SHEET_HEIGHT = SCREEN_H * 0.55;
 
-type Tab = 'tasks' | 'top-hosts' | 'winners';
+type Tab = 'tasks' | 'top-gifters';
 
 type TaskItem = {
   task_id: string; title: string; description: string; type: 'daily' | 'weekly';
@@ -82,21 +82,11 @@ function TaskCard({ task }: { task: TaskItem }) {
           </Text>
         </View>
         <Text style={tab.taskDesc}>{task.description}</Text>
-        <View style={tab.rewardRow}>
-          {task.completed && <Text style={tab.claimedText}>✓ Reward applied</Text>}
-          {task.reward_bg_url && (
-            <View style={[tab.rewardChip, task.completed && { backgroundColor: '#E8F5E9', borderColor: '#4CAF50' }]}>
-              <Ionicons name="image-outline" size={11} color={task.completed ? '#4CAF50' : '#7A0EED'} />
-              <Text style={[tab.rewardChipText, task.completed && { color: '#4CAF50' }]}>BG</Text>
-            </View>
-          )}
-          {task.reward_frame_url && (
-            <View style={[tab.rewardChip, task.completed && { backgroundColor: '#E8F5E9', borderColor: '#4CAF50' }]}>
-              <Ionicons name="person-circle-outline" size={11} color={task.completed ? '#4CAF50' : '#7A0EED'} />
-              <Text style={[tab.rewardChipText, task.completed && { color: '#4CAF50' }]}>Frame</Text>
-            </View>
-          )}
-        </View>
+        {task.completed && (
+          <View style={tab.rewardRow}>
+            <Text style={tab.claimedText}>✓ Reward applied</Text>
+          </View>
+        )}
       </View>
     </View>
   );
@@ -140,43 +130,42 @@ function TasksTab({ roomId, refreshKey }: { roomId?: string; refreshKey?: number
         </View>
       )}
 
-      {/* Reward previews */}
+      {/* Rewards */}
       {dailyTasks.some(t => t.reward_bg_url || t.reward_frame_url) && (
         <View style={tab.rewardSection}>
           <Text style={tab.rewardSectionTitle}>Rewards</Text>
-          <Text style={tab.rewardSectionSub}>Complete the task to unlock</Text>
-          <View style={tab.rewardPreviews}>
+          <View style={tab.rewardCards}>
             {dailyTasks.map(task => {
               const bgUri = task.reward_bg_url ? `${MEDIA_BASE}/${task.reward_bg_url.replace(/^\//, '')}` : null;
               const frameUri = task.reward_frame_url ? `${MEDIA_BASE}/${task.reward_frame_url.replace(/^\//, '')}` : null;
               const unlocked = task.reward_claimed;
               if (!bgUri && !frameUri) return null;
               return (
-                <View key={task.task_id} style={tab.rewardPreviewRow}>
+                <View key={task.task_id} style={tab.rewardCardRow}>
                   {bgUri && (
-                    <View style={tab.rewardPreviewItem}>
-                      <View style={tab.rewardBgThumb}>
-                        <Image source={{ uri: bgUri }} style={tab.rewardBgImg} resizeMode="cover" />
-                        {!unlocked && (
-                          <View style={tab.rewardLockOverlay}>
-                            <Ionicons name="lock-closed" size={18} color="#fff" />
-                          </View>
-                        )}
+                    <View style={tab.rewardCard}>
+                      <Image source={{ uri: bgUri }} style={tab.rewardCardImg} resizeMode="cover" />
+                      {!unlocked && (
+                        <View style={tab.rewardCardLock}>
+                          <Ionicons name="lock-closed" size={14} color="#FFD700" />
+                        </View>
+                      )}
+                      <View style={tab.rewardCardTag}>
+                        <Text style={tab.rewardCardTagText}>1d</Text>
                       </View>
-                      <Text style={tab.rewardPreviewLabel}>Background</Text>
                     </View>
                   )}
                   {frameUri && (
-                    <View style={tab.rewardPreviewItem}>
-                      <View style={tab.rewardFrameThumb}>
-                        <Image source={{ uri: frameUri }} style={tab.rewardFrameImg} resizeMode="contain" />
-                        {!unlocked && (
-                          <View style={tab.rewardLockOverlay}>
-                            <Ionicons name="lock-closed" size={18} color="#fff" />
-                          </View>
-                        )}
+                    <View style={tab.rewardCard}>
+                      <Image source={{ uri: frameUri }} style={tab.rewardCardImg} resizeMode="cover" />
+                      {!unlocked && (
+                        <View style={tab.rewardCardLock}>
+                          <Ionicons name="lock-closed" size={14} color="#FFD700" />
+                        </View>
+                      )}
+                      <View style={tab.rewardCardTag}>
+                        <Text style={tab.rewardCardTagText}>1d</Text>
                       </View>
-                      <Text style={tab.rewardPreviewLabel}>Frame</Text>
                     </View>
                   )}
                 </View>
@@ -196,23 +185,23 @@ function TasksTab({ roomId, refreshKey }: { roomId?: string; refreshKey?: number
   );
 }
 
-// ── Top Hosts Tab ─────────────────────────────────────────────────────────────
+// ── Top Gifters Tab ──────────────────────────────────────────────────────────
 
-type TopHost = {
+type TopGifter = {
   id: string; full_name: string | null; username: string | null;
   avatar_url: string | null; total_coins: number;
 };
 
-function TopHostsTab() {
-  const [hosts, setHosts] = useState<TopHost[]>([]);
+function TopGiftersTab() {
+  const [gifters, setGifters] = useState<TopGifter[]>([]);
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
     const token = authStore.getToken();
     if (!token) { setLoading(false); return; }
-    fetch(`${BASE_URL}/tasks/top-hosts`, { headers: { Authorization: `Bearer ${token}` } })
+    fetch(`${BASE_URL}/tasks/top-gifters`, { headers: { Authorization: `Bearer ${token}` } })
       .then(r => r.json())
-      .then(j => { if (j.success) setHosts(j.data); })
+      .then(j => { if (j.success) setGifters(j.data); })
       .catch(() => {})
       .finally(() => setLoading(false));
   }, []);
@@ -223,10 +212,10 @@ function TopHostsTab() {
     </View>
   );
 
-  if (hosts.length === 0) return (
+  if (gifters.length === 0) return (
     <View style={{ flex: 1, alignItems: 'center', justifyContent: 'center', gap: 8 }}>
-      <Text style={{ fontSize: 36 }}>🏆</Text>
-      <Text style={{ color: '#ABADB2', fontSize: 14 }}>No data yet this week</Text>
+      <Text style={{ fontSize: 36 }}>🎁</Text>
+      <Text style={{ color: '#ABADB2', fontSize: 14 }}>No gifters yet this week</Text>
     </View>
   );
 
@@ -234,12 +223,12 @@ function TopHostsTab() {
 
   return (
     <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={{ paddingVertical: 12 }}>
-      <Text style={th.sectionLabel}>This week's top gifted hosts</Text>
-      {hosts.map((host, i) => {
-        const name = host.username ?? host.full_name ?? 'Host';
-        const uri = host.avatar_url ? `${MEDIA_BASE}/${host.avatar_url.replace(/^\//, '')}` : null;
+      <Text style={th.sectionLabel}>Top gifters this week</Text>
+      {gifters.map((g, i) => {
+        const name = g.username ?? g.full_name ?? 'User';
+        const uri = g.avatar_url ? `${MEDIA_BASE}/${g.avatar_url.replace(/^\//, '')}` : null;
         return (
-          <View key={host.id} style={th.row}>
+          <View key={g.id} style={th.row}>
             <Text style={th.rank}>{MEDAL[i] ?? `#${i + 1}`}</Text>
             <View style={th.avatar}>
               {uri
@@ -250,74 +239,11 @@ function TopHostsTab() {
             </View>
             <View style={{ flex: 1 }}>
               <Text style={th.name}>{name}</Text>
-              <Text style={th.sub}>received this week</Text>
+              <Text style={th.sub}>gifted this week</Text>
             </View>
             <View style={th.coinsBadge}>
-              <Text style={th.coinsText}>🪙 {formatCoins(Number(host.total_coins))}</Text>
+              <Text style={th.coinsText}>🪙 {formatCoins(Number(g.total_coins))}</Text>
             </View>
-          </View>
-        );
-      })}
-    </ScrollView>
-  );
-}
-
-// ── Winners Tab ───────────────────────────────────────────────────────────────
-
-type Winner = {
-  id: string; full_name: string | null; username: string | null;
-  avatar_url: string | null; completed_at: string | null;
-  task_title: string;
-};
-
-function WinnersTab() {
-  const [winners, setWinners] = useState<Winner[]>([]);
-  const [loading, setLoading] = useState(true);
-
-  useEffect(() => {
-    const token = authStore.getToken();
-    if (!token) { setLoading(false); return; }
-    fetch(`${BASE_URL}/tasks/winners`, { headers: { Authorization: `Bearer ${token}` } })
-      .then(r => r.json())
-      .then(j => { if (j.success) setWinners(j.data); })
-      .catch(() => {})
-      .finally(() => setLoading(false));
-  }, []);
-
-  if (loading) return (
-    <View style={{ flex: 1, alignItems: 'center', justifyContent: 'center' }}>
-      <Text style={{ color: '#ABADB2', fontSize: 14 }}>Loading…</Text>
-    </View>
-  );
-
-  if (winners.length === 0) return (
-    <View style={{ flex: 1, alignItems: 'center', justifyContent: 'center', gap: 8 }}>
-      <Text style={{ fontSize: 36 }}>🎉</Text>
-      <Text style={{ color: '#ABADB2', fontSize: 14 }}>No winners yet this week</Text>
-    </View>
-  );
-
-  return (
-    <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={{ paddingVertical: 12 }}>
-      <Text style={th.sectionLabel}>Hosts who completed tasks this week</Text>
-      {winners.map((w, i) => {
-        const name = w.username ?? w.full_name ?? 'Host';
-        const uri = w.avatar_url ? `${MEDIA_BASE}/${w.avatar_url.replace(/^\//, '')}` : null;
-        return (
-          <View key={`${w.id}_${i}`} style={th.row}>
-            <Text style={th.rank}>🏅</Text>
-            <View style={th.avatar}>
-              {uri
-                ? <Image source={{ uri }} style={th.avatarImg} />
-                : <View style={[th.avatarImg, { backgroundColor: '#B50357', alignItems: 'center', justifyContent: 'center' }]}>
-                    <Text style={{ color: '#fff', fontWeight: '800', fontSize: 16 }}>{name[0]?.toUpperCase()}</Text>
-                  </View>}
-            </View>
-            <View style={{ flex: 1 }}>
-              <Text style={th.name}>{name}</Text>
-              <Text style={th.sub}>{w.task_title}</Text>
-            </View>
-            <Text style={th.sub}>{w.completed_at ? new Date(w.completed_at).toLocaleDateString() : ''}</Text>
           </View>
         );
       })}
@@ -365,8 +291,7 @@ export function DailyTaskModal({ visible, onClose, roomId, refreshKey }: Props) 
 
   const TABS: { key: Tab; label: string }[] = [
     { key: 'tasks', label: 'Tasks' },
-    { key: 'top-hosts', label: 'Top hosts' },
-    { key: 'winners', label: 'Winners' },
+    { key: 'top-gifters', label: 'Top Gifters' },
   ];
 
   return (
@@ -386,8 +311,7 @@ export function DailyTaskModal({ visible, onClose, roomId, refreshKey }: Props) 
         </View>
         <View style={s.content}>
           {activeTab === 'tasks' && <TasksTab roomId={roomId} refreshKey={refreshKey} />}
-          {activeTab === 'top-hosts' && <TopHostsTab />}
-          {activeTab === 'winners' && <WinnersTab />}
+          {activeTab === 'top-gifters' && <TopGiftersTab />}
         </View>
       </Animated.View>
     </Modal>
@@ -449,26 +373,25 @@ const tab = StyleSheet.create({
     backgroundColor: '#F2EAFF', borderRadius: 20, paddingHorizontal: 7, paddingVertical: 3,
   },
   rewardChipText: { fontSize: 10, fontWeight: '700', color: '#7A0EED' },
-  rewardSection: { paddingHorizontal: 20, paddingTop: 20, paddingBottom: 8 },
-  rewardSectionTitle: { fontSize: 16, fontWeight: '800', color: '#1C1E22', marginBottom: 2 },
-  rewardSectionSub: { fontSize: 12, color: '#ABADB2', marginBottom: 12 },
-  rewardPreviews: { gap: 12 },
-  rewardPreviewRow: { flexDirection: 'row', gap: 12 },
-  rewardPreviewItem: { alignItems: 'center', gap: 5 },
-  rewardBgThumb: {
-    width: 100, height: 64, borderRadius: 10, overflow: 'hidden',
-    backgroundColor: '#F0EDF8', position: 'relative',
+  rewardSection: { paddingHorizontal: 20, paddingTop: 14, paddingBottom: 8 },
+  rewardSectionTitle: { fontSize: 15, fontWeight: '800', color: '#1C1E22', marginBottom: 10 },
+  rewardCards: { flexDirection: 'row', gap: 10, flexWrap: 'wrap' },
+  rewardCardRow: { flexDirection: 'row', gap: 8 },
+  rewardCard: {
+    width: 80, height: 80, borderRadius: 14, overflow: 'hidden',
+    backgroundColor: '#E0DDED', position: 'relative',
+    borderWidth: 2, borderColor: '#C4B8E8',
   },
-  rewardBgImg: { width: '100%', height: '100%' },
-  rewardFrameThumb: {
-    width: 60, height: 60, borderRadius: 30, overflow: 'hidden',
-    backgroundColor: '#F0EDF8', position: 'relative',
-  },
-  rewardFrameImg: { width: '100%', height: '100%' },
-  rewardLockOverlay: {
+  rewardCardImg: { width: '100%', height: '100%' },
+  rewardCardLock: {
     ...StyleSheet.absoluteFillObject,
     backgroundColor: 'rgba(0,0,0,0.45)',
     alignItems: 'center', justifyContent: 'center',
   },
-  rewardPreviewLabel: { fontSize: 11, color: '#7A7A8A', fontWeight: '600' },
+  rewardCardTag: {
+    position: 'absolute', top: 3, right: 3,
+    backgroundColor: 'rgba(0,0,0,0.55)', borderRadius: 6,
+    paddingHorizontal: 5, paddingVertical: 1,
+  },
+  rewardCardTagText: { fontSize: 8, fontWeight: '800', color: '#FFFFFF' },
 });

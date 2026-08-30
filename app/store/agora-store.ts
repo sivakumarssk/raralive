@@ -7,6 +7,7 @@ import {
 
 import { BASE_URL } from '@/services/api';
 import { authStore } from '@/store/auth-store';
+import { socketStore } from '@/store/socket-store';
 
 const AGORA_APP_ID = '95876516c6294152abaffa43ec4bb40d';
 
@@ -249,8 +250,8 @@ export const agoraStore = {
       releaseEngine();
       state.isMuted = true;
       state.joined = false;
-      // Keep channelId and userId for rejoin on unmute
       notify();
+      socketStore.emitMuteState(true);
     } else {
       // Currently muted → unmute = rejoin channel
       const channelId = state.channelId;
@@ -260,6 +261,7 @@ export const agoraStore = {
       state.isMuted = false;
       state.channelId = null; // clear so join() doesn't skip
       notify();
+      socketStore.emitMuteState(false);
       await agoraStore.join(channelId, userId);
     }
   },

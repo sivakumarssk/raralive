@@ -1,9 +1,11 @@
 import { Ionicons } from '@expo/vector-icons';
 import { LinearGradient } from 'expo-linear-gradient';
+import { useState } from 'react';
 import {
   Dimensions,
   FlatList,
   Image,
+  RefreshControl,
   StyleSheet,
   Text,
   TouchableOpacity,
@@ -25,17 +27,75 @@ export type LiveBroadcaster = {
   imageUri?: string;
   isLive: boolean;
   isFavorite?: boolean;
+  isVerified?: boolean;
+  viewerCount?: number;
+  statusLine?: string;
 };
+
+export type LiveFilter = 'popular' | 'nearby' | 'new' | 'following';
 
 type LiveScreenProps = {
   broadcasters: LiveBroadcaster[];
   onGoLive: () => void;
   onBroadcasterPress: (b: LiveBroadcaster) => void;
+  onRefresh?: () => void;
+  refreshing?: boolean;
+  /** The current user's own active broadcast, if they're live right now — shown as a pinned banner. */
+  myLiveBroadcast?: LiveBroadcaster | null;
+  onResumeMyLive?: () => void;
 };
+
+// ── Filter tabs ───────────────────────────────────────────────────────────────
+
+const FILTERS: { key: LiveFilter; label: string }[] = [
+  { key: 'popular', label: 'Popular' },
+  { key: 'nearby', label: 'Nearby' },
+  { key: 'new', label: 'New' },
+  { key: 'following', label: 'Following' },
+];
+
+function FilterTabs({ active, onChange }: { active: LiveFilter; onChange: (f: LiveFilter) => void }) {
+  return (
+    <View style={filter.row}>
+      {FILTERS.map(f => {
+        const isActive = f.key === active;
+        return (
+          <TouchableOpacity
+            key={f.key}
+            onPress={() => onChange(f.key)}
+            activeOpacity={0.85}
+            style={filter.pillWrap}>
+            {isActive ? (
+              <LinearGradient
+                colors={['#7A0EED', '#B50357']}
+                start={{ x: 0, y: 0.5 }}
+                end={{ x: 1, y: 0.5 }}
+                style={filter.pillActive}>
+                <Text style={filter.labelActive}>{f.label}</Text>
+              </LinearGradient>
+            ) : (
+              <View style={filter.pill}>
+                <Text style={filter.label}>{f.label}</Text>
+              </View>
+            )}
+          </TouchableOpacity>
+        );
+      })}
+    </View>
+  );
+}
+
+function formatViewerCount(n: number): string {
+  if (n >= 1000) return `${(n / 1000).toFixed(n % 1000 === 0 ? 0 : 1)}k`;
+  return String(n);
+}
 
 // ── Broadcaster Card ──────────────────────────────────────────────────────────
 
-function BroadcasterCard({ item, onPress }: { item: LiveBroadcaster; onPress: () => void }) {
+function BroadcasterCard({ item, onPress }: {
+  item: LiveBroadcaster;
+  onPress: () => void;
+}) {
   return (
     <TouchableOpacity
       onPress={onPress}
@@ -61,13 +121,27 @@ function BroadcasterCard({ item, onPress }: { item: LiveBroadcaster; onPress: ()
         <Text style={card.liveText}>LIVE</Text>
       </View>
 
-      <View style={card.info}>
-        <View style={card.langRow}>
-          <Ionicons name="language" size={10} color="rgba(255,255,255,0.8)" />
-          <Text style={card.langText} numberOfLines={1}>{item.languages.join(', ')}</Text>
+      {typeof item.viewerCount === 'number' && (
+        <View style={card.viewerBadge}>
+          <Ionicons name="eye" size={10} color="#FFFFFF" />
+          <Text style={card.viewerText}>{formatViewerCount(item.viewerCount)}</Text>
         </View>
+      )}
+
+      <View style={card.info}>
+        {item.statusLine ? (
+          <Text style={card.statusLine} numberOfLines={1}>{item.statusLine}</Text>
+        ) : item.languages.length > 0 ? (
+          <View style={card.langRow}>
+            <Ionicons name="language" size={10} color="rgba(255,255,255,0.8)" />
+            <Text style={card.langText} numberOfLines={1}>{item.languages.join(', ')}</Text>
+          </View>
+        ) : null}
         <View style={card.nameRow}>
           <Text style={card.name} numberOfLines={1}>{item.name}</Text>
+          {item.isVerified && (
+            <Ionicons name="checkmark-circle" size={13} color="#4FC3F7" style={card.verifiedIcon} />
+          )}
           {item.isFavorite && <Text style={card.heart}> ❤️</Text>}
         </View>
       </View>
@@ -77,7 +151,11 @@ function BroadcasterCard({ item, onPress }: { item: LiveBroadcaster; onPress: ()
 
 // ── Main Screen ───────────────────────────────────────────────────────────────
 
-export function LiveScreen({ broadcasters, onGoLive, onBroadcasterPress }: LiveScreenProps) {
+export function LiveScreen({
+  broadcasters, onGoLive, onBroadcasterPress, onRefresh, refreshing = false, myLiveBroadcast, onResumeMyLive,
+}: LiveScreenProps) {
+  const [activeFilter, setActiveFilter] = useState<LiveFilter>('popular');
+
   return (
     <View style={s.container}>
       {/* Header row */}
@@ -86,33 +164,84 @@ export function LiveScreen({ broadcasters, onGoLive, onBroadcasterPress }: LiveS
           <Text style={s.title}>Live Now</Text>
           <Text style={s.subtitle}>Broadcasters</Text>
         </View>
-        <TouchableOpacity onPress={onGoLive} activeOpacity={0.88} style={s.goLiveBtn}>
-          <LinearGradient
-            colors={['#7A0EED', '#B50357']}
-            start={{ x: 0, y: 0.5 }}
-            end={{ x: 1, y: 0.5 }}
-            style={s.goLiveGrad}>
-            <Ionicons name="videocam" size={13} color="#FFFFFF" />
-            <Text style={s.goLiveText}>GO LIVE</Text>
-          </LinearGradient>
-        </TouchableOpacity>
+        <View style={s.headerActions}>
+          {onRefresh && (
+            <TouchableOpacity onPress={onRefresh} activeOpacity={0.85} style={s.refreshBtn} disabled={refreshing}>
+              <Ionicons name="refresh" size={16} color="#7A0EED" />
+            </TouchableOpacity>
+          )}
+          <TouchableOpacity onPress={onGoLive} activeOpacity={0.88} style={s.goLiveBtn}>
+            <LinearGradient
+              colors={['#7A0EED', '#B50357']}
+              start={{ x: 0, y: 0.5 }}
+              end={{ x: 1, y: 0.5 }}
+              style={s.goLiveGrad}>
+              <Ionicons name="videocam" size={13} color="#FFFFFF" />
+              <Text style={s.goLiveText}>GO LIVE</Text>
+            </LinearGradient>
+          </TouchableOpacity>
+        </View>
       </View>
 
+      {myLiveBroadcast && (
+        <TouchableOpacity onPress={onResumeMyLive} activeOpacity={0.9} style={s.myLiveBanner}>
+          <LinearGradient
+            colors={['#7A0EED', '#B50357']}
+            start={{ x: 0, y: 0 }}
+            end={{ x: 1, y: 0 }}
+            style={s.myLiveBannerGrad}>
+            {myLiveBroadcast.imageUri ? (
+              <Image source={{ uri: myLiveBroadcast.imageUri }} style={s.myLiveAvatar} />
+            ) : (
+              <View style={[s.myLiveAvatar, s.myLiveAvatarFallback]}>
+                <Ionicons name="person" size={16} color="#FFFFFF" />
+              </View>
+            )}
+            <View style={s.myLiveTextWrap}>
+              <Text style={s.myLiveTitle}>You're Live</Text>
+              <Text style={s.myLiveSubtitle}>Tap to return to your broadcast</Text>
+            </View>
+            <View style={s.myLiveBadge}>
+              <View style={s.liveDotSmall} />
+              <Text style={s.myLiveBadgeText}>LIVE</Text>
+            </View>
+            <Ionicons name="chevron-forward" size={16} color="rgba(255,255,255,0.85)" />
+          </LinearGradient>
+        </TouchableOpacity>
+      )}
+
+      <FilterTabs active={activeFilter} onChange={setActiveFilter} />
+
       {broadcasters.length === 0 ? (
-        <View style={s.empty}>
-          <Ionicons name="radio-outline" size={40} color="#D8D3EC" />
-          <Text style={s.emptyText}>No one is live right now</Text>
-        </View>
+        <FlatList
+          key="live-empty"
+          data={[]}
+          keyExtractor={() => 'empty'}
+          renderItem={null}
+          refreshControl={onRefresh ? <RefreshControl refreshing={refreshing} onRefresh={onRefresh} colors={['#7A0EED']} tintColor="#7A0EED" /> : undefined}
+          contentContainerStyle={s.emptyScrollContent}
+          ListEmptyComponent={
+            <View style={s.empty}>
+              <Ionicons name="radio-outline" size={40} color="#D8D3EC" />
+              <Text style={s.emptyText}>No one is live right now</Text>
+            </View>
+          }
+        />
       ) : (
         <FlatList
+          key="live-grid"
           data={broadcasters}
           keyExtractor={b => b.id}
           numColumns={2}
           columnWrapperStyle={s.row}
           contentContainerStyle={s.grid}
           showsVerticalScrollIndicator={false}
+          refreshControl={onRefresh ? <RefreshControl refreshing={refreshing} onRefresh={onRefresh} colors={['#7A0EED']} tintColor="#7A0EED" /> : undefined}
           renderItem={({ item }) => (
-            <BroadcasterCard item={item} onPress={() => onBroadcasterPress(item)} />
+            <BroadcasterCard
+              item={item}
+              onPress={() => onBroadcasterPress(item)}
+            />
           )}
           ListFooterComponent={<View style={{ height: 100 }} />}
         />
@@ -145,6 +274,80 @@ const s = StyleSheet.create({
     fontWeight: '500',
     marginTop: 1,
   },
+  headerActions: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+  },
+  refreshBtn: {
+    width: 32,
+    height: 32,
+    borderRadius: 16,
+    backgroundColor: '#F0EAFF',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  myLiveBanner: {
+    marginHorizontal: CARD_PADDING,
+    marginBottom: 12,
+    borderRadius: 16,
+    overflow: 'hidden',
+    shadowColor: '#7A0EED',
+    shadowOpacity: 0.3,
+    shadowRadius: 10,
+    shadowOffset: { width: 0, height: 4 },
+    elevation: 5,
+  },
+  myLiveBannerGrad: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
+    paddingHorizontal: 14,
+    paddingVertical: 12,
+  },
+  myLiveAvatar: {
+    width: 38,
+    height: 38,
+    borderRadius: 19,
+  },
+  myLiveAvatarFallback: {
+    backgroundColor: 'rgba(255,255,255,0.2)',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  myLiveTextWrap: { flex: 1, gap: 1 },
+  myLiveTitle: {
+    fontSize: 14,
+    fontWeight: '800',
+    color: '#FFFFFF',
+    letterSpacing: -0.1,
+  },
+  myLiveSubtitle: {
+    fontSize: 11,
+    fontWeight: '500',
+    color: 'rgba(255,255,255,0.85)',
+  },
+  myLiveBadge: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 3,
+    backgroundColor: 'rgba(255,255,255,0.2)',
+    borderRadius: 20,
+    paddingHorizontal: 7,
+    paddingVertical: 3,
+  },
+  liveDotSmall: {
+    width: 5,
+    height: 5,
+    borderRadius: 3,
+    backgroundColor: '#FF3B3B',
+  },
+  myLiveBadgeText: {
+    fontSize: 9,
+    fontWeight: '800',
+    color: '#FFFFFF',
+    letterSpacing: 0.4,
+  },
   goLiveBtn: {
     borderRadius: 20,
     overflow: 'hidden',
@@ -169,6 +372,7 @@ const s = StyleSheet.create({
   },
   grid: { paddingHorizontal: CARD_PADDING },
   row: { gap: CARD_GAP, marginBottom: CARD_GAP },
+  emptyScrollContent: { flexGrow: 1 },
   empty: {
     flex: 1,
     alignItems: 'center',
@@ -205,6 +409,30 @@ const card = StyleSheet.create({
   liveBadge: {
     position: 'absolute',
     top: 8,
+    left: 8,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 3,
+    backgroundColor: '#FF3B3B',
+    borderRadius: 6,
+    paddingHorizontal: 6,
+    paddingVertical: 3,
+  },
+  liveDot: {
+    width: 4,
+    height: 4,
+    borderRadius: 2,
+    backgroundColor: '#FFFFFF',
+  },
+  liveText: {
+    color: '#FFFFFF',
+    fontSize: 9,
+    fontWeight: '800',
+    letterSpacing: 0.4,
+  },
+  viewerBadge: {
+    position: 'absolute',
+    top: 8,
     right: 8,
     flexDirection: 'row',
     alignItems: 'center',
@@ -214,17 +442,10 @@ const card = StyleSheet.create({
     paddingHorizontal: 7,
     paddingVertical: 3,
   },
-  liveDot: {
-    width: 5,
-    height: 5,
-    borderRadius: 3,
-    backgroundColor: '#FF3B3B',
-  },
-  liveText: {
+  viewerText: {
     color: '#FFFFFF',
     fontSize: 10,
     fontWeight: '700',
-    letterSpacing: 0.4,
   },
   info: {
     position: 'absolute',
@@ -243,6 +464,11 @@ const card = StyleSheet.create({
     fontSize: 10,
     fontWeight: '500',
   },
+  statusLine: {
+    color: 'rgba(255,255,255,0.85)',
+    fontSize: 10,
+    fontWeight: '500',
+  },
   nameRow: { flexDirection: 'row', alignItems: 'center' },
   name: {
     color: '#FFFFFF',
@@ -251,5 +477,37 @@ const card = StyleSheet.create({
     letterSpacing: -0.2,
     flexShrink: 1,
   },
+  verifiedIcon: { marginLeft: 3 },
   heart: { fontSize: 12 },
+});
+
+const filter = StyleSheet.create({
+  row: {
+    flexDirection: 'row',
+    gap: 8,
+    paddingHorizontal: CARD_PADDING,
+    paddingBottom: 14,
+  },
+  pillWrap: { borderRadius: 18, overflow: 'hidden' },
+  pill: {
+    paddingHorizontal: 14,
+    paddingVertical: 7,
+    borderRadius: 18,
+    backgroundColor: '#FFFFFF',
+  },
+  pillActive: {
+    paddingHorizontal: 14,
+    paddingVertical: 7,
+    borderRadius: 18,
+  },
+  label: {
+    fontSize: 12,
+    fontWeight: '600',
+    color: '#8B8D96',
+  },
+  labelActive: {
+    fontSize: 12,
+    fontWeight: '700',
+    color: '#FFFFFF',
+  },
 });

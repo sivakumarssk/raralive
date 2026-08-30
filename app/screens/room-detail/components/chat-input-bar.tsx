@@ -19,9 +19,13 @@ type ChatInputBarProps = {
   onCoinPress?: () => void;
   onBattlePress?: () => void;
   hasRoomBg?: boolean;
+  showBattle?: boolean;
+  /** Bumping this (e.g. with an incrementing counter) replaces the current draft with prefillText and focuses the input — used for "Mention/Reply". */
+  prefillText?: string;
+  prefillKey?: number;
 };
 
-export function ChatInputBar({ onSend, onGiftOpen, onCoinPress, onBattlePress, hasRoomBg }: ChatInputBarProps) {
+export function ChatInputBar({ onSend, onGiftOpen, onCoinPress, onBattlePress, hasRoomBg, showBattle = true, prefillText, prefillKey }: ChatInputBarProps) {
   const [text, setText] = useState('');
   const [focused, setFocused] = useState(false);
   const inputRef = useRef<TextInput>(null);
@@ -33,6 +37,13 @@ export function ChatInputBar({ onSend, onGiftOpen, onCoinPress, onBattlePress, h
     });
     return () => sub.remove();
   }, []);
+
+  useEffect(() => {
+    if (prefillKey === undefined || prefillText === undefined) return;
+    setText(prefillText);
+    inputRef.current?.focus();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [prefillKey]);
 
   const handleSend = () => {
     if (!text.trim()) return;
@@ -71,7 +82,7 @@ export function ChatInputBar({ onSend, onGiftOpen, onCoinPress, onBattlePress, h
           </LinearGradient>
         </TouchableOpacity>
 
-{!focused && (
+{!focused && showBattle && (
           <TouchableOpacity onPress={onBattlePress} activeOpacity={0.85} style={bar.giftBtn}>
             <Image source={BATTLE_IMG} style={bar.battleImg} />
           </TouchableOpacity>

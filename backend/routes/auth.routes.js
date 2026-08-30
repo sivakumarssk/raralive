@@ -18,6 +18,9 @@ router.get('/me', authenticate, authController.getMe);
 router.patch('/profile', authenticate, uploadProfile.fields([{ name: 'avatar', maxCount: 1 }, { name: 'cover', maxCount: 1 }]), authController.completeProfile);
 router.patch('/language', authenticate, authController.setLanguage);
 
+// Public user profile
+router.get('/users/:userId', authController.getPublicUser);
+
 // Follow / unfollow
 router.post('/follow/:userId',   authenticate, authController.followUser);
 router.delete('/follow/:userId', authenticate, authController.unfollowUser);

@@ -53,6 +53,22 @@ async function creditCoins(userId, coins, description, adminId = null, refId = n
   }
 }
 
+// Gems have no ledger table of their own — mirrors the existing room-gift
+// crediting in socket/index.js processGift(), which also updates
+// wallets.gems directly with no wallet_transactions row (that table's
+// schema is coins-only: `coins INTEGER CHECK (coins > 0)`, so a 0/gems-only
+// entry isn't representable there).
+async function creditGems(userId, gems) {
+  const result = await db.query(
+    `INSERT INTO wallets (user_id, gems)
+     VALUES ($1, $2)
+     ON CONFLICT (user_id) DO UPDATE SET gems = wallets.gems + $2, updated_at = NOW()
+     RETURNING gems`,
+    [userId, gems]
+  );
+  return result.rows[0].gems;
+}
+
 async function debitCoins(userId, coins, description, refId = null) {
   const client = await db.pool.connect();
   try {
@@ -101,4 +117,4 @@ async function getTransactions(userId, { limit = 20, offset = 0 } = {}) {
   return { rows: result.rows, total: parseInt(count.rows[0].count, 10) };
 }
 
-module.exports = { getOrCreateWallet, getWallet, creditCoins, debitCoins, getTransactions };
+module.exports = { getOrCreateWallet, getWallet, creditCoins, creditGems, debitCoins, getTransactions };
