@@ -18,6 +18,8 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 
 import { BASE_URL, MEDIA_BASE } from '@/services/api';
 import { authStore } from '@/store/auth-store';
+import { UserLevelBadge } from '@/components/UserLevel';
+import { getUserLevel } from '@/utils/userLevel';
 
 const SCREEN_W  = Dimensions.get('window').width;
 const COVER_H   = 200;
@@ -35,6 +37,7 @@ type Profile = {
   followers_count: number;
   following_count: number;
   posts_count: number;
+  coins_gifted: number;
 };
 
 type PostMedia = { id: string; media_url: string; media_type: 'photo' | 'video' };
@@ -209,6 +212,10 @@ export default function UserProfilePage() {
               : <LinearGradient colors={['#7A0EED', '#B50357']} style={s.avatar}>
                   <Text style={s.avatarInit}>{initials}</Text>
                 </LinearGradient>}
+            {/* Level badge floating at bottom-centre of avatar — same placement as own profile */}
+            <View style={s.levelBadgeAbs}>
+              <UserLevelBadge size="xl" level={getUserLevel(profile.coins_gifted)} />
+            </View>
           </View>
           <View style={s.statsRow}>
             <Stat value={profile.followers_count} label="Followers" />
@@ -353,7 +360,7 @@ const s = StyleSheet.create({
     flexDirection: 'row', alignItems: 'center',
     paddingHorizontal: 16, marginTop: -(AVATAR_SZ / 2), gap: 12,
   },
-  avatarWrap: { width: AVATAR_SZ, height: AVATAR_SZ },
+  avatarWrap: { position: 'relative', width: AVATAR_SZ, height: AVATAR_SZ },
   avatar: {
     width: AVATAR_SZ, height: AVATAR_SZ,
     borderRadius: AVATAR_SZ / 2,
@@ -369,6 +376,7 @@ const s = StyleSheet.create({
 
   // name block
   nameBlock:   { paddingHorizontal: 18, marginTop: 48, gap: 4 },
+  levelBadgeAbs: { position: 'absolute', bottom: -65, left: (AVATAR_SZ - 100) / 2 },
   displayName: { fontSize: 19, fontWeight: '800', color: '#1C1E22' },
   username:    { fontSize: 13, color: '#7A0EED', fontWeight: '600' },
   genderBadge: {

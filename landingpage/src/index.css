@@ -1,0 +1,40 @@
+@import "tailwindcss";
+
+@theme {
+  --font-sans: "Poppins", system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  --color-ink: #0d0716;
+  --color-ink-2: #160c26;
+  --color-card: #1d1231;
+  --color-muted: #b7aac9;
+  --color-brand-purple: #6d28d9;
+  --color-brand-pink: #db2777;
+  --color-brand-orange: #f97316;
+}
+
+@layer base {
+  html { scroll-behavior: smooth; }
+  body { @apply bg-ink text-[#f4effb] antialiased; }
+}
+
+@utility bg-brand {
+  background-image: linear-gradient(120deg, #6d28d9 0%, #db2777 55%, #f97316 100%);
+}
+
+@utility text-brand {
+  background-image: linear-gradient(120deg, #a78bfa 0%, #f472b6 50%, #fb923c 100%);
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+}
+
+/* Long-form legal copy */
+.prose-legal h2 { @apply mt-10 mb-3 text-xl font-semibold text-white; }
+.prose-legal h3 { @apply mt-6 mb-2 text-base font-semibold text-white; }
+.prose-legal p { @apply mb-3 text-[#d9cfe6] leading-relaxed; }
+.prose-legal ul { @apply mb-4 ml-5 list-disc space-y-1.5 text-[#d9cfe6]; }
+.prose-legal ol { @apply mb-4 ml-5 list-decimal space-y-1.5 text-[#d9cfe6]; }
+.prose-legal a { @apply text-pink-300 hover:underline; }
+.prose-legal strong { @apply text-white; }
+.prose-legal table { @apply mb-5 w-full border-collapse text-sm; }
+.prose-legal th, .prose-legal td { @apply border border-white/10 px-3 py-2.5 text-left align-top text-[#d9cfe6]; }
+.prose-legal th { @apply bg-card font-semibold text-white; }

@@ -27,6 +27,8 @@ export type BattleStageInfo = {
   toRoomId?: string;
   fromHostUserId?: string;
   toHostUserId?: string;
+  /** 'gifting' battles show each stage profile's coin total; 'normal' battles don't. */
+  mode?: 'normal' | 'gifting';
 };
 
 type RoomStageProps = {
@@ -45,6 +47,7 @@ type RoomStageProps = {
   coinsByUserId?: Map<string, number>;
   hasRoomBg?: boolean;
   rewardFrameUrl?: string | null;
+  onAvatarPress?: (userId: string, userName: string, avatarUrl: string | null, isRoomHost: boolean, slotIndex?: number) => void;
 };
 
 function resolveAvatar(url: string | null | undefined): string | undefined {
@@ -67,7 +70,7 @@ function CoinBadge({ coins }: { coins: number }) {
   );
 }
 
-function HostSlot({ hostInfo, isHost, isMuted, onToggleMute, onLayout, coins, showCoins, frameUrl, hasRoomBg }: {
+function HostSlot({ hostInfo, isHost, isMuted, onToggleMute, onLayout, coins, showCoins, frameUrl, hasRoomBg, onPress }: {
   hostInfo: HostInfo;
   isHost: boolean;
   isMuted?: boolean;
@@ -77,6 +80,7 @@ function HostSlot({ hostInfo, isHost, isMuted, onToggleMute, onLayout, coins, sh
   showCoins?: boolean;
   frameUrl?: string | null;
   hasRoomBg?: boolean;
+  onPress?: () => void;
 }) {
   const avatarContent = (
     <>
@@ -124,10 +128,10 @@ function HostSlot({ hostInfo, isHost, isMuted, onToggleMute, onLayout, coins, sh
           {frameUrl && <Image source={{ uri: frameUrl }} style={stage.frameOverlay} resizeMode="contain" />}
         </TouchableOpacity>
       ) : (
-        <View ref={measureLayout} style={ringStyle}>
+        <TouchableOpacity ref={measureLayout} onPress={onPress} activeOpacity={onPress ? 0.8 : 1} disabled={!onPress} style={ringStyle}>
           {avatarContent}
           {frameUrl && <Image source={{ uri: frameUrl }} style={stage.frameOverlay} resizeMode="contain" />}
-        </View>
+        </TouchableOpacity>
       )}
       <Text style={nameStyle} numberOfLines={1}>
         {hostInfo.isOnline ? hostInfo.name : 'Offline'}
@@ -137,7 +141,7 @@ function HostSlot({ hostInfo, isHost, isMuted, onToggleMute, onLayout, coins, sh
   );
 }
 
-function OccupiedSlot({ slot, isMe, isMuted, onToggleMute, onLayout, coins, showCoins, hasRoomBg }: {
+function OccupiedSlot({ slot, isMe, isMuted, onToggleMute, onLayout, coins, showCoins, hasRoomBg, onPress }: {
   slot: SeatSlot;
   isMe?: boolean;
   isMuted?: boolean;
@@ -146,6 +150,7 @@ function OccupiedSlot({ slot, isMe, isMuted, onToggleMute, onLayout, coins, show
   coins?: number;
   showCoins?: boolean;
   hasRoomBg?: boolean;
+  onPress?: () => void;
 }) {
   const uri = resolveAvatar(slot.avatarUrl);
   const avatar = uri ? (
@@ -179,14 +184,14 @@ function OccupiedSlot({ slot, isMe, isMuted, onToggleMute, onLayout, coins, show
           )}
         </TouchableOpacity>
       ) : (
-        <View ref={measureLayout} style={ringStyle}>
+        <TouchableOpacity ref={measureLayout} onPress={onPress} activeOpacity={onPress ? 0.8 : 1} disabled={!onPress} style={ringStyle}>
           {avatar}
           {isMuted && (
             <View style={stage.muteBadge}>
               <Ionicons name="mic-off" size={10} color="#FFFFFF" />
             </View>
           )}
-        </View>
+        </TouchableOpacity>
       )}
       <Text style={nameStyle} numberOfLines={1}>{slot.userName}</Text>
       {showCoins && <CoinBadge coins={coins ?? 0} />}
@@ -223,13 +228,16 @@ const MEMBER_INDICES = [1, 2, 3, 4, 5, 6, 7];
 export function RoomStage({
   hostInfo, seats, isHost, hideEmptySlots, onRequestSeat,
   myUserId, onToggleMute, isHostMuted, onSlotLayout, hostUserId,
-  battleInfo, coinsByUserId, hasRoomBg, rewardFrameUrl,
+  battleInfo, coinsByUserId, hasRoomBg, rewardFrameUrl, onAvatarPress,
 }: RoomStageProps) {
   const filledMap = new Map(
     seats.filter(s => s.slotIndex !== 0).map(s => [s.slotIndex, s])
   );
 
   const firstEmptyIndex = MEMBER_INDICES.find(i => !filledMap.has(i)) ?? null;
+  // Per-profile coin totals only make sense in a gifting battle — a normal
+  // battle scores by total room coins (shown in the VS banner), not by user.
+  const showCoins = !!battleInfo && battleInfo.mode === 'gifting';
 
   function renderMemberSlot(slotIndex: number) {
     const occupied = filledMap.get(slotIndex);
@@ -245,8 +253,9 @@ export function RoomStage({
           onToggleMute={onToggleMute}
           onLayout={onSlotLayout ? (x, y) => onSlotLayout(occupied.userId, x, y) : undefined}
           coins={coins}
-          showCoins={!!battleInfo}
+          showCoins={showCoins}
           hasRoomBg={hasRoomBg}
+          onPress={!isMe && onAvatarPress ? () => onAvatarPress(occupied.userId, occupied.userName, occupied.avatarUrl, false, slotIndex) : undefined}
         />
       );
     }
@@ -272,9 +281,10 @@ export function RoomStage({
           onToggleMute={isHost ? onToggleMute : undefined}
           onLayout={onSlotLayout && hostUserId ? (x, y) => onSlotLayout(hostUserId, x, y) : undefined}
           coins={hostCoins}
-          showCoins={!!battleInfo}
+          showCoins={showCoins}
           frameUrl={rewardFrameUrl}
           hasRoomBg={hasRoomBg}
+          onPress={!isHost && onAvatarPress && hostUserId ? () => onAvatarPress(hostUserId, hostInfo.name, hostInfo.avatarUri ?? null, true, undefined) : undefined}
         />
         {row1.map(renderMemberSlot)}
       </View>

@@ -11,6 +11,7 @@ export type PopularRoom = {
   imageUri?: string;
   category?: string;
   level?: number;
+  location?: string;
 };
 
 type PopularRoomItemProps = {
@@ -38,9 +39,6 @@ export function PopularRoomItem({ room, onPress }: PopularRoomItemProps) {
             <Ionicons name="chatbubbles" size={24} color="#7A0EED" />
           </View>
         )}
-        <View style={styles.memberBadge}>
-          <Text style={styles.memberBadgeText}>{formatCount(room.memberCount)}</Text>
-        </View>
       </View>
 
       {/* Info */}
@@ -48,10 +46,17 @@ export function PopularRoomItem({ room, onPress }: PopularRoomItemProps) {
         <Text style={styles.roomName} numberOfLines={1}>{room.name}</Text>
         <View style={styles.metaRow}>
           <Text style={[styles.onlineText, isHighOnline && styles.onlineHigh]}>
-            {formatCount(room.onlineCount)} ONLINE
+            {formatCount(room.onlineCount)} online
           </Text>
           <Text style={styles.pipe}>|</Text>
           <ExpoImage source={levelImg} style={styles.levelImg} contentFit="contain" />
+          {!!room.location && (
+            <View style={styles.locationWrap}>
+              <Text style={styles.pipe}>|</Text>
+              <Ionicons name="location" size={12} color="#3B82F6" />
+              <Text style={styles.locationText} numberOfLines={1} ellipsizeMode="tail">{room.location}</Text>
+            </View>
+          )}
         </View>
       </View>
 
@@ -90,27 +95,9 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
   },
-  memberBadge: {
-    position: 'absolute',
-    bottom: 0,
-    right: 0,
-    minWidth: 20,
-    height: 20,
-    borderRadius: 10,
-    backgroundColor: '#7A0EED',
-    alignItems: 'center',
-    justifyContent: 'center',
-    paddingHorizontal: 4,
-    borderWidth: 1.5,
-    borderColor: '#FAFAFA',
-  },
-  memberBadgeText: {
-    fontSize: 10,
-    fontWeight: '700',
-    color: '#FFFFFF',
-  },
   info: {
     flex: 1,
+    minWidth: 0,
     gap: 3,
   },
   roomName: {
@@ -140,6 +127,19 @@ const styles = StyleSheet.create({
   levelImg: {
     width: 18,
     height: 18,
+  },
+  locationWrap: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 5,
+    flexShrink: 1,
+    minWidth: 0,
+  },
+  locationText: {
+    fontSize: 11,
+    fontWeight: '500',
+    color: '#60626A',
+    flexShrink: 1,
   },
   divider: {
     position: 'absolute',

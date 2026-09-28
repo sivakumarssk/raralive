@@ -1,6 +1,8 @@
 const bcrypt = require('bcryptjs');
+const db = require('../config/db');
 const jwt = require('jsonwebtoken');
 const agencyModel = require('../models/agency.model');
+const userModel = require('../models/user.model');
 
 function signAgencyToken(agencyId, agentCode) {
   return jwt.sign(
@@ -108,6 +110,15 @@ async function resetPassword(req, res, next) {
     const passwordHash = await bcrypt.hash(newPassword, 12);
     await agencyModel.resetAgencyPassword(req.agency.id, passwordHash, newPassword);
 
+    // Keep the app-login password in sync — same credentials must work for
+    // both the agency panel and the regular app login (see linkAgencyUser()).
+    await userModel.linkAgencyUser({
+      agencyId: agency.id,
+      phone: agency.phone,
+      passwordHash,
+      fullName: null,
+    });
+
     // Return new token (still same session, now not default password)
     const token = signAgencyToken(req.agency.id, req.agency.agentCode);
 
@@ -121,4 +132,37 @@ async function resetPassword(req, res, next) {
   }
 }
 
-module.exports = { validateAgentCode, loginAgency, resetPassword };
+/**
+ * GET /api/agency/public/:id: agency profile for the app (logged-in users).
+ * Only profile-safe fields: never KYC numbers, documents, bank or password data.
+ * app_user_id is the agency's own app account (users.role = 'agency'), used by
+ * the app's "Message" button; null if the agency has never logged into the app.
+ * avatar_url / cover_url come from that account's profile (null = not set, the
+ * app then falls back to its default logo + banner colors).
+ */
+async function getPublicAgencyProfile(req, res, next) {
+  try {
+    const { id } = req.params;
+    const r = await db.query(
+      `SELECT a.id, a.agency_name, a.agent_code, a.email, a.phone, a.person_name,
+              a.status, a.service_access, a.created_at,
+              au.id AS app_user_id, au.avatar_url, au.cover_url
+       FROM agencies a
+       LEFT JOIN LATERAL (
+         SELECT u.id, u.avatar_url, u.cover_url FROM users u
+         WHERE u.agency_id = a.id AND u.role = 'agency'
+         ORDER BY u.created_at LIMIT 1
+       ) au ON TRUE
+       WHERE a.id = $1`,
+      [id]
+    );
+    if (!r.rows.length) {
+      return res.status(404).json({ success: false, message: 'Agency not found.' });
+    }
+    return res.json({ success: true, data: r.rows[0] });
+  } catch (error) {
+    next(error);
+  }
+}
+
+module.exports = { validateAgentCode, loginAgency, resetPassword, getPublicAgencyProfile };

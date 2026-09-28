@@ -91,7 +91,7 @@ function formatCount(n: number) {
   return n >= 1000 ? `${(n / 1000).toFixed(1)}k` : String(n);
 }
 
-const TABS = ['Trending', 'Nearby', 'Following'] as const;
+const TABS = ['Trending', 'Following'] as const;
 type HomeTab = typeof TABS[number];
 
 // ── Header right ──────────────────────────────────────────────────────────────

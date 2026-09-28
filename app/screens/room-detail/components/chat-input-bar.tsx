@@ -1,8 +1,8 @@
 import { Ionicons } from '@expo/vector-icons';
+import { Image as ExpoImage } from 'expo-image';
 import { LinearGradient } from 'expo-linear-gradient';
 import { useEffect, useRef, useState } from 'react';
 import {
-  Image,
   Keyboard,
   StyleSheet,
   TextInput,
@@ -18,14 +18,18 @@ type ChatInputBarProps = {
   onGiftOpen?: () => void;
   onCoinPress?: () => void;
   onBattlePress?: () => void;
+  onSettingsPress?: () => void;
   hasRoomBg?: boolean;
   showBattle?: boolean;
+  showSettings?: boolean;
+  /** Notified whenever the input gains/loses focus — lets a parent hide sibling UI (e.g. a gift bar row) while the keyboard is up. */
+  onFocusChange?: (focused: boolean) => void;
   /** Bumping this (e.g. with an incrementing counter) replaces the current draft with prefillText and focuses the input — used for "Mention/Reply". */
   prefillText?: string;
   prefillKey?: number;
 };
 
-export function ChatInputBar({ onSend, onGiftOpen, onCoinPress, onBattlePress, hasRoomBg, showBattle = true, prefillText, prefillKey }: ChatInputBarProps) {
+export function ChatInputBar({ onSend, onGiftOpen, onCoinPress, onBattlePress, onSettingsPress, hasRoomBg, showBattle = true, showSettings = false, onFocusChange, prefillText, prefillKey }: ChatInputBarProps) {
   const [text, setText] = useState('');
   const [focused, setFocused] = useState(false);
   const inputRef = useRef<TextInput>(null);
@@ -33,9 +37,11 @@ export function ChatInputBar({ onSend, onGiftOpen, onCoinPress, onBattlePress, h
   useEffect(() => {
     const sub = Keyboard.addListener('keyboardDidHide', () => {
       setFocused(false);
+      onFocusChange?.(false);
       inputRef.current?.blur();
     });
     return () => sub.remove();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   useEffect(() => {
@@ -66,25 +72,25 @@ export function ChatInputBar({ onSend, onGiftOpen, onCoinPress, onBattlePress, h
             returnKeyType="send"
             onSubmitEditing={handleSend}
             underlineColorAndroid="transparent"
-            onFocus={() => setFocused(true)}
-            onBlur={() => setFocused(false)}
+            onFocus={() => { setFocused(true); onFocusChange?.(true); }}
+            onBlur={() => { setFocused(false); onFocusChange?.(false); }}
           />
+
+          {/* Send button — embedded inside the input pill */}
+          <TouchableOpacity onPress={handleSend} activeOpacity={0.85} style={bar.sendBtn}>
+            <LinearGradient
+              colors={['#7A0EED', '#B50357']}
+              start={{ x: 0, y: 0 }}
+              end={{ x: 1, y: 1 }}
+              style={bar.sendGradient}>
+              <Ionicons name="arrow-forward" size={18} color="#FFFFFF" />
+            </LinearGradient>
+          </TouchableOpacity>
         </View>
 
-        {/* Send button — always visible */}
-        <TouchableOpacity onPress={handleSend} activeOpacity={0.85} style={bar.sendBtn}>
-          <LinearGradient
-            colors={['#7A0EED', '#B50357']}
-            start={{ x: 0, y: 0 }}
-            end={{ x: 1, y: 1 }}
-            style={bar.sendGradient}>
-            <Ionicons name="arrow-forward" size={20} color="#FFFFFF" />
-          </LinearGradient>
-        </TouchableOpacity>
-
-{!focused && showBattle && (
+        {!focused && showBattle && (
           <TouchableOpacity onPress={onBattlePress} activeOpacity={0.85} style={bar.giftBtn}>
-            <Image source={BATTLE_IMG} style={bar.battleImg} />
+            <ExpoImage source={BATTLE_IMG} style={bar.battleImg} contentFit="contain" />
           </TouchableOpacity>
         )}
 
@@ -97,7 +103,11 @@ export function ChatInputBar({ onSend, onGiftOpen, onCoinPress, onBattlePress, h
           </TouchableOpacity>
         )}
 
-        
+        {!focused && showSettings && (
+          <TouchableOpacity onPress={onSettingsPress} activeOpacity={0.85} style={[bar.settingsBtn, !hasRoomBg && bar.settingsBtnLight]}>
+            <Ionicons name="settings-outline" size={18} color={hasRoomBg ? '#FFFFFF' : '#5B5D66'} />
+          </TouchableOpacity>
+        )}
     </View>
   );
 }
@@ -112,7 +122,7 @@ const bar = StyleSheet.create({
     backgroundColor: '#FFFFFF',
     borderTopWidth: 1,
     borderTopColor: '#F0EDF8',
-    gap: 8,
+    gap: 4,
   },
   containerBg: {
     backgroundColor: 'rgba(0,0,0,0.45)',
@@ -133,39 +143,59 @@ const bar = StyleSheet.create({
     height: 22,
   },
   battleImg: {
-    width: 35,
-    height: 35,
+    width: 26,
+    height: 26,
   },
   inputWrap: {
     flex: 1,
-    height: 40,
-    borderRadius: 20,
+    flexDirection: 'row',
+    alignItems: 'center',
+    height: 44,
+    borderRadius: 22,
     backgroundColor: '#F4F5F8',
-    justifyContent: 'center',
-    paddingHorizontal: 16,
+    borderWidth: 1,
+    borderColor: '#E7E4F2',
+    paddingLeft: 16,
+    paddingRight: 4,
+    gap: 8,
   },
-  inputWrapBg: { backgroundColor: 'rgba(255,255,255,0.15)' },
-  input: { fontSize: 14, color: '#1C1E22' },
+  inputWrapBg: { backgroundColor: 'rgba(255,255,255,0.15)', borderColor: 'rgba(255,255,255,0.25)' },
+  input: { flex: 1, fontSize: 14, color: '#1C1E22', padding: 0, borderWidth: 0 },
   inputBg: { color: '#FFFFFF' },
   giftBtn: {
-    borderRadius: 19,
+    width: 34,
+    height: 34,
+    borderRadius: 17,
+    alignItems: 'center',
+    justifyContent: 'center',
     overflow: 'hidden',
   },
+  settingsBtn: {
+    width: 34,
+    height: 34,
+    borderRadius: 17,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: 'rgba(255,255,255,0.15)',
+  },
+  settingsBtnLight: {
+    backgroundColor: '#F4F5F8',
+  },
   giftGradient: {
-    width: 38,
-    height: 38,
-    borderRadius: 19,
+    width: 34,
+    height: 34,
+    borderRadius: 17,
     alignItems: 'center',
     justifyContent: 'center',
   },
   sendBtn: {
-    borderRadius: 21,
+    borderRadius: 18,
     overflow: 'hidden',
   },
   sendGradient: {
-    width: 42,
-    height: 42,
-    borderRadius: 21,
+    width: 36,
+    height: 36,
+    borderRadius: 18,
     alignItems: 'center',
     justifyContent: 'center',
   },

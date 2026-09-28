@@ -32,8 +32,8 @@ type GiftPickerBarProps = {
   gift: GiftItem | null;
   gifts: GiftItem[];
   targets: GiftTarget[];
-  selectedTargetId: string | null;
-  onSelectTarget: (id: string) => void;
+  selectedTargetIds: string[];
+  onToggleTarget: (id: string) => void;
   onGiftChange: (gift: GiftItem) => void;
   onSend: (qty: number) => void;
   onClose: () => void;
@@ -138,7 +138,7 @@ const tray = StyleSheet.create({
 
 export function GiftPickerBar({
   visible, gift, gifts, targets,
-  selectedTargetId, onSelectTarget, onGiftChange,
+  selectedTargetIds, onToggleTarget, onGiftChange,
   onSend, onClose,
 }: GiftPickerBarProps) {
   const slideY = useRef(new Animated.Value(300)).current;
@@ -161,7 +161,6 @@ export function GiftPickerBar({
   if (!visible && !gift) return null;
 
   const imgUri = resolveImg(gift?.image_url);
-  const totalCoins = (gift?.coins ?? 0) * qty;
 
   return (
     <Animated.View
@@ -237,23 +236,28 @@ export function GiftPickerBar({
           <Text style={bar.closeBtnText}>✕</Text>
         </TouchableOpacity>
 
-        {/* Target avatar scroll */}
+        {/* Target avatar scroll — tap to toggle, multiple can be selected */}
         <ScrollView
           horizontal
           showsHorizontalScrollIndicator={false}
           style={bar.avatarScroll}
           contentContainerStyle={bar.avatarList}>
           {targets.map(t => {
-            const sel = selectedTargetId === t.userId;
+            const sel = selectedTargetIds.includes(t.userId);
             return (
               <TouchableOpacity
                 key={t.userId}
-                onPress={() => onSelectTarget(t.userId)}
+                onPress={() => onToggleTarget(t.userId)}
                 activeOpacity={0.8}
                 style={bar.avatarItem}>
                 <View style={[bar.avatarWrap, sel && bar.avatarWrapSel]}>
                   <Avatar url={t.avatarUrl} name={t.name} size={36} />
                   {t.isHost && <View style={bar.hostDot} />}
+                  {sel && (
+                    <View style={bar.selectedBadge}>
+                      <Text style={bar.selectedBadgeCheck}>✓</Text>
+                    </View>
+                  )}
                 </View>
               </TouchableOpacity>
             );
@@ -271,9 +275,9 @@ export function GiftPickerBar({
 
         {/* Send button */}
         <TouchableOpacity
-          onPress={() => { if (selectedTargetId) onSend(qty); }}
-          disabled={!selectedTargetId}
-          style={[bar.sendBtn, !selectedTargetId && bar.sendBtnDisabled]}
+          onPress={() => { if (selectedTargetIds.length > 0) onSend(qty); }}
+          disabled={selectedTargetIds.length === 0}
+          style={[bar.sendBtn, selectedTargetIds.length === 0 && bar.sendBtnDisabled]}
           activeOpacity={0.85}>
           <Text style={bar.sendArrow}>➤</Text>
         </TouchableOpacity>
@@ -363,6 +367,14 @@ const bar = StyleSheet.create({
     backgroundColor: '#7A0EED',
     borderWidth: 1.5, borderColor: '#fff',
   },
+  selectedBadge: {
+    position: 'absolute', top: -2, right: -2,
+    width: 15, height: 15, borderRadius: 7.5,
+    backgroundColor: '#7A0EED',
+    borderWidth: 1.5, borderColor: '#fff',
+    alignItems: 'center', justifyContent: 'center',
+  },
+  selectedBadgeCheck: { fontSize: 8, fontWeight: '900', color: '#FFFFFF', lineHeight: 9 },
 
   // Qty toggle
   qtyToggleBtn: {

@@ -19,7 +19,7 @@ import {
 } from 'react-native';
 import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
 
-import { BASE_URL, MEDIA_BASE } from '@/services/api';
+import { apiChatUnreadCount, BASE_URL, MEDIA_BASE } from '@/services/api';
 import { authStore } from '@/store/auth-store';
 import { UserLevelBadge } from '@/components/UserLevel';
 
@@ -296,6 +296,7 @@ export default function ProfileScreen() {
   const [showMenu, setShowMenu] = useState(false);
   const [showLang, setShowLang] = useState(false);
   const [currentLang, setCurrentLang] = useState('en');
+  const [unreadChatCount, setUnreadChatCount] = useState(0);
 
   const fetchData = useCallback(async (showSpinner: boolean) => {
     const token = authStore.getToken();
@@ -322,15 +323,24 @@ export default function ProfileScreen() {
     finally { if (showSpinner) setLoading(false); }
   }, []);
 
-  // Initial load with spinner
-  useEffect(() => { fetchData(true); }, []);
+  const fetchUnreadChatCount = useCallback(async () => {
+    const token = authStore.getToken();
+    if (!token) return;
+    const res = await apiChatUnreadCount(token);
+    if (res.ok) setUnreadChatCount(res.data.count);
+  }, []);
 
-  // Refresh silently when returning from edit (no spinner, no flicker)
+  // Initial load with spinner
+  useEffect(() => { fetchData(true); fetchUnreadChatCount(); }, []);
+
+  // Refresh silently when returning from edit (no spinner, no flicker) — also
+  // catches returning from the chat list after reading messages there.
   const isMounted = useRef(false);
   useFocusEffect(useCallback(() => {
     if (!isMounted.current) { isMounted.current = true; return; }
     fetchData(false);
-  }, [fetchData]));
+    fetchUnreadChatCount();
+  }, [fetchData, fetchUnreadChatCount]));
 
   const handleLogout = () => { authStore.clear(); router.replace('/login' as never); };
 
@@ -442,6 +452,11 @@ export default function ProfileScreen() {
           </TouchableOpacity>
           <TouchableOpacity style={s.shareBtn} onPress={() => router.push('/chat' as any)} activeOpacity={0.85}>
             <Ionicons name="chatbubble-ellipses-outline" size={18} color="#7A0EED" />
+            {unreadChatCount > 0 && (
+              <View style={s.chatBadge}>
+                <Text style={s.chatBadgeText}>{unreadChatCount > 10 ? '10+' : unreadChatCount}</Text>
+              </View>
+            )}
           </TouchableOpacity>
           <TouchableOpacity style={s.shareBtn} activeOpacity={0.85}>
             <Ionicons name="share-social-outline" size={18} color="#7A0EED" />
@@ -518,7 +533,14 @@ const s = StyleSheet.create({
   actionRow:   { flexDirection: 'row', gap: 10, paddingHorizontal: 18, marginTop: 14 },
   editBtn:     { flex: 1, height: 38, borderRadius: 20, borderWidth: 1.5, borderColor: '#7A0EED', alignItems: 'center', justifyContent: 'center' },
   editBtnText: { fontSize: 14, fontWeight: '700', color: '#7A0EED' },
-  shareBtn:    { width: 38, height: 38, borderRadius: 20, borderWidth: 1.5, borderColor: '#7A0EED', alignItems: 'center', justifyContent: 'center' },
+  shareBtn:    { width: 38, height: 38, borderRadius: 20, borderWidth: 1.5, borderColor: '#7A0EED', alignItems: 'center', justifyContent: 'center', position: 'relative' },
+  chatBadge: {
+    position: 'absolute', top: -4, right: -4,
+    minWidth: 18, height: 18, borderRadius: 9, paddingHorizontal: 4,
+    backgroundColor: '#FF2A76', alignItems: 'center', justifyContent: 'center',
+    borderWidth: 1.5, borderColor: '#FFFFFF',
+  },
+  chatBadgeText: { fontSize: 10, fontWeight: '700', color: '#FFFFFF' },
 
   tabRow:    { flexDirection: 'row', borderTopWidth: StyleSheet.hairlineWidth, borderTopColor: '#EBEBEB', marginTop: 18 },
   tab:       { flex: 1, height: 44, alignItems: 'center', justifyContent: 'center' },

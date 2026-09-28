@@ -18,10 +18,12 @@ type VideoTileProps = {
   onLongPress?: () => void;
   /** Fullscreen hero tile (main/host view) — bigger centered avatar, no name chip. */
   fullscreen?: boolean;
+  /** Small co-host guest chip (top-left strip) — smaller avatar fallback, no name row. */
+  compact?: boolean;
 };
 
 export function VideoTile({
-  isLocal, uid, name, avatarUri, isHost, isCameraOff, isMicMuted, hasRemoteVideo = true, isLocalJoined = true, onLongPress, fullscreen = false,
+  isLocal, uid, name, avatarUri, isHost, isCameraOff, isMicMuted, hasRemoteVideo = true, isLocalJoined = true, onLongPress, fullscreen = false, compact = false,
 }: VideoTileProps) {
   const showVideo = isLocal ? (isLocalJoined && !isCameraOff) : hasRemoteVideo;
 
@@ -41,12 +43,12 @@ export function VideoTile({
         <View style={StyleSheet.absoluteFill}>
           <StarfieldBackground />
           <View style={s.avatarCenterWrap}>
-            <View style={[s.avatarRing, fullscreen && s.avatarRingLarge]}>
+            <View style={[s.avatarRing, fullscreen && s.avatarRingLarge, compact && s.avatarRingCompact]}>
               {avatarUri ? (
                 <Image source={{ uri: avatarUri }} style={s.avatarImg} />
               ) : (
                 <View style={s.avatarInitialWrap}>
-                  <Text style={[s.avatarInitial, fullscreen && s.avatarInitialLarge]}>{name[0]?.toUpperCase() ?? '?'}</Text>
+                  <Text style={[s.avatarInitial, fullscreen && s.avatarInitialLarge, compact && s.avatarInitialCompact]}>{name[0]?.toUpperCase() ?? '?'}</Text>
                 </View>
               )}
             </View>
@@ -54,7 +56,7 @@ export function VideoTile({
         </View>
       )}
 
-      {!fullscreen && (
+      {!fullscreen && !compact && (
         <View style={s.nameRow}>
           {isHost && (
             <View style={s.hostBadge}>
@@ -67,6 +69,12 @@ export function VideoTile({
               <Ionicons name="mic-off" size={10} color="#FFFFFF" />
             </View>
           )}
+        </View>
+      )}
+
+      {compact && isMicMuted && (
+        <View style={s.compactMuteBadge}>
+          <Ionicons name="mic-off" size={9} color="#FFFFFF" />
         </View>
       )}
     </View>
@@ -102,6 +110,7 @@ const s = StyleSheet.create({
     position: 'relative',
   },
   avatarRingLarge: { width: 92, height: 92, borderRadius: 46 },
+  avatarRingCompact: { width: 44, height: 44, borderRadius: 22, borderWidth: 1.5 },
   avatarImg: { width: '100%', height: '100%', borderRadius: 999 },
   avatarInitialWrap: {
     width: '100%', height: '100%', borderRadius: 999,
@@ -110,6 +119,7 @@ const s = StyleSheet.create({
   },
   avatarInitial: { fontSize: 26, fontWeight: '800', color: '#FFFFFF' },
   avatarInitialLarge: { fontSize: 30 },
+  avatarInitialCompact: { fontSize: 16 },
   nameRow: {
     position: 'absolute',
     bottom: 6, left: 6, right: 6,
@@ -126,6 +136,11 @@ const s = StyleSheet.create({
   },
   muteBadge: {
     width: 16, height: 16, borderRadius: 8,
+    backgroundColor: '#E14C57', alignItems: 'center', justifyContent: 'center',
+  },
+  compactMuteBadge: {
+    position: 'absolute', bottom: 4, right: 4,
+    width: 15, height: 15, borderRadius: 8,
     backgroundColor: '#E14C57', alignItems: 'center', justifyContent: 'center',
   },
 });

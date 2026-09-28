@@ -24,7 +24,7 @@ export type FriendZoneCallEvent =
   | { type: 'accepted'; callId: string }
   | { type: 'ended'; callId: string; reason: string; durationSeconds?: number }
   | { type: 'failed'; reason: string }
-  | { type: 'low_balance'; callId: string; secondsLeft: number }
+  | { type: 'low_balance'; callId: string; secondsLeft?: number }
   | { type: 'charged'; callId: string; coins: number; totalCoins: number }
   | { type: 'earned'; callId: string; gems: number; totalGems: number }
   | { type: 'call_gift'; gift: FriendZoneCallGift }
@@ -124,7 +124,7 @@ export const friendZoneSocketStore = {
     socket.on('friend_zone_call_failed', (data: { reason: string }) => {
       notifyCall({ type: 'failed', ...data });
     });
-    socket.on('friend_zone_call_low_balance', (data: { callId: string; secondsLeft: number }) => {
+    socket.on('friend_zone_call_low_balance', (data: { callId: string; secondsLeft?: number }) => {
       notifyCall({ type: 'low_balance', ...data });
     });
     socket.on('friend_zone_call_charged', (data: { callId: string; coins: number; totalCoins: number }) => {

@@ -144,7 +144,7 @@ function UnlockBanner() {
   );
 }
 
-function GemTiers({ gemBalance }: { gemBalance: number }) {
+function GemTiers({ gemBalance, children }: { gemBalance: number; children?: React.ReactNode }) {
   const currentTierIdx = (() => {
     let idx = -1;
     for (let i = 0; i < ALL_TIERS.length; i++) {
@@ -272,6 +272,8 @@ function GemTiers({ gemBalance }: { gemBalance: number }) {
         </View>
         <Ionicons name="chevron-forward" size={18} color="#ABADB2" />
       </View>
+
+      {children}
     </ScrollView>
   );
 }
@@ -312,30 +314,6 @@ function formatGems(n: number): string {
   return n.toLocaleString();
 }
 
-// ── Gem sub-tab switcher ──────────────────────────────────────────────────────
-
-const GEM_TABS: { key: GemTab; label: string }[] = [
-  { key: 'chat-rooms', label: 'Chat Rooms' },
-  { key: 'friend-zone', label: 'Friend Zone' },
-  { key: 'live', label: 'Live' },
-];
-
-function GemTabSwitcher({ active, onChange }: { active: GemTab; onChange: (t: GemTab) => void }) {
-  return (
-    <View style={gt.wrapper}>
-      {GEM_TABS.map(tab => {
-        const isActive = tab.key === active;
-        return (
-          <TouchableOpacity key={tab.key} onPress={() => onChange(tab.key)} activeOpacity={0.75} style={gt.btn}>
-            <Text style={[gt.label, isActive && gt.labelActive]}>{tab.label}</Text>
-            {isActive && <View style={gt.underline} />}
-          </TouchableOpacity>
-        );
-      })}
-    </View>
-  );
-}
-
 // ── Placeholder for Live ──────────────────────────────────────────────────────
 
 function ComingSoonGems({ icon, label }: { icon: string; label: string }) {
@@ -362,54 +340,43 @@ function FriendZoneEarningsList({ events }: { events: FriendZoneEarning[] }) {
   }
 
   return (
-    <ScrollView style={{ flex: 1 }} showsVerticalScrollIndicator={false} contentContainerStyle={tier.container}>
-      <View style={gem.group}>
-        {events.map((e, i) => {
-          const isGift = e.kind === 'gift';
-          const person = isGift
-            ? (e.sender_name || e.sender_username || 'Unknown')
-            : (e.caller_name || e.caller_username || 'Unknown');
-          return (
-            <View key={e.id} style={[gem.row, i < events.length - 1 && gem.rowBorder]}>
-              <View style={gem.giftImgWrap}>
-                <Ionicons
-                  name={isGift ? 'gift' : (e.call_type === 'video' ? 'videocam' : 'call')}
-                  size={18}
-                  color="#0EA5E9"
-                />
-              </View>
-              <View style={gem.rowInfo}>
-                <Text style={gem.rowTitle} numberOfLines={1}>{person}</Text>
-                <Text style={gem.rowSub}>
-                  {isGift
-                    ? `Sent ${e.quantity > 1 ? `${e.quantity}x ` : ''}${e.gift_name}`
-                    : `${e.call_type === 'video' ? 'Video call' : 'Audio call'} · ${formatCallDuration(e.duration_seconds)}`}
-                </Text>
-              </View>
-              <View style={gem.rowRight}>
-                <Text style={gem.rowGems}>+{formatGems(e.gems_earned)}</Text>
-                <Text style={gem.rowTime}>
-                  {new Date(e.created_at).toLocaleDateString('en-IN', { day: '2-digit', month: 'short' })}
-                </Text>
-              </View>
+    <View style={gem.group}>
+      {events.map((e, i) => {
+        const isGift = e.kind === 'gift';
+        const person = isGift
+          ? (e.sender_name || e.sender_username || 'Unknown')
+          : (e.caller_name || e.caller_username || 'Unknown');
+        return (
+          <View key={e.id} style={[gem.row, i < events.length - 1 && gem.rowBorder]}>
+            <View style={gem.giftImgWrap}>
+              <Ionicons
+                name={isGift ? 'gift' : (e.call_type === 'video' ? 'videocam' : 'call')}
+                size={18}
+                color="#0EA5E9"
+              />
             </View>
-          );
-        })}
-      </View>
-    </ScrollView>
+            <View style={gem.rowInfo}>
+              <Text style={gem.rowTitle} numberOfLines={1}>{person}</Text>
+              <Text style={gem.rowSub}>
+                {isGift
+                  ? `Sent ${e.quantity > 1 ? `${e.quantity}x ` : ''}${e.gift_name}`
+                  : `${e.call_type === 'video' ? 'Video call' : 'Audio call'} · ${formatCallDuration(e.duration_seconds)}`}
+              </Text>
+            </View>
+            <View style={gem.rowRight}>
+              <Text style={gem.rowGems}>+{formatGems(e.gems_earned)}</Text>
+              <Text style={gem.rowTime}>
+                {new Date(e.created_at).toLocaleDateString('en-IN', { day: '2-digit', month: 'short' })}
+              </Text>
+            </View>
+          </View>
+        );
+      })}
+    </View>
   );
 }
 
 // ── Gems Tab ──────────────────────────────────────────────────────────────────
-
-type PillKey = 'total' | 'chat-rooms' | 'friend-zone' | 'live';
-
-const PILL_META: Record<PillKey, { label: string; color: string }> = {
-  'total':       { label: 'Total Gems',   color: '#A855F7' },
-  'chat-rooms':  { label: 'Chat Rooms',   color: '#7A0EED' },
-  'friend-zone': { label: 'Friend Zone',  color: '#0EA5E9' },
-  'live':        { label: 'Live',         color: '#E91E7F' },
-};
 
 function nextTierFor(gems: number) {
   for (const t of ALL_TIERS) { if (gems < t.gems) return t; }
@@ -418,7 +385,6 @@ function nextTierFor(gems: number) {
 
 function GemsTab({ gemBalance }: { gemBalance: number }) {
   const [activeGemTab, setActiveGemTab] = useState<GemTab>('chat-rooms');
-  const [selectedPill, setSelectedPill] = useState<PillKey>('chat-rooms');
   const [history, setHistory] = useState<GemHistory | null>(null);
   const [loading, setLoading] = useState(true);
 
@@ -436,56 +402,49 @@ function GemsTab({ gemBalance }: { gemBalance: number }) {
   const friendzoneGems = history?.friendzone.total_gems ?? 0;
   const liveGems       = history?.live.total_gems       ?? 0;
 
-  const displayGems = selectedPill === 'total'       ? gemBalance
-    : selectedPill === 'chat-rooms'  ? chatroomGems
-    : selectedPill === 'friend-zone' ? friendzoneGems
-    : liveGems;
-
-  // Use the selected tab's gems to determine the tier window
-  const tierGems = activeGemTab === 'chat-rooms'  ? chatroomGems
-    : activeGemTab === 'friend-zone' ? friendzoneGems
-    : liveGems;
-
-  const { label: displayLabel } = PILL_META[selectedPill];
-  const nt = nextTierFor(tierGems);
-
-  const handlePillPress = (key: PillKey, tab?: GemTab) => {
-    setSelectedPill(key);
-    if (tab) setActiveGemTab(tab);
-  };
+  // Top card + tier/slab table always reflect the COMBINED total across all
+  // sources — the slab list is shared, not per-source, so there's one
+  // withdraw action tied to the combined total's current tier.
+  const totalGems = chatroomGems + friendzoneGems + liveGems;
+  const nt = nextTierFor(totalGems);
 
   return (
     <View style={{ flex: 1 }}>
       {/* Fixed header: balance card + pills + sub-tabs */}
       <View style={s.gemHeader}>
         <LinearGradient
-          colors={['#EAF4FF', '#DCEBFF']}
+          colors={['#2F6FE0', '#1D4FC4', '#153A9E']}
           start={{ x: 0, y: 0 }} end={{ x: 1, y: 1 }}
           style={gem.balanceCard}>
-          <View style={gem.balanceCardTop}>
-            <Ionicons name="diamond" size={14} color="#1D6FE0" />
-            <Text style={gem.balanceCardLabel}>{displayLabel}</Text>
+          {/* Soft radial-style glow behind the diamond, layered circles since
+              RN LinearGradient has no true radial mode */}
+          <View style={gem.glowOuter} pointerEvents="none" />
+          <View style={gem.glowInner} pointerEvents="none" />
+
+          <View style={gem.balanceCardLeft}>
+            <View style={gem.balanceCardTop}>
+              <Ionicons name="diamond" size={14} color="#BFE0FF" />
+              <Text style={gem.balanceCardLabel}>Gems Balance</Text>
+            </View>
+            <Text style={gem.balanceCardNumber}>{formatGems(totalGems)}</Text>
+            <Text style={gem.balanceCardInr}>≈ ₹{(totalGems * 0.0135).toFixed(2)}</Text>
           </View>
-          <Text style={gem.balanceCardNumber}>{formatGems(displayGems)}</Text>
-          <Text style={gem.balanceCardInr}>≈ ₹{(displayGems * 0.0135).toFixed(2)}</Text>
+
           <Image source={require('@/assets/tabs/wallet/gemscard.png')} style={gem.balanceCardImage} resizeMode="contain" />
         </LinearGradient>
 
         <View style={gem.sourcePills}>
           <SourcePill
             icon="chatbubble-ellipses" label="Chat Rooms" gems={chatroomGems} color="#1D6FE0"
-            active={selectedPill === 'chat-rooms'}
-            onPress={() => handlePillPress('chat-rooms', 'chat-rooms')}
+            onPress={() => setActiveGemTab('chat-rooms')}
           />
           <SourcePill
             icon="people" label="Friend Zone" gems={friendzoneGems} color="#1D6FE0"
-            active={selectedPill === 'friend-zone'}
-            onPress={() => handlePillPress('friend-zone', 'friend-zone')}
+            onPress={() => setActiveGemTab('friend-zone')}
           />
           <SourcePill
             icon="radio" label="Live" gems={liveGems} color="#E91E7F"
-            active={selectedPill === 'live'}
-            onPress={() => handlePillPress('live', 'live')}
+            onPress={() => setActiveGemTab('live')}
           />
         </View>
 
@@ -501,43 +460,41 @@ function GemsTab({ gemBalance }: { gemBalance: number }) {
               <Text style={gem.targetPct}>{nt.hostPct}% withdraw value</Text>
             </View>
             <View style={gem.targetTrack}>
-              <View style={[gem.targetFill, { width: `${Math.min(100, (tierGems / nt.gems) * 100)}%` }]} />
+              <View style={[gem.targetFill, { width: `${Math.min(100, (totalGems / nt.gems) * 100)}%` }]} />
             </View>
           </View>
         )}
-
-        <GemTabSwitcher active={activeGemTab} onChange={setActiveGemTab} />
       </View>
 
-      {/* Scrollable tier list only */}
+      {/* Scrollable content: one shared tier/slab table (combined total)
+          always on top, followed by the selected source's history below it
+          in the same scroll region — the slab list itself never changes
+          per tab, only what's appended after it does. */}
       {loading ? (
         <ActivityIndicator color="#7A0EED" style={{ marginTop: 32 }} />
       ) : (
-        <>
-          {activeGemTab === 'chat-rooms' && (
-            <GemTiers gemBalance={tierGems} />
-          )}
+        <GemTiers gemBalance={totalGems}>
           {activeGemTab === 'friend-zone' && (
             <FriendZoneEarningsList events={history?.friendzone.events ?? []} />
           )}
           {activeGemTab === 'live' && (
             <ComingSoonGems icon="radio-outline" label="Live" />
           )}
-        </>
+        </GemTiers>
       )}
     </View>
   );
 }
 
-function SourcePill({ icon, label, gems, color, active = false, onPress }: {
+function SourcePill({ icon, label, gems, color, onPress }: {
   icon: string; label: string; gems: number; color: string;
-  active?: boolean; onPress?: () => void;
+  onPress?: () => void;
 }) {
   return (
     <TouchableOpacity
       onPress={onPress}
       activeOpacity={0.75}
-      style={[gem.pill, { borderColor: active ? color : color + '33', backgroundColor: active ? color + '12' : '#FAFAFA' }]}>
+      style={[gem.pill, { borderColor: color + '33', backgroundColor: '#FAFAFA' }]}>
       <Ionicons name={icon as any} size={14} color={color} />
       <View style={gem.pillText}>
         <Text style={[gem.pillGems, { color }]}>{formatGems(gems)}</Text>
@@ -574,7 +531,7 @@ export function WalletScreen() {
           <Ionicons name="arrow-back" size={22} color="#1C1E22" />
         </TouchableOpacity>
         <Text style={s.headerTitle}>My Wallet</Text>
-        <TouchableOpacity style={s.headerBtn} hitSlop={8}>
+        <TouchableOpacity onPress={() => router.push('/wallet-history' as any)} style={s.headerBtn} hitSlop={8}>
           <Ionicons name="time-outline" size={22} color="#1C1E22" />
         </TouchableOpacity>
       </View>
@@ -701,7 +658,7 @@ const s = StyleSheet.create({
   root: { flex: 1, backgroundColor: '#F7F4FD' },
   header: { flexDirection: 'row', alignItems: 'center', paddingHorizontal: 16, paddingVertical: 14, backgroundColor: '#F7F4FD' },
   headerBtn: { width: 36, height: 36, alignItems: 'center', justifyContent: 'center' },
-  headerTitle: { flex: 1, textAlign: 'center', fontSize: 18, fontWeight: '700', color: '#1C1E22' },
+  headerTitle: { flex: 1, textAlign: 'left', fontSize: 18, fontWeight: '700', color: '#1C1E22' },
   tabRow: { flexDirection: 'row', marginHorizontal: 16, backgroundColor: '#EDE8F8', borderRadius: 30, padding: 4, marginBottom: 16 },
   tabBtn: { flex: 1, paddingVertical: 9, borderRadius: 26, alignItems: 'center' },
   tabBtnActive: { backgroundColor: '#FFFFFF', shadowColor: '#7A0EED', shadowOpacity: 0.12, shadowRadius: 6, shadowOffset: { width: 0, height: 2 }, elevation: 3 },
@@ -817,26 +774,30 @@ const tier = StyleSheet.create({
 });
 
 // Gem sub-tab switcher styles
-const gt = StyleSheet.create({
-  wrapper: { flexDirection: 'row', backgroundColor: '#FFFFFF', borderBottomWidth: 1, borderBottomColor: '#EEEAF6', marginBottom: 16 },
-  btn: { flex: 1, paddingVertical: 12, alignItems: 'center', position: 'relative' },
-  label: { fontSize: 13, fontWeight: '500', color: '#ABADB2' },
-  labelActive: { color: '#1D6FE0', fontWeight: '700' },
-  underline: { position: 'absolute', bottom: -1, left: 8, right: 8, height: 2.5, borderRadius: 2, backgroundColor: '#1D6FE0' },
-});
-
 // Gem content styles
 const gem = StyleSheet.create({
-  // Gems balance card (blue theme)
+  // Gems balance card (deep-blue "shiny diamond" theme)
   balanceCard: {
-    borderRadius: 20, padding: 20, marginBottom: 16, overflow: 'hidden',
-    shadowColor: '#1D6FE0', shadowOpacity: 0.1, shadowRadius: 12, shadowOffset: { width: 0, height: 4 }, elevation: 3,
+    borderRadius: 24, paddingVertical: 22, paddingHorizontal: 20, marginBottom: 16,
+    overflow: 'hidden', minHeight: 150,
+    shadowColor: '#1D4FC4', shadowOpacity: 0.35, shadowRadius: 18, shadowOffset: { width: 0, height: 8 }, elevation: 8,
   },
+  glowOuter: {
+    position: 'absolute', right: -50, top: -40,
+    width: 220, height: 220, borderRadius: 110,
+    backgroundColor: 'rgba(255,255,255,0.10)',
+  },
+  glowInner: {
+    position: 'absolute', right: -10, top: 10,
+    width: 140, height: 140, borderRadius: 70,
+    backgroundColor: 'rgba(191,224,255,0.22)',
+  },
+  balanceCardLeft: { maxWidth: '58%' },
   balanceCardTop: { flexDirection: 'row', alignItems: 'center', gap: 6 },
-  balanceCardLabel: { fontSize: 13, fontWeight: '600', color: '#1D6FE0' },
-  balanceCardNumber: { fontSize: 32, fontWeight: '800', color: '#0D3B7A', marginTop: 6 },
-  balanceCardInr: { fontSize: 13, color: '#5A82AE', fontWeight: '500', marginTop: 2 },
-  balanceCardImage: { position: 'absolute', right: -10, bottom: -30, width: 180, height: 180 },
+  balanceCardLabel: { fontSize: 13.5, fontWeight: '600', color: '#D8E9FF' },
+  balanceCardNumber: { fontSize: 34, fontWeight: '800', color: '#FFFFFF', marginTop: 6, letterSpacing: 0.3 },
+  balanceCardInr: { fontSize: 13, color: '#AFCBF5', fontWeight: '500', marginTop: 3 },
+  balanceCardImage: { position: 'absolute', right: -8, bottom: -14, width: 170, height: 170 },
 
   // Tappable withdraw pill on a completed tier row
   withdrawBtn: {

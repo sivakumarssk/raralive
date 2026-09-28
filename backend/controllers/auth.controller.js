@@ -2,9 +2,10 @@ const bcrypt = require('bcryptjs');
 const jwt = require('jsonwebtoken');
 const userModel = require('../models/user.model');
 const otpModel = require('../models/otp.model');
+const agencyModel = require('../models/agency.model');
 
-function signToken(userId) {
-  return jwt.sign({ sub: userId }, process.env.JWT_SECRET, {
+function signToken(userId, role) {
+  return jwt.sign({ sub: userId, role }, process.env.JWT_SECRET, {
     expiresIn: process.env.JWT_EXPIRES_IN || '7d',
   });
 }
@@ -43,10 +44,12 @@ async function register(req, res, next) {
       passwordHash,
     });
 
-    // TODO: send OTP via SMS provider; for now return dev hint in non-production
-    const devCode = process.env.NODE_ENV === 'production' ? undefined : '1234';
+    // TODO: send OTP via SMS provider — until that's wired up, every
+    // environment (including production) uses this fixed code so the
+    // already-shipped app's hardcoded OTP screen keeps working.
+    const devCode = '1234';
     const expiresAt = new Date(Date.now() + 10 * 60 * 1000);
-    await otpModel.createOtp({ phone, code: devCode || String(Math.floor(1000 + Math.random() * 9000)), purpose: 'register', expiresAt });
+    await otpModel.createOtp({ phone, code: devCode, purpose: 'register', expiresAt });
 
     return res.status(201).json({
       success: true,
@@ -81,7 +84,18 @@ async function login(req, res, next) {
       return res.status(401).json({ success: false, message: 'Invalid credentials.' });
     }
 
-    const token = signToken(user.id);
+    // A suspended agency is suspended everywhere — one status on the agency
+    // record blocks both the agency panel (see agency-auth.controller.js)
+    // and this app login for its linked user, so there's a single place
+    // admin has to act instead of separate agency/app suspend toggles.
+    if (user.role === 'agency' && user.agency_id) {
+      const agency = await agencyModel.getAgencyById(user.agency_id);
+      if (agency && agency.status === 'suspended') {
+        return res.status(403).json({ success: false, message: 'This agency account has been suspended. Contact admin.' });
+      }
+    }
+
+    const token = signToken(user.id, user.role);
     return res.json({
       success: true,
       message: 'Login successful.',
@@ -114,7 +128,7 @@ async function verifyOtp(req, res, next) {
     }
 
     // Issue token immediately so the client can call PATCH /profile next
-    const token = user ? signToken(user.id) : null;
+    const token = user ? signToken(user.id, user.role) : null;
 
     return res.json({
       success: true,
@@ -183,11 +197,25 @@ async function forgotPassword(req, res, next) {
       return res.status(404).json({ success: false, message: 'No account found with this phone number.' });
     }
 
+    // Agency accounts don't self-service a password change in the app —
+    // their password is owned by the agency panel / admin panel and synced
+    // into users.password_hash from there (see linkAgencyUser()). Letting
+    // this OTP flow change it here would silently desync the two.
+    if (user.role === 'agency') {
+      return res.status(403).json({
+        success: false,
+        message: 'This is an agency account. Reset your password from the agency panel or contact admin.',
+      });
+    }
+
     // Use the exact phone string stored in DB so OTP lookup matches
     const storedPhone = user.phone;
-    const devCode = process.env.NODE_ENV === 'production' ? undefined : '1234';
+    // TODO: send OTP via SMS provider — until that's wired up, every
+    // environment (including production) uses this fixed code so the
+    // already-shipped app's hardcoded OTP screen keeps working.
+    const devCode = '1234';
     const expiresAt = new Date(Date.now() + 10 * 60 * 1000);
-    const storedCode = devCode || String(Math.floor(1000 + Math.random() * 9000));
+    const storedCode = devCode;
     console.log('[forgot-password] phone:', storedPhone, '| storing OTP code:', storedCode);
     await otpModel.createOtp({
       phone: storedPhone,
@@ -271,6 +299,17 @@ async function resetPassword(req, res, next) {
       return res.status(401).json({ success: false, message: 'Invalid reset token.' });
     }
 
+    // Defense in depth — forgotPassword() already blocks agency accounts
+    // from starting this flow, but reject here too in case a token was
+    // issued before that check existed.
+    const targetUser = await userModel.findById(payload.sub);
+    if (targetUser?.role === 'agency') {
+      return res.status(403).json({
+        success: false,
+        message: 'This is an agency account. Reset your password from the agency panel or contact admin.',
+      });
+    }
+
     const passwordHash = await bcrypt.hash(newPassword, 12);
     await userModel.updatePassword(payload.sub, passwordHash);
 
@@ -333,6 +372,25 @@ async function getPublicUser(req, res, next) {
   } catch (error) { next(error); }
 }
 
+/** POST /api/auth/users/:userId/report — file a report against a user */
+async function reportUser(req, res, next) {
+  try {
+    const db = require('../config/db');
+    const reporterId = req.user?.id;
+    const { userId: reportedUserId } = req.params;
+    const { reason, note, roomId } = req.body;
+    if (!reason) return res.status(400).json({ success: false, message: 'reason is required.' });
+    if (reporterId === reportedUserId) return res.status(400).json({ success: false, message: 'Cannot report yourself.' });
+
+    await db.query(
+      `INSERT INTO user_reports (reported_user_id, reporter_id, room_id, reason, note)
+       VALUES ($1, $2, $3, $4, $5)`,
+      [reportedUserId, reporterId, roomId || null, reason, note || null]
+    );
+    return res.json({ success: true });
+  } catch (error) { next(error); }
+}
+
 /** PATCH /api/auth/language */
 async function setLanguage(req, res, next) {
   try {
@@ -367,4 +425,5 @@ module.exports = {
   unfollowUser,
   checkFollow,
   getPublicUser,
+  reportUser,
 };

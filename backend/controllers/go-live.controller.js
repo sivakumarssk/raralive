@@ -1,6 +1,7 @@
 const goLiveModel = require('../models/go-live.model');
 const liveBroadcastModel = require('../models/live-broadcast.model');
 const db = require('../config/db');
+const ioInstance = require('../utils/io-instance');
 
 const STATUSES = ['pending', 'approved', 'rejected'];
 
@@ -120,6 +121,9 @@ async function startBroadcast(req, res, next) {
       roomImageUrl: avatarUrl,
     });
 
+    const io = ioInstance.get();
+    if (io) io.emit('live_broadcast_started', { broadcastId: broadcast.id, roomId, hostUserId: userId });
+
     return res.status(201).json({
       success: true,
       data: { broadcastId: broadcast.id, roomId, channelName, maxCohosts: broadcast.max_cohosts },
@@ -136,6 +140,10 @@ async function endBroadcast(req, res, next) {
     if (!existing) return res.status(404).json({ success: false, message: 'No active broadcast found.' });
 
     const ended = await liveBroadcastModel.endBroadcast(existing.id);
+
+    const io = ioInstance.get();
+    if (io) io.emit('live_broadcast_ended', { broadcastId: existing.id, roomId: existing.room_id, hostUserId: userId });
+
     return res.json({ success: true, data: ended });
   } catch (err) { next(err); }
 }

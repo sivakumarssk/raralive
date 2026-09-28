@@ -60,6 +60,7 @@ export default function RootLayout() {
         <Stack.Screen name="room/[id]" options={{ headerShown: false }} />
         <Stack.Screen name="forgot-password/index" options={{ headerShown: false }} />
         <Stack.Screen name="wallet/index" options={{ headerShown: false }} />
+        <Stack.Screen name="wallet-history/index" options={{ headerShown: false }} />
         <Stack.Screen name="performance/index" options={{ headerShown: false }} />
         <Stack.Screen name="leaderboard/index" options={{ headerShown: false }} />
         <Stack.Screen name="notifications/index" options={{ headerShown: false }} />
@@ -76,6 +77,8 @@ export default function RootLayout() {
         <Stack.Screen name="user/[id]" options={{ headerShown: false }} />
         <Stack.Screen name="live-broadcast/[id]" options={{ headerShown: false }} />
         <Stack.Screen name="go-live-preview/index" options={{ headerShown: false }} />
+        <Stack.Screen name="edit-room-name/index" options={{ headerShown: false }} />
+        <Stack.Screen name="agency/[id]" options={{ headerShown: false }} />
       </Stack>
       <MiniRoomPlayer />
       <IncomingCallOverlay />

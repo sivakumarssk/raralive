@@ -20,12 +20,15 @@ async function getRoomHost(roomId) {
 
 /**
  * POST /api/battle/invite
- * Body: { from_room_id, to_room_id, duration_minutes? }
+ * Body: { from_room_id, to_room_id, duration_minutes?, mode? }
  */
 async function sendBattleInvite(req, res, next) {
   try {
     const fromUserId = req.user.id;
-    const { from_room_id, to_room_id, duration_minutes = 25 } = req.body;
+    const { from_room_id, to_room_id, duration_minutes = 25, mode = 'normal' } = req.body;
+    if (!['normal', 'gifting'].includes(mode)) {
+      return res.status(400).json({ success: false, message: 'mode must be "normal" or "gifting".' });
+    }
 
     if (!from_room_id || !to_room_id) {
       return res.status(400).json({ success: false, message: 'from_room_id and to_room_id are required.' });
@@ -57,6 +60,7 @@ async function sendBattleInvite(req, res, next) {
       fromUserId,
       toUserId,
       durationMinutes: Number(duration_minutes),
+      mode,
     });
 
     // Notify target room host via DB notification
@@ -83,6 +87,7 @@ async function sendBattleInvite(req, res, next) {
           from_room_name: fromRoom.room_name,
           from_room_image_url: fromRoomData.rows[0]?.room_image_url ?? null,
           duration_minutes: Number(duration_minutes),
+          mode,
         });
       }
       // Also notify the inviter's room to show waiting state
@@ -233,7 +238,7 @@ async function startBattle(req, res, next) {
     // Emit battle_started to both rooms so stage UI shows immediately
     const io = ioInstance.get();
     if (io) {
-      const data = { invite_id, from_room_id: invite.from_room_id, to_room_id: invite.to_room_id };
+      const data = { invite_id, from_room_id: invite.from_room_id, to_room_id: invite.to_room_id, mode: invite.mode };
       io.to(invite.from_room_id).emit('battle_started', data);
       io.to(invite.to_room_id).emit('battle_started', data);
     }

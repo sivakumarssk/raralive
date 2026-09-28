@@ -1,8 +1,8 @@
 // export const BASE_URL = 'https://api.raralive.in/api';
 // export const MEDIA_BASE = 'https://api.raralive.in';
 
-export const BASE_URL = 'http://192.168.0.9:5000/api';
-export const MEDIA_BASE = 'http://192.168.0.9:5000';
+export const BASE_URL = 'http://172.20.10.3:5000/api';
+export const MEDIA_BASE = 'http://172.20.10.3:5000';
 
 export type ApiResult<T = unknown> =
   | { ok: true; data: T }
@@ -415,6 +415,9 @@ export type PublicRoom = {
   room_name: string;
   room_image_url: string | null;
   current_level: number;
+  city: string | null;
+  state: string | null;
+  district: string | null;
 };
 
 export async function apiPublicRooms(token?: string | null) {
@@ -461,6 +464,7 @@ export type ChatConversation = {
   peer_username: string | null;
   peer_avatar_url: string | null;
   unread_count?: number;
+  pinned?: boolean;
 };
 
 export async function apiChatConversations(token: string) {
@@ -524,6 +528,34 @@ export async function apiChatMessages(conversationId: string, token: string, bef
 export async function apiChatMarkRead(conversationId: string, token: string) {
   return request<{ message: string }>(`/chat/conversations/${conversationId}/read`, {
     method: 'POST',
+    headers: { Authorization: `Bearer ${token}` },
+  });
+}
+
+export async function apiChatMarkUnread(conversationId: string, token: string) {
+  return request<{ message: string }>(`/chat/conversations/${conversationId}/unread`, {
+    method: 'POST',
+    headers: { Authorization: `Bearer ${token}` },
+  });
+}
+
+export async function apiChatPin(conversationId: string, token: string) {
+  return request<{ message: string }>(`/chat/conversations/${conversationId}/pin`, {
+    method: 'POST',
+    headers: { Authorization: `Bearer ${token}` },
+  });
+}
+
+export async function apiChatUnpin(conversationId: string, token: string) {
+  return request<{ message: string }>(`/chat/conversations/${conversationId}/pin`, {
+    method: 'DELETE',
+    headers: { Authorization: `Bearer ${token}` },
+  });
+}
+
+export async function apiChatDeleteConversation(conversationId: string, token: string) {
+  return request<{ message: string }>(`/chat/conversations/${conversationId}`, {
+    method: 'DELETE',
     headers: { Authorization: `Bearer ${token}` },
   });
 }

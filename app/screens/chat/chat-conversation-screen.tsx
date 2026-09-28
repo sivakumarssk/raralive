@@ -13,6 +13,7 @@ import {
 import { authStore } from '@/store/auth-store';
 import { chatSocketStore, subscribeChatEvents } from '@/store/chat-socket-store';
 import { AttachMenu } from './components/attach-menu';
+import { formatLastSeen } from './chat.data';
 import { MessageBubble } from './components/message-bubble';
 import { MessageInputBar } from './components/message-input-bar';
 import { StickerPicker } from './components/sticker-picker';
@@ -30,10 +31,13 @@ export function ChatConversationScreen({ conversationId, conversation }: ChatCon
   const [showStickers, setShowStickers] = useState(false);
   const [peerTyping, setPeerTyping] = useState(false);
   const [peerReadAt, setPeerReadAt] = useState<number>(0);
+  const [peerOnline, setPeerOnline] = useState(false);
+  const [peerLastSeenAt, setPeerLastSeenAt] = useState<string | null>(null);
   const listRef = useRef<FlatList>(null);
 
   const peerName = conversation?.peer_name || conversation?.peer_username || 'User';
   const peerAvatar = resolveImageUrl(conversation?.peer_avatar_url);
+  const peerId = conversation?.peer_id;
 
   const load = useCallback(async () => {
     const token = authStore.getToken();
@@ -63,10 +67,20 @@ export function ChatConversationScreen({ conversationId, conversation }: ChatCon
         setPeerTyping(event.isTyping);
       } else if (event.type === 'read' && event.conversationId === conversationId && event.readBy !== myUserId) {
         setPeerReadAt(Date.now());
+      } else if (event.type === 'online_status' && peerId && event.userId === peerId) {
+        setPeerOnline(event.isOnline);
+        if (event.lastSeenAt) setPeerLastSeenAt(event.lastSeenAt);
       }
     });
     return unsub;
-  }, [conversationId, myUserId]);
+  }, [conversationId, myUserId, peerId]);
+
+  // One-off check on open — live updates after this come from the presence
+  // broadcast every chat-socket connection already receives (see the listener above).
+  useEffect(() => {
+    if (!peerId) return;
+    chatSocketStore.checkOnline(peerId);
+  }, [peerId]);
 
   const sendText = (text: string) => {
     chatSocketStore.sendMessage(conversationId, text);
@@ -128,17 +142,32 @@ export function ChatConversationScreen({ conversationId, conversation }: ChatCon
         <TouchableOpacity onPress={() => router.back()} style={styles.backBtn} activeOpacity={0.8}>
           <Ionicons name="chevron-back" size={24} color="#1A1730" />
         </TouchableOpacity>
-        {peerAvatar ? (
-          <Image source={{ uri: peerAvatar }} style={styles.headerAvatar} />
-        ) : (
-          <View style={styles.headerAvatarFallback}>
-            <Text style={styles.headerAvatarInitial}>{peerName.charAt(0).toUpperCase()}</Text>
+        <TouchableOpacity
+          style={styles.headerProfileTouch}
+          activeOpacity={0.7}
+          disabled={!peerId}
+          onPress={() => peerId && router.push(`/user/${peerId}` as any)}>
+          <View style={styles.headerAvatarWrap}>
+            {peerAvatar ? (
+              <Image source={{ uri: peerAvatar }} style={styles.headerAvatar} />
+            ) : (
+              <View style={styles.headerAvatarFallback}>
+                <Text style={styles.headerAvatarInitial}>{peerName.charAt(0).toUpperCase()}</Text>
+              </View>
+            )}
+            {peerOnline && <View style={styles.onlineDot} />}
           </View>
-        )}
-        <View style={styles.headerBody}>
-          <Text style={styles.headerName} numberOfLines={1}>{peerName}</Text>
-          {peerTyping && <Text style={styles.typingText}>typing…</Text>}
-        </View>
+          <View style={styles.headerBody}>
+            <Text style={styles.headerName} numberOfLines={1}>{peerName}</Text>
+            {peerTyping ? (
+              <Text style={styles.typingText}>typing…</Text>
+            ) : peerOnline ? (
+              <Text style={styles.onlineText}>Online</Text>
+            ) : peerLastSeenAt ? (
+              <Text style={styles.lastSeenText}>{formatLastSeen(peerLastSeenAt)}</Text>
+            ) : null}
+          </View>
+        </TouchableOpacity>
       </View>
 
       <KeyboardAvoidingView
@@ -196,14 +225,23 @@ const styles = StyleSheet.create({
     paddingHorizontal: 8, paddingVertical: 10, borderBottomWidth: 1, borderBottomColor: '#F4F0FF',
   },
   backBtn: { width: 36, height: 36, alignItems: 'center', justifyContent: 'center' },
+  headerProfileTouch: { flex: 1, flexDirection: 'row', alignItems: 'center', gap: 10 },
+  headerAvatarWrap: { position: 'relative' },
   headerAvatar: { width: 38, height: 38, borderRadius: 19 },
   headerAvatarFallback: {
     width: 38, height: 38, borderRadius: 19,
     backgroundColor: '#EDE8F7', alignItems: 'center', justifyContent: 'center',
   },
   headerAvatarInitial: { fontSize: 15, fontWeight: '700', color: '#7A0EED' },
+  onlineDot: {
+    position: 'absolute', bottom: 0, right: 0,
+    width: 11, height: 11, borderRadius: 5.5,
+    backgroundColor: '#3ED598', borderWidth: 2, borderColor: '#FFFFFF',
+  },
   headerBody: { flex: 1 },
   headerName: { fontSize: 15.5, fontWeight: '800', color: '#1A1730' },
   typingText: { fontSize: 11.5, color: '#7A0EED', fontWeight: '600' },
+  onlineText: { fontSize: 11.5, color: '#3ED598', fontWeight: '600' },
+  lastSeenText: { fontSize: 11.5, color: '#9A94AE', fontWeight: '500' },
   listContent: { paddingVertical: 12, flexGrow: 1 },
 });

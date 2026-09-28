@@ -1,4 +1,5 @@
 import { Ionicons } from '@expo/vector-icons';
+import { useRouter } from 'expo-router';
 import { useEffect, useRef, useState } from 'react';
 import {
   Animated,
@@ -192,7 +193,8 @@ type TopGifter = {
   avatar_url: string | null; total_coins: number;
 };
 
-function TopGiftersTab() {
+function TopGiftersTab({ onClose }: { onClose: () => void }) {
+  const router = useRouter();
   const [gifters, setGifters] = useState<TopGifter[]>([]);
   const [loading, setLoading] = useState(true);
 
@@ -228,7 +230,11 @@ function TopGiftersTab() {
         const name = g.username ?? g.full_name ?? 'User';
         const uri = g.avatar_url ? `${MEDIA_BASE}/${g.avatar_url.replace(/^\//, '')}` : null;
         return (
-          <View key={g.id} style={th.row}>
+          <TouchableOpacity
+            key={g.id}
+            style={th.row}
+            activeOpacity={0.7}
+            onPress={() => { onClose(); router.push(`/user/${g.id}` as any); }}>
             <Text style={th.rank}>{MEDAL[i] ?? `#${i + 1}`}</Text>
             <View style={th.avatar}>
               {uri
@@ -244,7 +250,7 @@ function TopGiftersTab() {
             <View style={th.coinsBadge}>
               <Text style={th.coinsText}>🪙 {formatCoins(Number(g.total_coins))}</Text>
             </View>
-          </View>
+          </TouchableOpacity>
         );
       })}
     </ScrollView>
@@ -311,7 +317,7 @@ export function DailyTaskModal({ visible, onClose, roomId, refreshKey }: Props) 
         </View>
         <View style={s.content}>
           {activeTab === 'tasks' && <TasksTab roomId={roomId} refreshKey={refreshKey} />}
-          {activeTab === 'top-gifters' && <TopGiftersTab />}
+          {activeTab === 'top-gifters' && <TopGiftersTab onClose={onClose} />}
         </View>
       </Animated.View>
     </Modal>

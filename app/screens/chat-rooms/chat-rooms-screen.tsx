@@ -3,7 +3,6 @@ import { useFocusEffect, useRouter } from 'expo-router';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import {
   ActivityIndicator,
-  Dimensions,
   FlatList,
   Image,
   Keyboard,
@@ -17,15 +16,16 @@ import {
   View,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
-import { Image as ExpoImage } from 'expo-image';
 
 import {
   BASE_URL, MEDIA_BASE, type ActiveBroadcast, type FriendZoneApplication, type FriendZonePublicFriend, type GoLiveRequest, type MyRoom, type PublicRoom,
   apiActiveBroadcasts, apiFriendZoneFriends, apiFriendZoneMyStatus, apiFriendZoneUpdateToggles, apiGoLiveMyStatus, apiMyRooms, apiOnlineCounts, apiPublicRooms,
 } from '@/services/api';
 import { authStore } from '@/store/auth-store';
+import { subscribeChatEvents } from '@/store/chat-socket-store';
 import { consumePendingReturnToFriendZone, friendZoneCallSessionStore } from '@/store/friend-zone-call-session-store';
 import { friendZoneSocketStore, getFriendZoneSocketState, subscribeFriendZoneSocket } from '@/store/friend-zone-socket-store';
+import { BannerCarousel } from './components/banner-carousel';
 import { ChatRoomsHeader } from './components/chat-rooms-header';
 import { CreateRoomCard } from './components/create-room-card';
 import { CreateRoomSheet } from './components/create-room-sheet';
@@ -52,6 +52,12 @@ function ageFromDob(dob: string): number {
   return Math.floor(diff / (365.25 * 24 * 60 * 60 * 1000));
 }
 
+function roomLocation(room: { city?: string | null }): string | undefined {
+  const city = room.city?.trim();
+  if (!city) return undefined;
+  return city.charAt(0).toUpperCase() + city.slice(1);
+}
+
 export function ChatRoomsScreen() {
   const router = useRouter();
   const [activeTab, setActiveTab] = useState<ChatTab>('chat-rooms');
@@ -63,20 +69,8 @@ export function ChatRoomsScreen() {
   // Banners
   type Banner = { id: string; title: string | null; image_url: string; link_url: string | null };
   const [banners, setBanners] = useState<Banner[]>([]);
-  const bannerRef = useRef<FlatList>(null);
-  const bannerIndex = useRef(0);
 
   // Banners are fetched in loadData
-
-  // Auto-scroll carousel
-  useEffect(() => {
-    if (banners.length <= 1) return;
-    const interval = setInterval(() => {
-      bannerIndex.current = (bannerIndex.current + 1) % banners.length;
-      bannerRef.current?.scrollToIndex({ index: bannerIndex.current, animated: true });
-    }, 3500);
-    return () => clearInterval(interval);
-  }, [banners.length]);
 
   // Friend Zone state
   const currentUser = authStore.getUser();
@@ -234,6 +228,19 @@ export function ChatRoomsScreen() {
   useEffect(() => { loadActiveBroadcasts(); }, [loadActiveBroadcasts]);
   useFocusEffect(useCallback(() => { loadActiveBroadcasts(); }, [loadActiveBroadcasts]));
 
+  // Real-time add/remove as broadcasts start/end, instead of relying on a
+  // manual pull-to-refresh — an ended broadcast used to stay visible/joinable
+  // in the grid until the user refreshed by hand.
+  useEffect(() => {
+    return subscribeChatEvents((event) => {
+      if (event.type === 'live_broadcast_ended') {
+        setActiveBroadcasts(prev => prev.filter(b => b.room_id !== event.roomId));
+      } else if (event.type === 'live_broadcast_started') {
+        loadActiveBroadcasts();
+      }
+    });
+  }, [loadActiveBroadcasts]);
+
   const handleRefreshBroadcasts = useCallback(() => {
     setRefreshingBroadcasts(true);
     loadActiveBroadcasts().finally(() => setRefreshingBroadcasts(false));
@@ -331,7 +338,15 @@ export function ChatRoomsScreen() {
     setMyRooms(prev => [newRoom, ...prev]);
     if (newRoom.visibility === 'public') {
       setPublicRooms(prev => [
-        { id: newRoom.id, room_name: newRoom.room_name, room_image_url: newRoom.room_image_url, current_level: newRoom.current_level ?? 0 },
+        {
+          id: newRoom.id,
+          room_name: newRoom.room_name,
+          room_image_url: newRoom.room_image_url,
+          current_level: newRoom.current_level ?? 0,
+          city: newRoom.city,
+          state: newRoom.state,
+          district: newRoom.district,
+        },
         ...prev,
       ]);
     }
@@ -383,6 +398,7 @@ export function ChatRoomsScreen() {
 
         {activeTab === 'live' ? (
           <LiveScreen
+            banners={banners}
             broadcasters={broadcasters}
             onGoLive={handleGoLivePress}
             onBroadcasterPress={(b) => requireProfile(() => {
@@ -436,39 +452,7 @@ export function ChatRoomsScreen() {
             <SectionHeader title="My Chatroom" />
 
             {/* Banner carousel */}
-            {banners.length > 0 && (
-              <View style={styles.bannerWrap}>
-                <FlatList
-                  ref={bannerRef}
-                  data={banners}
-                  keyExtractor={b => b.id}
-                  horizontal
-                  pagingEnabled
-                  showsHorizontalScrollIndicator={false}
-                  onScrollToIndexFailed={() => {}}
-                  onMomentumScrollEnd={e => {
-                    const idx = Math.round(e.nativeEvent.contentOffset.x / (Dimensions.get('window').width - 32));
-                    bannerIndex.current = idx;
-                  }}
-                  renderItem={({ item }) => (
-                    <TouchableOpacity activeOpacity={0.9} style={styles.bannerCard}>
-                      <ExpoImage
-                        source={{ uri: `${MEDIA_BASE}/${item.image_url.replace(/^\//, '')}` }}
-                        style={styles.bannerImg}
-                        contentFit="fill"
-                      />
-                    </TouchableOpacity>
-                  )}
-                />
-                {banners.length > 1 && (
-                  <View style={styles.bannerDots}>
-                    {banners.map((b, i) => (
-                      <View key={b.id} style={[styles.bannerDot, i === bannerIndex.current && styles.bannerDotActive]} />
-                    ))}
-                  </View>
-                )}
-              </View>
-            )}
+            <BannerCarousel banners={banners} />
 
             {myRooms.map(room => (
               <MyChatroomCard
@@ -479,6 +463,7 @@ export function ChatRoomsScreen() {
                   onlineCount: onlineCounts[room.id] ?? 0,
                   avatarUri: resolveImageUrl(room.room_image_url),
                   level: room.current_level ?? 0,
+                  location: roomLocation(room),
                 }}
                 onPress={() => requireProfile(() =>
                   router.push({ pathname: '/room/[id]', params: { id: room.id } })
@@ -502,6 +487,7 @@ export function ChatRoomsScreen() {
                     memberCount: onlineCounts[room.id] ?? 0,
                     imageUri: resolveImageUrl(room.room_image_url),
                     level: room.current_level ?? 0,
+                    location: roomLocation(room),
                   }}
                   onPress={() => requireProfile(() =>
                     router.push({ pathname: '/room/[id]', params: { id: room.id } })
@@ -632,22 +618,6 @@ const styles = StyleSheet.create({
   scrollView: { flex: 1 },
   scrollContent: { flexGrow: 1 },
   popularList: { backgroundColor: '#FAFAFA' },
-  bannerWrap: { paddingHorizontal: 16, marginBottom: 12 },
-  bannerCard: {
-    width: Dimensions.get('window').width - 32,
-    borderRadius: 16,
-    overflow: 'hidden',
-  },
-  bannerImg: { width: Dimensions.get('window').width - 32, height: 160 },
-  bannerDots: {
-    flexDirection: 'row', justifyContent: 'center',
-    gap: 6, marginTop: 8,
-  },
-  bannerDot: {
-    width: 6, height: 6, borderRadius: 3,
-    backgroundColor: '#D8D3EC',
-  },
-  bannerDotActive: { backgroundColor: '#7A0EED', width: 18 },
   bottomSpacer: { height: 100 },
   fab: {
     position: 'absolute',

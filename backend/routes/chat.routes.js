@@ -15,6 +15,10 @@ router.post('/conversations/:id/accept', authenticate, ctrl.acceptConversation);
 router.post('/conversations/:id/reject', authenticate, ctrl.rejectConversation);
 router.get('/conversations/:id/messages', authenticate, ctrl.getMessages);
 router.post('/conversations/:id/read', authenticate, ctrl.markRead);
+router.post('/conversations/:id/unread', authenticate, ctrl.markUnread);
+router.post('/conversations/:id/pin', authenticate, ctrl.pinConversation);
+router.delete('/conversations/:id/pin', authenticate, ctrl.unpinConversation);
+router.delete('/conversations/:id', authenticate, ctrl.deleteConversation);
 router.post('/conversations/:id/media', authenticate, uploadChatMedia.single('file'), ctrl.sendMediaMessage);
 
 module.exports = router;

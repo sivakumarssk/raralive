@@ -227,6 +227,14 @@ async function migrate() {
       ADD COLUMN IF NOT EXISTS to_result_seen BOOLEAN NOT NULL DEFAULT FALSE;
   `);
 
+  // ── battle_invites.mode — 'normal' (no per-user coin badges on stage) vs
+  // 'gifting' (coin totals shown under each stage profile during the battle) ──
+  await run('battle_invites.mode', `
+    ALTER TABLE battle_invites
+      ADD COLUMN IF NOT EXISTS mode VARCHAR(20) NOT NULL DEFAULT 'normal'
+        CHECK (mode IN ('normal', 'gifting'));
+  `);
+
   // ── room_gift_events.target_user_id — actual gift recipient for history ──
   await run('room_gift_events.target_user_id', `
     ALTER TABLE room_gift_events ADD COLUMN IF NOT EXISTS target_user_id UUID REFERENCES users(id) ON DELETE SET NULL;
@@ -484,6 +492,79 @@ async function migrate() {
   `);
   await run('idx_comment_reports_status', `
     CREATE INDEX IF NOT EXISTS idx_comment_reports_status ON comment_reports(status);
+  `);
+  await run('user_reports table', `
+    CREATE TABLE IF NOT EXISTS user_reports (
+      id                UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+      reported_user_id  UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      reporter_id       UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      room_id           UUID REFERENCES rooms(id) ON DELETE SET NULL,
+      reason            TEXT NOT NULL,
+      note              TEXT,
+      status            VARCHAR(20) NOT NULL DEFAULT 'open' CHECK (status IN ('open','reviewed','dismissed')),
+      created_at        TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    );
+  `);
+  await run('idx_user_reports_reported_user', `
+    CREATE INDEX IF NOT EXISTS idx_user_reports_reported_user ON user_reports(reported_user_id, created_at DESC);
+  `);
+  await run('idx_user_reports_status', `
+    CREATE INDEX IF NOT EXISTS idx_user_reports_status ON user_reports(status);
+  `);
+  // Per-user chat-list preferences (pin / hide-for-me) — conversations rows are
+  // shared by both participants, so these can't live as columns on that table.
+  await run('user_conversation_state table', `
+    CREATE TABLE IF NOT EXISTS user_conversation_state (
+      conversation_id UUID NOT NULL REFERENCES conversations(id) ON DELETE CASCADE,
+      user_id         UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      pinned          BOOLEAN NOT NULL DEFAULT FALSE,
+      pinned_at       TIMESTAMPTZ,
+      hidden          BOOLEAN NOT NULL DEFAULT FALSE,
+      hidden_at       TIMESTAMPTZ,
+      PRIMARY KEY (conversation_id, user_id)
+    );
+  `);
+  await run('idx_user_conversation_state_user', `
+    CREATE INDEX IF NOT EXISTS idx_user_conversation_state_user ON user_conversation_state(user_id);
+  `);
+  // Written on a user's last socket disconnect (see socket/index.js) — powers
+  // the "last seen X ago" fallback in DM chat when a peer is offline.
+  await run('users.last_seen_at', `
+    ALTER TABLE users ADD COLUMN IF NOT EXISTS last_seen_at TIMESTAMPTZ;
+  `);
+
+  // Paid, time-limited chatroom name changes — the host spends coins to set a
+  // new room_name for a fixed duration; previous_room_name + expires_at let
+  // us lazily revert it back the next time the room is read (see
+  // room.controller.js applyRoomNameExpiry()), the same lazy-expiry pattern
+  // battle.controller.js already uses for auto-finishing battles.
+  await run('rooms.previous_room_name', `
+    ALTER TABLE rooms ADD COLUMN IF NOT EXISTS previous_room_name VARCHAR(120);
+  `);
+  await run('rooms.room_name_expires_at', `
+    ALTER TABLE rooms ADD COLUMN IF NOT EXISTS room_name_expires_at TIMESTAMPTZ;
+  `);
+
+  // Lets an agency's phone+password also log into the app itself (not just
+  // the separate agency panel), tagged with role='agency' so app code can
+  // role-gate agency-specific features later. agency_id links back to the
+  // owning agencies row; kept nullable/SET NULL so deleting an agency never
+  // cascades into deleting the person's app account.
+  await run('users.role', `
+    ALTER TABLE users ADD COLUMN IF NOT EXISTS role VARCHAR(20) NOT NULL DEFAULT 'user';
+  `);
+  await run('users.agency_id', `
+    ALTER TABLE users ADD COLUMN IF NOT EXISTS agency_id UUID REFERENCES agencies(id) ON DELETE SET NULL;
+  `);
+  await run('idx_users_agency_id', `
+    CREATE INDEX IF NOT EXISTS idx_users_agency_id ON users(agency_id) WHERE agency_id IS NOT NULL;
+  `);
+
+  // Which app services an agency may use, managed by admin on create/edit.
+  // Values: 'chatroom' | 'friend_zone' | 'live'. Existing agencies default to
+  // chat rooms only (the one service that existed before this column).
+  await run('agencies.service_access', `
+    ALTER TABLE agencies ADD COLUMN IF NOT EXISTS service_access TEXT[] NOT NULL DEFAULT ARRAY['chatroom']::TEXT[];
   `);
 
   console.log('\n✅ All migrations complete.');

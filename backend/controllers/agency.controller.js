@@ -1,5 +1,6 @@
 const bcrypt = require('bcryptjs');
 const agencyModel = require('../models/agency.model');
+const userModel = require('../models/user.model');
 
 /** Generate a unique agent code like AGT-A3F9K2 */
 function generateAgentCode() {
@@ -30,14 +31,35 @@ function generateDefaultPassword() {
   return pass.split('').sort(() => Math.random() - 0.5).join('');
 }
 
+// App services an agency can be given access to (admin picks one or more)
+const SERVICE_ACCESS = ['chatroom', 'friend_zone', 'live'];
+
+// Accepts an array, a JSON array string (multipart create form) or a comma list;
+// returns the valid, de-duplicated values in canonical order, or null if absent.
+function parseServiceAccess(input) {
+  if (input === undefined || input === null || input === '') return null;
+  let list = input;
+  if (typeof input === 'string') {
+    try { list = JSON.parse(input); } catch { list = input.split(','); }
+  }
+  if (!Array.isArray(list)) return [];
+  const picked = new Set(list.map(v => String(v).trim()));
+  return SERVICE_ACCESS.filter(v => picked.has(v));
+}
+
 /** POST /api/admin/agencies — create agency (admin-protected) */
 async function createAgency(req, res, next) {
   try {
     const {
       agencyName, personName, age, email, phone, address,
       aadharNumber, panNumber, bankAccount, bankIfsc,
-      bankHolderName, bankName,
+      bankHolderName, bankName, serviceAccess,
     } = req.body;
+
+    const services = parseServiceAccess(serviceAccess) ?? ['chatroom'];
+    if (!services.length) {
+      return res.status(400).json({ success: false, message: 'Select at least one Service Access.' });
+    }
 
     // Validate required fields
     const missing = [];
@@ -121,6 +143,17 @@ async function createAgency(req, res, next) {
       passwordHash,
       plainPassword: defaultPassword,
       createdBy: req.admin.id,
+      serviceAccess: services,
+    });
+
+    // Give this agency's phone+password a working login in the app itself,
+    // not just the agency panel — links an existing users row for that
+    // phone, or creates one, tagged role='agency'. See linkAgencyUser().
+    await userModel.linkAgencyUser({
+      agencyId: agency.id,
+      phone: phone.trim(),
+      passwordHash,
+      fullName: personName.trim(),
     });
 
     return res.status(201).json({
@@ -172,7 +205,12 @@ async function getAgency(req, res, next) {
 /** PATCH /api/admin/agencies/:id — edit non-KYC details (admin-protected) */
 async function updateAgency(req, res, next) {
   try {
-    const { personName, age, email, phone, address, bankIfsc } = req.body;
+    const { personName, age, email, phone, address, bankIfsc, serviceAccess } = req.body;
+
+    const services = parseServiceAccess(serviceAccess);
+    if (services && !services.length) {
+      return res.status(400).json({ success: false, message: 'Select at least one Service Access.' });
+    }
 
     const ageNum = age ? parseInt(age, 10) : undefined;
     if (age !== undefined && (isNaN(ageNum) || ageNum < 18 || ageNum > 120)) {
@@ -202,6 +240,7 @@ async function updateAgency(req, res, next) {
       phone: phone?.trim(),
       address,
       bankIfsc: bankIfsc?.toUpperCase(),
+      serviceAccess: services,
     });
 
     if (!agency) return res.status(404).json({ success: false, message: 'Agency not found.' });
@@ -235,6 +274,14 @@ async function adminResetAgencyPassword(req, res, next) {
     const newPassword = generateDefaultPassword();
     const passwordHash = await bcrypt.hash(newPassword, 12);
     await agencyModel.resetAgencyPassword(req.params.id, passwordHash, newPassword);
+
+    // Keep the app-login password in sync — see linkAgencyUser().
+    await userModel.linkAgencyUser({
+      agencyId: agency.id,
+      phone: agency.phone,
+      passwordHash,
+      fullName: null,
+    });
 
     return res.json({
       success: true,

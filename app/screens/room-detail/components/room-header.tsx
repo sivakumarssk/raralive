@@ -8,9 +8,12 @@ import {
   Animated,
   FlatList,
   Image,
+  Linking,
   Modal,
+  ScrollView,
   StyleSheet,
   Text,
+  TextInput,
   TouchableOpacity,
   TouchableWithoutFeedback,
   View,
@@ -23,10 +26,15 @@ import { getLevelImage } from './room-level-up';
 type RoomHeaderProps = {
   name: string;
   agencyName?: string;
+  /** Opens the agency profile screen when the agency name is tapped. */
+  agencyId?: string | null;
   memberCount: number;
   level?: number;
   roomId?: string;
+  roomCode?: string;
   totalCoins?: number;
+  hostName?: string | null;
+  visibility?: 'public' | 'private';
   onBack: () => void;
   onShare?: () => void;
   onMore?: () => void;
@@ -34,6 +42,7 @@ type RoomHeaderProps = {
   isHost?: boolean;
   seats?: SeatSlot[];
   onInviteToStage?: (userId: string, slotIndex: number) => void;
+  onRefreshRoom?: () => void;
 };
 
 type RoomMember = {
@@ -70,6 +79,7 @@ function MembersSheet({
   isHost,
   seats,
   onInviteToStage,
+  initialTab = 'online',
 }: {
   visible: boolean;
   onClose: () => void;
@@ -77,13 +87,21 @@ function MembersSheet({
   isHost: boolean;
   seats: SeatSlot[];
   onInviteToStage?: (userId: string, slotIndex: number) => void;
+  initialTab?: MembersTab;
 }) {
+  const router = useRouter();
   const [members, setMembers] = useState<RoomMember[]>([]);
   const [blockedUsers, setBlockedUsers] = useState<BlockedUser[]>([]);
   const [loading, setLoading] = useState(false);
-  const [activeTab, setActiveTab] = useState<MembersTab>('online');
+  const [activeTab, setActiveTab] = useState<MembersTab>(initialTab);
   const slideAnim = useRef(new Animated.Value(400)).current;
   const opacityAnim = useRef(new Animated.Value(0)).current;
+
+  const currentUserId = authStore.getUserId() ?? '';
+  // "Co-host" isn't a persisted role — it's whoever currently occupies a
+  // non-zero stage seat, same definition used on the live-broadcast screen
+  // and for the stage-tap profile actions.
+  const canManage = isHost || seats.some(s => s.userId === currentUserId && s.slotIndex !== 0);
 
   function fetchMembers() {
     const token = authStore.getToken();
@@ -97,7 +115,7 @@ function MembersSheet({
 
   function fetchBlocked() {
     const token = authStore.getToken();
-    if (!token || !isHost) return;
+    if (!token || !canManage) return;
     fetch(`${BASE_URL}/rooms/${roomId}/blocked`, {
       headers: { Authorization: `Bearer ${token}` },
     })
@@ -109,8 +127,8 @@ function MembersSheet({
   useEffect(() => {
     if (visible) {
       setLoading(true);
-      setActiveTab('online');
-      Promise.all([fetchMembers(), isHost ? fetchBlocked() : Promise.resolve()])
+      setActiveTab(initialTab);
+      Promise.all([fetchMembers(), canManage ? fetchBlocked() : Promise.resolve()])
         .finally(() => setLoading(false));
 
       Animated.parallel([
@@ -130,7 +148,6 @@ function MembersSheet({
   const allSlotsFull = filledSlots >= 7;
   const usedSlots = new Set(seats.filter(s => s.slotIndex !== 0).map(s => s.slotIndex));
   const nextSlot = [1,2,3,4,5,6,7].find(i => !usedSlots.has(i)) ?? 1;
-  const currentUserId = authStore.getUserId() ?? '';
 
   async function handleBlock(userId: string) {
     const token = authStore.getToken();
@@ -162,25 +179,31 @@ function MembersSheet({
 
     return (
       <View style={mb.row}>
-        {avatarUri ? (
-          <Image source={{ uri: avatarUri }} style={mb.avatar} />
-        ) : (
-          <View style={[mb.avatar, mb.avatarFallback]}>
-            <Text style={mb.avatarInitial}>{item.userName[0]?.toUpperCase() ?? '?'}</Text>
-          </View>
-        )}
-
-        <View style={mb.info}>
-          <Text style={mb.name} numberOfLines={1}>{item.userName}{isMe ? ' (you)' : ''}</Text>
-          {isOnStage && (
-            <View style={mb.stageBadge}>
-              <Ionicons name="mic" size={10} color="#7A0EED" />
-              <Text style={mb.stageBadgeText}>On Stage</Text>
+        <TouchableOpacity
+          style={mb.profileTouch}
+          activeOpacity={isMe ? 1 : 0.7}
+          disabled={isMe}
+          onPress={() => { onClose(); router.push(`/user/${item.userId}` as any); }}>
+          {avatarUri ? (
+            <Image source={{ uri: avatarUri }} style={mb.avatar} />
+          ) : (
+            <View style={[mb.avatar, mb.avatarFallback]}>
+              <Text style={mb.avatarInitial}>{item.userName[0]?.toUpperCase() ?? '?'}</Text>
             </View>
           )}
-        </View>
 
-        {isHost && !isMe && (
+          <View style={mb.info}>
+            <Text style={mb.name} numberOfLines={1}>{item.userName}{isMe ? ' (you)' : ''}</Text>
+            {isOnStage && (
+              <View style={mb.stageBadge}>
+                <Ionicons name="mic" size={10} color="#7A0EED" />
+                <Text style={mb.stageBadgeText}>On Stage</Text>
+              </View>
+            )}
+          </View>
+        </TouchableOpacity>
+
+        {canManage && !isMe && (
           <View style={mb.actionRow}>
             {/* Block button */}
             <TouchableOpacity activeOpacity={0.8} onPress={() => handleBlock(item.userId)} style={mb.blockBtn}>
@@ -222,16 +245,21 @@ function MembersSheet({
     const avatarUri = resolveAvatar(item.avatarUrl);
     return (
       <View style={mb.row}>
-        {avatarUri ? (
-          <Image source={{ uri: avatarUri }} style={mb.avatar} />
-        ) : (
-          <View style={[mb.avatar, mb.avatarFallback]}>
-            <Text style={mb.avatarInitial}>{item.userName[0]?.toUpperCase() ?? '?'}</Text>
+        <TouchableOpacity
+          style={mb.profileTouch}
+          activeOpacity={0.7}
+          onPress={() => { onClose(); router.push(`/user/${item.userId}` as any); }}>
+          {avatarUri ? (
+            <Image source={{ uri: avatarUri }} style={mb.avatar} />
+          ) : (
+            <View style={[mb.avatar, mb.avatarFallback]}>
+              <Text style={mb.avatarInitial}>{item.userName[0]?.toUpperCase() ?? '?'}</Text>
+            </View>
+          )}
+          <View style={mb.info}>
+            <Text style={mb.name} numberOfLines={1}>{item.userName}</Text>
           </View>
-        )}
-        <View style={mb.info}>
-          <Text style={mb.name} numberOfLines={1}>{item.userName}</Text>
-        </View>
+        </TouchableOpacity>
         <TouchableOpacity activeOpacity={0.8} onPress={() => handleUnblock(item.userId)} style={mb.unblockBtn}>
           <Text style={mb.unblockBtnText}>Unblock</Text>
         </TouchableOpacity>
@@ -263,8 +291,8 @@ function MembersSheet({
           </TouchableOpacity>
         </View>
 
-        {/* Tabs — only show if host */}
-        {isHost && (
+        {/* Tabs — only show if host or a currently-seated co-host */}
+        {canManage && (
           <View style={mb.tabBar}>
             <TouchableOpacity
               style={[mb.tab, activeTab === 'online' && mb.tabActive]}
@@ -324,41 +352,91 @@ function MembersSheet({
 
 // ── Dropdown menu ──────────────────────────────────────────────────────────────
 
-const MENU_ITEMS = [
-  { key: 'gift-history', icon: 'gift-outline' as const, label: 'Gift History' },
-  { key: 'co-host',      icon: 'people-outline' as const, label: 'Assign Co-Host' },
-] as const;
+type MenuKey =
+  | 'edit-room-name' | 'block-user' | 'refresh-room'
+  | 'agency' | 'help-support' | 'email-support' | 'report-room';
+
+type MenuVisibility = 'all' | 'hostOnly' | 'managerOnly';
+
+const MENU_ITEMS: {
+  key: MenuKey; icon: keyof typeof Ionicons.glyphMap; label: string; subtitle: string; visibility: MenuVisibility;
+}[] = [
+  { key: 'edit-room-name', icon: 'create-outline',       label: 'Chatroom Name',        subtitle: 'View & edit chatroom name',   visibility: 'hostOnly' },
+  { key: 'block-user',     icon: 'ban-outline',           label: 'Block User',           subtitle: 'Manage blocked users',        visibility: 'managerOnly' },
+  { key: 'refresh-room',   icon: 'refresh-outline',       label: 'Refresh Room',         subtitle: 'Reload the room',             visibility: 'all' },
+  { key: 'agency',         icon: 'business-outline',      label: 'Agency',               subtitle: 'Agency details and support',  visibility: 'all' },
+  { key: 'help-support',   icon: 'headset-outline',       label: 'Chatroom Help & Support', subtitle: 'Get help and contact us',  visibility: 'all' },
+  { key: 'email-support',  icon: 'mail-outline',          label: 'Email Support',        subtitle: 'support@raralive.com',        visibility: 'all' },
+  { key: 'report-room',    icon: 'flag-outline',          label: 'Report Chatroom',      subtitle: 'Report inappropriate content', visibility: 'all' },
+];
 
 type DropdownProps = {
   visible: boolean;
   onClose: () => void;
-  onGiftHistory: () => void;
-  onAssignCoHost: () => void;
+  isHost: boolean;
+  canManage: boolean;
+  onSelect: (key: MenuKey) => void;
 };
 
-function Dropdown({ visible, onClose, onGiftHistory, onAssignCoHost }: DropdownProps) {
-  if (!visible) return null;
-  const handlers: Record<string, () => void> = {
-    'gift-history': () => { onClose(); onGiftHistory(); },
-    'co-host':      () => { onClose(); onAssignCoHost(); },
-  };
+function Dropdown({ visible, onClose, isHost, canManage, onSelect }: DropdownProps) {
+  const slideAnim = useRef(new Animated.Value(400)).current;
+  const opacityAnim = useRef(new Animated.Value(0)).current;
+
+  useEffect(() => {
+    if (visible) {
+      Animated.parallel([
+        Animated.spring(slideAnim, { toValue: 0, useNativeDriver: true, damping: 18, stiffness: 180 }),
+        Animated.timing(opacityAnim, { toValue: 1, duration: 200, useNativeDriver: true }),
+      ]).start();
+    } else {
+      Animated.parallel([
+        Animated.timing(slideAnim, { toValue: 400, duration: 220, useNativeDriver: true }),
+        Animated.timing(opacityAnim, { toValue: 0, duration: 200, useNativeDriver: true }),
+      ]).start();
+    }
+  }, [visible]);
+
+  const items = MENU_ITEMS.filter(item => {
+    if (item.visibility === 'hostOnly') return isHost;
+    if (item.visibility === 'managerOnly') return canManage;
+    return true;
+  });
+
   return (
-    <Modal visible transparent animationType="none" onRequestClose={onClose}>
-      <TouchableWithoutFeedback onPress={onClose}>
-        <View style={dd.overlay} />
-      </TouchableWithoutFeedback>
-      <View style={dd.menu}>
-        {MENU_ITEMS.map((item, i) => (
-          <TouchableOpacity
-            key={item.key}
-            onPress={handlers[item.key]}
-            activeOpacity={0.75}
-            style={[dd.item, i < MENU_ITEMS.length - 1 && dd.itemBorder]}>
-            <Ionicons name={item.icon} size={16} color="#7A0EED" />
-            <Text style={dd.itemLabel}>{item.label}</Text>
+    <Modal visible={visible} transparent statusBarTranslucent animationType="none" onRequestClose={onClose}>
+      <Animated.View style={[dd.backdrop, { opacity: opacityAnim }]}>
+        <TouchableWithoutFeedback onPress={onClose}>
+          <View style={StyleSheet.absoluteFill} />
+        </TouchableWithoutFeedback>
+      </Animated.View>
+
+      <Animated.View style={[dd.sheet, { transform: [{ translateY: slideAnim }] }]}>
+        <View style={dd.handle} />
+        <View style={dd.header}>
+          <Text style={dd.title}>Room Options</Text>
+          <TouchableOpacity onPress={onClose} style={dd.closeBtn} hitSlop={12}>
+            <Ionicons name="close" size={15} color="#60626A" />
           </TouchableOpacity>
-        ))}
-      </View>
+        </View>
+        <ScrollView contentContainerStyle={dd.list} showsVerticalScrollIndicator={false}>
+          {items.map((item, index) => (
+            <TouchableOpacity
+              key={item.key}
+              onPress={() => { onClose(); onSelect(item.key); }}
+              activeOpacity={0.7}
+              style={[dd.item, index === items.length - 1 && dd.itemLast]}>
+              <View style={dd.itemIconWrap}>
+                <Ionicons name={item.icon} size={15} color="#7A0EED" />
+              </View>
+              <View style={dd.itemTextBlock}>
+                <Text style={dd.itemLabel}>{item.label}</Text>
+                <Text style={dd.itemSubtitle}>{item.subtitle}</Text>
+              </View>
+              <Ionicons name="chevron-forward" size={15} color="#C4C5CC" />
+            </TouchableOpacity>
+          ))}
+        </ScrollView>
+      </Animated.View>
     </Modal>
   );
 }
@@ -366,13 +444,46 @@ function Dropdown({ visible, onClose, onGiftHistory, onAssignCoHost }: DropdownP
 // ── RoomHeader ─────────────────────────────────────────────────────────────────
 
 export function RoomHeader({
-  name, agencyName, memberCount, level = 1, roomId = '', totalCoins = 0,
-  onBack, onShare, hasRoomBg, isHost = false, seats = [], onInviteToStage,
+  name, agencyName, agencyId, memberCount, level = 1, roomId = '', roomCode, totalCoins = 0,
+  hostName, visibility, onBack, onShare, hasRoomBg, isHost = false, seats = [], onInviteToStage,
+  onRefreshRoom,
 }: RoomHeaderProps) {
   const router = useRouter();
   const [menuVisible, setMenuVisible] = useState(false);
   const [membersVisible, setMembersVisible] = useState(false);
+  const [membersInitialTab, setMembersInitialTab] = useState<MembersTab>('online');
   const levelAsset = getLevelImage(level);
+
+  const currentUserId = authStore.getUserId() ?? '';
+  // Same live "co-host = currently seated" definition used throughout the room.
+  const canManage = isHost || seats.some(s => s.userId === currentUserId && s.slotIndex !== 0);
+
+  function openMembers(tab: MembersTab) {
+    setMembersInitialTab(tab);
+    setMembersVisible(true);
+  }
+
+  function handleMenuSelect(key: MenuKey) {
+    switch (key) {
+      case 'edit-room-name':
+        router.push({ pathname: '/edit-room-name', params: { roomId, currentName: name } } as any);
+        break;
+      case 'block-user':     openMembers('blocked'); break;
+      case 'refresh-room':   onRefreshRoom?.(); break;
+      case 'agency':
+        router.push({ pathname: '/coming-soon', params: { title: 'Agency', icon: 'business-outline' } } as any);
+        break;
+      case 'help-support':
+        router.push({ pathname: '/coming-soon', params: { title: 'Help & Support', icon: 'help-circle-outline' } } as any);
+        break;
+      case 'email-support':
+        Linking.openURL('mailto:support@raralive.com').catch(() => {});
+        break;
+      case 'report-room':
+        router.push({ pathname: '/coming-soon', params: { title: 'Report Room', icon: 'flag-outline' } } as any);
+        break;
+    }
+  }
 
   const iconColor  = hasRoomBg ? '#FFFFFF' : '#7A0EED';
   const iconColor2 = hasRoomBg ? 'rgba(255,255,255,0.85)' : '#60626A';
@@ -385,21 +496,36 @@ export function RoomHeader({
 
       <View style={styles.titleBlock}>
         <Text style={[styles.roomName, hasRoomBg && styles.roomNameBg]} numberOfLines={1}>{name}</Text>
-        <TouchableOpacity
-          onPress={() => setMembersVisible(true)}
-          hitSlop={8}
-          activeOpacity={0.7}
-          style={styles.memberRow}>
-          <Ionicons name="people" size={13} color={iconColor} />
-          <Text style={[styles.memberText, hasRoomBg && styles.memberTextBg]}>{formatCount(memberCount)}</Text>
+        {/* Two separate tap targets: people icon + count opens the members list,
+            the agency name opens the agency profile. */}
+        <View style={styles.memberRow}>
+          <TouchableOpacity
+            onPress={() => setMembersVisible(true)}
+            hitSlop={{ top: 8, bottom: 8, left: 8, right: 4 }}
+            activeOpacity={0.7}
+            style={styles.memberTap}>
+            <Ionicons name="people" size={13} color={iconColor} />
+            <Text style={[styles.memberText, hasRoomBg && styles.memberTextBg]}>{formatCount(memberCount)}</Text>
+          </TouchableOpacity>
           {agencyName && (
             <>
               <Text style={[styles.dot, hasRoomBg && styles.dotBg]}>·</Text>
-              <Text style={[styles.memberText, hasRoomBg && styles.memberTextBg]}>{agencyName}</Text>
+              <TouchableOpacity
+                onPress={agencyId ? () => router.push(`/agency/${agencyId}` as any) : undefined}
+                disabled={!agencyId}
+                hitSlop={{ top: 8, bottom: 8, left: 4, right: 8 }}
+                activeOpacity={0.7}
+                style={styles.agencyTap}>
+                <Text
+                  style={[styles.memberText, styles.agencyNameText, hasRoomBg && styles.memberTextBg]}
+                  numberOfLines={1}>
+                  {agencyName}
+                </Text>
+                <Ionicons name="chevron-forward" size={11} color={hasRoomBg ? 'rgba(255,255,255,0.7)' : '#ABADB2'} />
+              </TouchableOpacity>
             </>
           )}
-          <Ionicons name="chevron-forward" size={11} color={hasRoomBg ? 'rgba(255,255,255,0.7)' : '#ABADB2'} />
-        </TouchableOpacity>
+        </View>
       </View>
 
       <View style={styles.actions}>
@@ -420,8 +546,9 @@ export function RoomHeader({
           <Dropdown
             visible={menuVisible}
             onClose={() => setMenuVisible(false)}
-            onGiftHistory={() => router.push('/gift-history' as any)}
-            onAssignCoHost={() => { /* TODO */ }}
+            isHost={isHost}
+            canManage={canManage}
+            onSelect={handleMenuSelect}
           />
         </View>
       </View>
@@ -433,7 +560,9 @@ export function RoomHeader({
         isHost={isHost}
         seats={seats}
         onInviteToStage={onInviteToStage}
+        initialTab={membersInitialTab}
       />
+
     </View>
   );
 }
@@ -456,9 +585,12 @@ const styles = StyleSheet.create({
     textShadowOffset: { width: 0, height: 1 },
     textShadowRadius: 4,
   },
-  memberRow: { flexDirection: 'row', alignItems: 'center', gap: 4 },
+  memberRow: { flexDirection: 'row', alignItems: 'center', gap: 4, maxWidth: '100%' },
   memberText: { fontSize: 12, color: '#7A0EED', fontWeight: '600' },
   memberTextBg: { color: 'rgba(255,255,255,0.9)' },
+  memberTap: { flexDirection: 'row', alignItems: 'center', gap: 4 },
+  agencyTap: { flexDirection: 'row', alignItems: 'center', gap: 2, flexShrink: 1 },
+  agencyNameText: { flexShrink: 1 },
   dot: { fontSize: 12, color: '#ABADB2' },
   dotBg: { color: 'rgba(255,255,255,0.5)' },
   actions: { flexDirection: 'row', alignItems: 'center', gap: 6 },
@@ -467,22 +599,60 @@ const styles = StyleSheet.create({
 });
 
 const dd = StyleSheet.create({
-  overlay: { ...StyleSheet.absoluteFillObject },
-  menu: {
+  backdrop: {
+    ...StyleSheet.absoluteFillObject,
+    backgroundColor: 'rgba(0,0,0,0.45)',
+    zIndex: 10,
+  },
+  sheet: {
     position: 'absolute',
-    top: 95, right: 12,
+    bottom: 0, left: 0, right: 0,
     backgroundColor: '#FFFFFF',
-    borderRadius: 12, minWidth: 170,
-    shadowColor: '#000', shadowOpacity: 0.15,
-    shadowRadius: 12, shadowOffset: { width: 0, height: 4 },
-    elevation: 12, overflow: 'hidden',
+    borderTopLeftRadius: 20, borderTopRightRadius: 20,
+    paddingTop: 8,
+    maxHeight: '75%',
+    zIndex: 11,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: -4 },
+    shadowOpacity: 0.12,
+    shadowRadius: 16,
+    elevation: 24,
+  },
+  handle: {
+    width: 34, height: 3.5, borderRadius: 2,
+    backgroundColor: '#E0DDED',
+    alignSelf: 'center',
+    marginBottom: 8,
+  },
+  header: {
+    flexDirection: 'row', alignItems: 'center',
+    paddingHorizontal: 16, paddingBottom: 8,
+    gap: 8,
+  },
+  title: { flex: 1, fontSize: 14.5, fontWeight: '700', color: '#1C1E22', letterSpacing: -0.1 },
+  closeBtn: {
+    width: 24, height: 24, borderRadius: 12,
+    backgroundColor: '#F4EEFF',
+    alignItems: 'center', justifyContent: 'center',
+  },
+  list: {
+    paddingHorizontal: 14, paddingTop: 2, paddingBottom: 20,
   },
   item: {
     flexDirection: 'row', alignItems: 'center', gap: 10,
-    paddingHorizontal: 14, paddingVertical: 13,
+    paddingVertical: 9,
+    borderBottomWidth: StyleSheet.hairlineWidth,
+    borderBottomColor: '#F0EDF8',
   },
-  itemBorder: { borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: '#F0EDF8' },
-  itemLabel: { fontSize: 14, fontWeight: '600', color: '#1C1E22' },
+  itemLast: { borderBottomWidth: 0 },
+  itemIconWrap: {
+    width: 30, height: 30, borderRadius: 9,
+    backgroundColor: '#F4EEFF',
+    alignItems: 'center', justifyContent: 'center',
+  },
+  itemTextBlock: { flex: 1, gap: 1 },
+  itemLabel: { fontSize: 12.5, fontWeight: '700', color: '#1C1E22' },
+  itemSubtitle: { fontSize: 10.5, color: '#8E9099', fontWeight: '500' },
 });
 
 const mb = StyleSheet.create({
@@ -529,6 +699,9 @@ const mb = StyleSheet.create({
   row: {
     flexDirection: 'row', alignItems: 'center',
     paddingVertical: 10, gap: 12,
+  },
+  profileTouch: {
+    flex: 1, flexDirection: 'row', alignItems: 'center', gap: 12,
   },
   avatar: { width: 44, height: 44, borderRadius: 22 },
   avatarFallback: {

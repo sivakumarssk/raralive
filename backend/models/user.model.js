@@ -1,9 +1,22 @@
 const db = require('../config/db');
 
+async function findById(id) {
+  const result = await db.query(
+    `SELECT id, phone, email, password_hash, username, full_name, gender,
+            date_of_birth, preferred_language, avatar_url, is_phone_verified,
+            role, agency_id, created_at, updated_at
+     FROM users
+     WHERE id = $1`,
+    [id]
+  );
+  return result.rows[0] || null;
+}
+
 async function findByPhone(phone) {
   const result = await db.query(
     `SELECT id, phone, email, password_hash, username, full_name, gender,
-            date_of_birth, preferred_language, avatar_url, is_phone_verified, created_at, updated_at
+            date_of_birth, preferred_language, avatar_url, is_phone_verified,
+            role, agency_id, created_at, updated_at
      FROM users
      WHERE phone = $1`,
     [phone]
@@ -14,7 +27,8 @@ async function findByPhone(phone) {
 async function findByEmail(email) {
   const result = await db.query(
     `SELECT id, phone, email, password_hash, username, full_name, gender,
-            date_of_birth, preferred_language, avatar_url, is_phone_verified, created_at, updated_at
+            date_of_birth, preferred_language, avatar_url, is_phone_verified,
+            role, agency_id, created_at, updated_at
      FROM users
      WHERE email = $1`,
     [email]
@@ -32,7 +46,8 @@ async function findByPhoneFlexible(phone) {
   if (suffix.length < 6) return null;
   const result = await db.query(
     `SELECT id, phone, email, password_hash, username, full_name, gender,
-            date_of_birth, preferred_language, avatar_url, is_phone_verified, created_at, updated_at
+            date_of_birth, preferred_language, avatar_url, is_phone_verified,
+            role, agency_id, created_at, updated_at
      FROM users
      WHERE phone LIKE $1`,
     [`%${suffix}`]
@@ -83,7 +98,8 @@ async function getProfileWithStats(userId) {
             u.is_phone_verified, u.created_at,
             (SELECT COUNT(*) FROM user_follows WHERE following_id = u.id) AS followers_count,
             (SELECT COUNT(*) FROM user_follows WHERE follower_id  = u.id) AS following_count,
-            (SELECT COUNT(*) FROM posts WHERE user_id = u.id) AS posts_count
+            (SELECT COUNT(*) FROM posts WHERE user_id = u.id) AS posts_count,
+            (SELECT COALESCE(SUM(coins * quantity), 0)::int FROM room_gift_events WHERE sender_id = u.id) AS coins_gifted
      FROM users u WHERE u.id = $1`,
     [userId]
   );
@@ -147,7 +163,40 @@ async function markPhoneVerified(userId) {
   return result.rows[0] || null;
 }
 
+/**
+ * Give an agency's phone+password a working app-user login (role='agency'),
+ * so the same credentials work both in the agency panel and the regular app
+ * login. Two cases:
+ *  - phone not registered yet → creates a new users row.
+ *  - phone already belongs to an existing user → links it to this agency
+ *    (role, agency_id) and overwrites its password with the agency's, so the
+ *    agency's password is authoritative for app login going forward.
+ * Called whenever an agency is created and whenever its password is reset,
+ * so the two stay in sync (see agency.controller.js).
+ */
+async function linkAgencyUser({ agencyId, phone, passwordHash, fullName }) {
+  const existing = await findByPhone(phone);
+  if (existing) {
+    const result = await db.query(
+      `UPDATE users
+       SET password_hash = $2, role = 'agency', agency_id = $3, updated_at = NOW()
+       WHERE id = $1
+       RETURNING id, phone, role, agency_id`,
+      [existing.id, passwordHash, agencyId]
+    );
+    return result.rows[0];
+  }
+  const result = await db.query(
+    `INSERT INTO users (phone, password_hash, full_name, role, agency_id, is_phone_verified)
+     VALUES ($1, $2, $3, 'agency', $4, TRUE)
+     RETURNING id, phone, role, agency_id`,
+    [phone, passwordHash, fullName || null, agencyId]
+  );
+  return result.rows[0];
+}
+
 module.exports = {
+  findById,
   findByPhone,
   findByPhoneFlexible,
   findByEmail,
@@ -156,6 +205,7 @@ module.exports = {
   updateProfile,
   updatePassword,
   markPhoneVerified,
+  linkAgencyUser,
   listUsers,
   getProfileWithStats,
   followUser,

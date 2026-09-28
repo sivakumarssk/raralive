@@ -32,7 +32,7 @@ type UserEntry = {
   total_coins: number;
 };
 
-type LbTab = 'rooms' | 'gifters' | 'receivers' | 'battles' | 'battleSupporters';
+type LbTab = 'rooms' | 'gifters' | 'receivers' | 'battles' | 'battleSupporters' | 'fzGifters' | 'fzEarners' | 'fzCallers';
 type Period = 'today' | 'this_week' | 'this_month' | 'this_year';
 
 const TABS: { key: LbTab; label: string }[] = [
@@ -41,15 +41,33 @@ const TABS: { key: LbTab; label: string }[] = [
   { key: 'receivers', label: 'Chatroom Top Receivers' },
   { key: 'battles', label: 'Chatroom Battle Winners' },
   { key: 'battleSupporters', label: 'Chatroom Battle Supporters' },
+  { key: 'fzGifters', label: 'Friend Zone Top Gifters' },
+  { key: 'fzEarners', label: 'Friend Zone Top Earners' },
+  { key: 'fzCallers', label: 'Friend Zone Top Callers' },
 ];
 
-// Endpoint path per tab, all under /rooms — matches the backend routes.
+// Endpoint path per tab — room tabs live under /rooms, Friend Zone tabs
+// under /friend-zone, both matching their respective backend route files.
 const TAB_ENDPOINT: Record<LbTab, string> = {
   rooms: 'top-gifted',
   gifters: 'top-supporters',
   receivers: 'top-receivers',
   battles: 'top-battle-winners',
   battleSupporters: 'top-battle-supporters',
+  fzGifters: 'top-gifters',
+  fzEarners: 'top-earners',
+  fzCallers: 'top-callers',
+};
+
+const TAB_BASE: Record<LbTab, 'rooms' | 'friend-zone'> = {
+  rooms: 'rooms',
+  gifters: 'rooms',
+  receivers: 'rooms',
+  battles: 'rooms',
+  battleSupporters: 'rooms',
+  fzGifters: 'friend-zone',
+  fzEarners: 'friend-zone',
+  fzCallers: 'friend-zone',
 };
 
 // Distinct stage gradient per tab, so switching tabs is visually obvious.
@@ -59,6 +77,9 @@ const STAGE_COLORS: Record<LbTab, [string, string, string]> = {
   receivers: ['#062A2E', '#0E5C61', '#062A2E'],
   battles: ['#2A1A00', '#7A4E0E', '#2A1A00'],
   battleSupporters: ['#1A0026', '#5C0E7A', '#1A0026'],
+  fzGifters: ['#3A0022', '#8A0E4D', '#3A0022'],
+  fzEarners: ['#052A1A', '#0E5C3E', '#052A1A'],
+  fzCallers: ['#2A0A3A', '#6A1E9E', '#2A0A3A'],
 };
 
 const STAGE_TITLES: Record<LbTab, string> = {
@@ -67,6 +88,9 @@ const STAGE_TITLES: Record<LbTab, string> = {
   receivers: 'Top Receivers',
   battles: 'Top Battle Winners',
   battleSupporters: 'Top Battle Supporters',
+  fzGifters: 'Friend Zone — Top Gifters',
+  fzEarners: 'Friend Zone — Top Earners',
+  fzCallers: 'Friend Zone — Top Callers',
 };
 
 const EMPTY_MESSAGES: Record<LbTab, string> = {
@@ -75,20 +99,39 @@ const EMPTY_MESSAGES: Record<LbTab, string> = {
   receivers: 'No receivers for this period',
   battles: 'No battle wins for this period',
   battleSupporters: 'No battle supporters for this period',
+  fzGifters: 'No Friend Zone gifters for this period',
+  fzEarners: 'No Friend Zone earners for this period',
+  fzCallers: 'No Friend Zone callers for this period',
 };
 
-// Rooms + battle-winner rooms show a coin/trophy metric with an icon; gifters/receivers are users shown with coins.
-const METRIC_UNIT: Record<LbTab, 'coins' | 'wins'> = {
+// Rooms + battle-winner rooms show a coin/trophy metric with an icon;
+// gifters/receivers/Friend-Zone-gifters/earners show coins or gems;
+// Friend Zone callers show call minutes.
+const METRIC_UNIT: Record<LbTab, 'coins' | 'wins' | 'gems' | 'minutes'> = {
   rooms: 'coins',
   gifters: 'coins',
   receivers: 'coins',
   battles: 'wins',
   battleSupporters: 'coins',
+  fzGifters: 'coins',
+  fzEarners: 'gems',
+  fzCallers: 'minutes',
 };
 
-function formatMetric(unit: 'coins' | 'wins', n: number) {
+function formatMetric(unit: 'coins' | 'wins' | 'gems' | 'minutes', n: number) {
   if (unit === 'wins') return `${n} win${n === 1 ? '' : 's'}`;
+  if (unit === 'gems') return `${formatCoins(n)} gems`;
+  if (unit === 'minutes') return `${n} min${n === 1 ? '' : 's'}`;
   return formatCoins(n);
+}
+
+// One icon per metric unit, reused across the podium (3 spots) and the
+// ranked list row rather than repeating the same ternary chain 4 times.
+function MetricIcon({ unit, size, color }: { unit: 'coins' | 'wins' | 'gems' | 'minutes'; size: number; color: string }) {
+  if (unit === 'wins') return <Ionicons name="trophy" size={size} color={color} />;
+  if (unit === 'gems') return <Ionicons name="diamond" size={size} color={color} />;
+  if (unit === 'minutes') return <Ionicons name="call" size={size} color={color} />;
+  return <Image source={COIN_IMG} style={{ width: size, height: size }} resizeMode="contain" />;
 }
 
 const PERIODS: { key: Period; label: string }[] = [
@@ -138,7 +181,7 @@ export function LeaderboardScreen() {
   const load = (isRefresh = false) => {
     isRefresh ? setRefreshing(true) : setLoading(true);
     const path = TAB_ENDPOINT[tab];
-    fetch(`${BASE_URL}/rooms/${path}?period=${period}&limit=10`)
+    fetch(`${BASE_URL}/${TAB_BASE[tab]}/${path}?period=${period}&limit=10`)
       .then(r => r.json())
       .then(j => {
         if (!j.success) return;
@@ -165,6 +208,7 @@ export function LeaderboardScreen() {
 
   const goToEntry = (entry: Entry) => {
     if (isRoomTab) router.push(`/room/${entry.id}` as any);
+    else router.push(`/user/${entry.id}` as any);
   };
 
   return (
@@ -235,7 +279,7 @@ export function LeaderboardScreen() {
                 {/* 2nd — left */}
                 <View style={lb.podiumSide}>
                   {top3[1] ? (
-                    <TouchableOpacity activeOpacity={0.8} onPress={() => goToEntry(top3[1])} disabled={!isRoomTab}>
+                    <TouchableOpacity activeOpacity={0.8} onPress={() => goToEntry(top3[1])}>
                       <View style={[lb.podRing, lb.podRingSilver]}>
                         {top3[1].imageUri ? (
                           <Image source={{ uri: top3[1].imageUri }} style={lb.podAvatar} />
@@ -250,11 +294,7 @@ export function LeaderboardScreen() {
                       </View>
                       <Text style={lb.podName} numberOfLines={1}>{top3[1].name}</Text>
                       <View style={lb.podCoinRow}>
-                        {metricUnit === 'wins' ? (
-                          <Ionicons name="trophy" size={13} color="#FFD700" />
-                        ) : (
-                          <Image source={COIN_IMG} style={lb.podCoinImg} resizeMode="contain" />
-                        )}
+                        <MetricIcon unit={metricUnit} size={13} color="#FFD700" />
                         <Text style={lb.podCoinText}>{formatMetric(metricUnit, top3[1].totalCoins)}</Text>
                       </View>
                     </TouchableOpacity>
@@ -271,7 +311,7 @@ export function LeaderboardScreen() {
                 {/* 1st — center */}
                 <View style={lb.podiumCenter}>
                   {top3[0] ? (
-                    <TouchableOpacity activeOpacity={0.8} onPress={() => goToEntry(top3[0])} disabled={!isRoomTab}>
+                    <TouchableOpacity activeOpacity={0.8} onPress={() => goToEntry(top3[0])}>
                       <View style={[lb.podRing, lb.podRingGold, lb.podRingBig]}>
                         {top3[0].imageUri ? (
                           <Image source={{ uri: top3[0].imageUri }} style={lb.podAvatarBig} />
@@ -286,11 +326,7 @@ export function LeaderboardScreen() {
                       </View>
                       <Text style={[lb.podName, { fontSize: 13 }]} numberOfLines={1}>{top3[0].name}</Text>
                       <View style={lb.podCoinRow}>
-                        {metricUnit === 'wins' ? (
-                          <Ionicons name="trophy" size={15} color="#FFD700" />
-                        ) : (
-                          <Image source={COIN_IMG} style={lb.podCoinImg} resizeMode="contain" />
-                        )}
+                        <MetricIcon unit={metricUnit} size={15} color="#FFD700" />
                         <Text style={[lb.podCoinText, { fontSize: 14 }]}>{formatMetric(metricUnit, top3[0].totalCoins)}</Text>
                       </View>
                     </TouchableOpacity>
@@ -307,7 +343,7 @@ export function LeaderboardScreen() {
                 {/* 3rd — right */}
                 <View style={lb.podiumSide}>
                   {top3[2] ? (
-                    <TouchableOpacity activeOpacity={0.8} onPress={() => goToEntry(top3[2])} disabled={!isRoomTab}>
+                    <TouchableOpacity activeOpacity={0.8} onPress={() => goToEntry(top3[2])}>
                       <View style={[lb.podRing, lb.podRingBronze]}>
                         {top3[2].imageUri ? (
                           <Image source={{ uri: top3[2].imageUri }} style={lb.podAvatar} />
@@ -322,11 +358,7 @@ export function LeaderboardScreen() {
                       </View>
                       <Text style={lb.podName} numberOfLines={1}>{top3[2].name}</Text>
                       <View style={lb.podCoinRow}>
-                        {metricUnit === 'wins' ? (
-                          <Ionicons name="trophy" size={13} color="#FFD700" />
-                        ) : (
-                          <Image source={COIN_IMG} style={lb.podCoinImg} resizeMode="contain" />
-                        )}
+                        <MetricIcon unit={metricUnit} size={13} color="#FFD700" />
                         <Text style={lb.podCoinText}>{formatMetric(metricUnit, top3[2].totalCoins)}</Text>
                       </View>
                     </TouchableOpacity>
@@ -360,9 +392,8 @@ export function LeaderboardScreen() {
                 <TouchableOpacity
                   key={entry.id}
                   style={lb.listRow}
-                  activeOpacity={isRoomTab ? 0.75 : 1}
-                  onPress={() => goToEntry(entry)}
-                  disabled={!isRoomTab}>
+                  activeOpacity={0.75}
+                  onPress={() => goToEntry(entry)}>
                   <View style={lb.listRankWrap}>
                     <Text style={lb.listRankNum}>{rank}</Text>
                   </View>
@@ -377,11 +408,7 @@ export function LeaderboardScreen() {
                     <Text style={lb.listName} numberOfLines={1}>{entry.name}</Text>
                   </View>
                   <View style={lb.listCoins}>
-                    {metricUnit === 'wins' ? (
-                      <Ionicons name="trophy" size={16} color="#E8944A" />
-                    ) : (
-                      <Image source={COIN_IMG} style={lb.listCoinImg} resizeMode="contain" />
-                    )}
+                    <MetricIcon unit={metricUnit} size={16} color="#E8944A" />
                     <Text style={lb.listCoinText}>{formatMetric(metricUnit, entry.totalCoins)}</Text>
                   </View>
                 </TouchableOpacity>

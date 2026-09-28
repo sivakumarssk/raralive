@@ -10,7 +10,7 @@ function authenticate(req, res, next) {
 
   try {
     const payload = jwt.verify(token, process.env.JWT_SECRET);
-    req.user = { id: payload.sub };
+    req.user = { id: payload.sub, role: payload.role || 'user' };
     next();
   } catch {
     return res.status(401).json({ success: false, message: 'Invalid or expired token.' });
@@ -60,7 +60,7 @@ function optionalAuth(req, res, next) {
   if (!header || !header.startsWith('Bearer ')) return next();
   try {
     const payload = jwt.verify(header.slice(7), process.env.JWT_SECRET);
-    req.user = { id: payload.sub };
+    req.user = { id: payload.sub, role: payload.role || 'user' };
   } catch { /* ignore invalid token */ }
   next();
 }

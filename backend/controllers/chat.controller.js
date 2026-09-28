@@ -155,6 +155,67 @@ async function markRead(req, res, next) {
 }
 
 /**
+ * POST /api/chat/conversations/:id/pin
+ */
+async function pinConversation(req, res, next) {
+  try {
+    const userId = req.user.id;
+    const { id } = req.params;
+    if (!(await chatModel.isParticipant(id, userId))) {
+      return res.status(403).json({ success: false, message: 'Not a participant in this conversation.' });
+    }
+    await chatModel.setPinned(id, userId, true);
+    return res.json({ success: true });
+  } catch (error) { next(error); }
+}
+
+/**
+ * DELETE /api/chat/conversations/:id/pin
+ */
+async function unpinConversation(req, res, next) {
+  try {
+    const userId = req.user.id;
+    const { id } = req.params;
+    if (!(await chatModel.isParticipant(id, userId))) {
+      return res.status(403).json({ success: false, message: 'Not a participant in this conversation.' });
+    }
+    await chatModel.setPinned(id, userId, false);
+    return res.json({ success: true });
+  } catch (error) { next(error); }
+}
+
+/**
+ * DELETE /api/chat/conversations/:id
+ * Hides the conversation from the caller's own list only — the peer keeps it.
+ */
+async function deleteConversation(req, res, next) {
+  try {
+    const userId = req.user.id;
+    const { id } = req.params;
+    if (!(await chatModel.isParticipant(id, userId))) {
+      return res.status(403).json({ success: false, message: 'Not a participant in this conversation.' });
+    }
+    await chatModel.hideConversation(id, userId);
+    return res.json({ success: true });
+  } catch (error) { next(error); }
+}
+
+/**
+ * POST /api/chat/conversations/:id/unread
+ */
+async function markUnread(req, res, next) {
+  try {
+    const userId = req.user.id;
+    const { id } = req.params;
+    if (!(await chatModel.isParticipant(id, userId))) {
+      return res.status(403).json({ success: false, message: 'Not a participant in this conversation.' });
+    }
+    await chatModel.markUnread(id, userId);
+    return res.json({ success: true });
+  } catch (error) { next(error); }
+}
+
+/**
  * POST /api/chat/conversations/:id/media
  * Multipart upload for image/audio/video/file messages — REST is used here
  * instead of the socket (sockets carry text/sticker messages) because the
@@ -191,9 +252,11 @@ async function sendMediaMessage(req, res, next) {
     const preview = type === 'image' ? '📷 Photo' : type === 'audio' ? '🎤 Voice message' : type === 'video' ? '🎬 Video' : `📎 ${req.file.originalname}`;
     await chatModel.touchConversation(id, preview);
 
+    const peerId = await chatModel.getPeerId(conversation, userId);
+    await chatModel.unhideForNewMessage(id, peerId);
+
     const io = ioInstance.get();
     if (io) {
-      const peerId = await chatModel.getPeerId(conversation, userId);
       emitToUser(io, peerId, 'chat_message', { conversationId: id, message });
       emitToUser(io, userId, 'chat_message', { conversationId: id, message });
     }
@@ -206,4 +269,5 @@ module.exports = {
   getConversations, getRequests, getUnreadCount,
   startConversation, getConversation, acceptConversation, rejectConversation,
   getMessages, markRead, sendMediaMessage,
+  pinConversation, unpinConversation, deleteConversation, markUnread,
 };

@@ -74,7 +74,7 @@ async function getRoomsCountByAgency() {
 async function getRoomsByHost(hostUserId) {
   const result = await db.query(
     `SELECT r.id, r.room_name, r.description, r.room_image_url, r.visibility, r.status,
-            r.current_level, r.created_at,
+            r.current_level, r.city, r.state, r.district, r.created_at,
             a.agency_name
      FROM rooms r
      LEFT JOIN agencies a ON r.agency_id = a.id
@@ -87,7 +87,7 @@ async function getRoomsByHost(hostUserId) {
 
 async function getPublicRooms() {
   const result = await db.query(
-    `SELECT r.id, r.room_name, r.room_image_url, r.current_level
+    `SELECT r.id, r.room_name, r.room_image_url, r.current_level, r.city, r.state, r.district
      FROM rooms r
      WHERE r.visibility = 'public' AND r.status = 'active'
      ORDER BY r.total_coins_received DESC, r.created_at DESC`

@@ -1,4 +1,5 @@
 import React, { useEffect, useRef, useState } from 'react';
+import { useRouter } from 'expo-router';
 import {
   Animated,
   Dimensions,
@@ -68,6 +69,12 @@ type BattleBannerProps = {
    * Called when the battle card is pressed.
    */
   onPress?: () => void;
+
+  /**
+   * Called when the right-side (opponent) avatar is tapped — navigates into
+   * their room. Left (own room) avatar has no separate action.
+   */
+  onOpponentPress?: () => void;
 };
 
 const REF_WIDTH = 1080;
@@ -288,6 +295,7 @@ function BattleBannerView({
   durationSeconds = 0,
   running = false,
   onPress,
+  onOpponentPress,
 }: BattleBannerProps) {
   const { width } = useWindowDimensions();
   const scale = Math.max(0.70, Math.min(1.20, width / 1080));
@@ -570,10 +578,16 @@ function BattleBannerView({
           <BattleAvatar url={leftAvatar} source={leftAvatarSource} name={leftName} size={avatar} borderColor="#F02754" />
         </View>
 
-        {/* RIGHT large avatar — sits a bit below the capsule's bottom edge */}
-        <View pointerEvents="none" style={{ position: 'absolute', right: edge, top: barTop + barHeight - avatar + avatar * 0.1, width: avatar, height: avatar, zIndex: 50 }}>
+        {/* RIGHT large avatar (opponent room) — sits a bit below the capsule's
+            bottom edge; tappable to jump into that room, unlike the rest of
+            the banner which opens the Top Gifters modal. */}
+        <TouchableOpacity
+          disabled={!onOpponentPress}
+          onPress={onOpponentPress}
+          activeOpacity={0.8}
+          style={{ position: 'absolute', right: edge, top: barTop + barHeight - avatar + avatar * 0.1, width: avatar, height: avatar, zIndex: 50 }}>
           <BattleAvatar url={rightAvatar} source={rightAvatarSource} name={rightName} size={avatar} borderColor="#2876E6" />
-        </View>
+        </TouchableOpacity>
 
         {/* Top gifters (up to 5 per side) — small overlapping circles,
             below the capsule row, starting from that side's player avatar. */}
@@ -642,10 +656,15 @@ function fmtGifterCoins(n: number): string {
 }
 
 function GifterListRow({ gifter, rank }: { gifter: TopGifter; rank: number }) {
+  const router = useRouter();
   const url = resolveBattleAvatarUrl(gifter.avatar_url);
   const name = gifter.full_name || gifter.username || 'Guest';
   return (
-    <View style={gifterModalStyles.row}>
+    <TouchableOpacity
+      style={gifterModalStyles.row}
+      activeOpacity={0.7}
+      disabled={!gifter.id}
+      onPress={() => gifter.id && router.push(`/user/${gifter.id}` as any)}>
       <Text style={gifterModalStyles.rank}>{rank}</Text>
       {url ? (
         <Image source={{ uri: url }} style={gifterModalStyles.avatar} />
@@ -658,7 +677,7 @@ function GifterListRow({ gifter, rank }: { gifter: TopGifter; rank: number }) {
       <View style={gifterModalStyles.coinPill}>
         <Text style={gifterModalStyles.coinText}>🪙 {fmtGifterCoins(Number(gifter.total_coins))}</Text>
       </View>
-    </View>
+    </TouchableOpacity>
   );
 }
 
@@ -837,9 +856,14 @@ function mapBattleApiData(data: Record<string, unknown>): BattleInfo {
   };
 }
 
-type Props = { roomId: string; coinsByUserId?: Map<string, number>; giftersByUserId?: Map<string, unknown> };
+type Props = {
+  roomId: string;
+  coinsByUserId?: Map<string, number>;
+  giftersByUserId?: Map<string, unknown>;
+  onOpponentRoomPress?: (opponentRoomId: string) => void;
+};
 
-export function BattleBanner({ roomId }: Props) {
+export function BattleBanner({ roomId, onOpponentRoomPress }: Props) {
   const [battle, setBattle] = useState<BattleInfo | null>(null);
   const [leftGifters, setLeftGifters] = useState<TopGifter[]>([]);
   const [rightGifters, setRightGifters] = useState<TopGifter[]>([]);
@@ -923,6 +947,7 @@ export function BattleBanner({ roomId }: Props) {
   const rivalName   = isFrom ? battle.toRoomName       : battle.fromRoomName;
   const ownImgUrl   = isFrom ? battle.fromRoomImageUrl : battle.toRoomImageUrl;
   const rivalImgUrl = isFrom ? battle.toRoomImageUrl   : battle.fromRoomImageUrl;
+  const rivalRoomId = isFrom ? battle.toRoomId         : battle.fromRoomId;
   // left = from_room, right = to_room (API convention)
   const ownGifters   = isFrom ? leftGifters  : rightGifters;
   const rivalGifters = isFrom ? rightGifters : leftGifters;
@@ -944,6 +969,7 @@ export function BattleBanner({ roomId }: Props) {
         durationSeconds={durationSeconds}
         running={durationSeconds > 0}
         onPress={() => setShowGiftersModal(true)}
+        onOpponentPress={rivalRoomId ? () => onOpponentRoomPress?.(rivalRoomId) : undefined}
       />
       <TopGiftersModal
         visible={showGiftersModal}

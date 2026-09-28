@@ -67,9 +67,18 @@ type Agency = {
   agent_code: string;
   plain_password: string;
   status: 'active' | 'suspended' | 'pending';
+  service_access?: ServiceKey[];
   created_at: string;
   updated_at?: string;
 };
+
+// App services an agency can be given access to (backend: SERVICE_ACCESS)
+type ServiceKey = 'chatroom' | 'friend_zone' | 'live';
+const SERVICE_OPTIONS: { key: ServiceKey; label: string }[] = [
+  { key: 'chatroom',    label: 'Chat Room' },
+  { key: 'friend_zone', label: 'Friend Zone' },
+  { key: 'live',        label: 'Live' },
+];
 
 type AgencyRow = Pick<Agency, 'id' | 'agency_name' | 'person_name' | 'age' | 'email' | 'phone' | 'agent_code' | 'status' | 'created_at'>;
 
@@ -123,6 +132,49 @@ function Field({ label, value, onChange, placeholder, type = 'text', disabled }:
         className={`w-full border rounded-xl px-4 h-11 text-sm text-gray-800 outline-none transition-all
           ${disabled ? 'bg-gray-100 border-gray-100 text-gray-400 cursor-not-allowed' : 'bg-gray-50 border-gray-200 focus:border-purple-400 focus:bg-white'}`}
       />
+    </div>
+  );
+}
+
+function ServiceAccessPicker({ value, onChange }: {
+  value: ServiceKey[]; onChange: (v: ServiceKey[]) => void;
+}) {
+  const toggle = (key: ServiceKey) =>
+    onChange(value.includes(key) ? value.filter(k => k !== key) : [...value, key]);
+  return (
+    <div>
+      <p className="text-xs font-bold text-gray-500 uppercase tracking-widest mb-1.5">Service Access *</p>
+      <div className="flex flex-wrap gap-2">
+        {SERVICE_OPTIONS.map(o => {
+          const on = value.includes(o.key);
+          return (
+            <button key={o.key} type="button" onClick={() => toggle(o.key)}
+              className={`flex items-center gap-1.5 h-10 px-4 rounded-xl border text-sm font-semibold transition-all
+                ${on ? 'bg-purple-50 border-purple-400 text-purple-700' : 'bg-gray-50 border-gray-200 text-gray-500 hover:border-gray-300'}`}>
+              <span className={`w-4 h-4 rounded-md border flex items-center justify-center
+                ${on ? 'bg-purple-600 border-purple-600' : 'bg-white border-gray-300'}`}>
+                {on && <svg className="w-3 h-3 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={3} d="M5 13l4 4L19 7" /></svg>}
+              </span>
+              {o.label}
+            </button>
+          );
+        })}
+      </div>
+      <p className="text-xs text-gray-400 mt-1.5">Select one or more services this agency can use in the app.</p>
+    </div>
+  );
+}
+
+function ServiceChips({ value }: { value?: ServiceKey[] }) {
+  const list = SERVICE_OPTIONS.filter(o => (value ?? ['chatroom']).includes(o.key));
+  return (
+    <div className="bg-gray-50 rounded-xl px-4 py-3">
+      <p className="text-xs font-bold text-gray-500 uppercase tracking-widest mb-1.5">Service Access</p>
+      <div className="flex flex-wrap gap-1.5">
+        {list.map(o => (
+          <span key={o.key} className="text-xs font-semibold text-purple-700 bg-purple-100 px-2.5 py-1 rounded-lg">{o.label}</span>
+        ))}
+      </div>
     </div>
   );
 }
@@ -194,6 +246,7 @@ function CreateDrawer({ open, onClose, onCreated }: {
 }) {
   const [form, setForm] = useState<FormData>(EMPTY_FORM);
   const [files, setFiles] = useState<Record<string, File | null>>({ docAadhar: null, docPan: null, docBank: null });
+  const [services, setServices] = useState<ServiceKey[]>(['chatroom']);
   const [loading, setLoading] = useState(false);
 
   const set = (f: keyof FormData) => (e: React.ChangeEvent<HTMLInputElement | HTMLTextAreaElement>) =>
@@ -223,6 +276,7 @@ function CreateDrawer({ open, onClose, onCreated }: {
     if (!files.docAadhar) { toast('Aadhar document is required'); return false; }
     if (!files.docPan)    { toast('PAN document is required');    return false; }
     if (!files.docBank)   { toast('Bank document is required');   return false; }
+    if (!services.length) { toast('Select at least one Service Access'); return false; }
     return true;
   };
 
@@ -235,16 +289,18 @@ function CreateDrawer({ open, onClose, onCreated }: {
     if (files.docAadhar) fd.append('docAadhar', files.docAadhar);
     if (files.docPan)    fd.append('docPan',    files.docPan);
     if (files.docBank)   fd.append('docBank',   files.docBank);
+    fd.append('serviceAccess', JSON.stringify(services));
     const result = await api.upload<CreatedAgency>('/admin/agencies', fd);
     setLoading(false);
     if (!result.ok) { toast(result.message); return; }
     setForm(EMPTY_FORM);
     setFiles({ docAadhar: null, docPan: null, docBank: null });
+    setServices(['chatroom']);
     onCreated(result.data);
   };
 
   useEffect(() => {
-    if (!open) { setForm(EMPTY_FORM); setFiles({ docAadhar: null, docPan: null, docBank: null }); }
+    if (!open) { setForm(EMPTY_FORM); setFiles({ docAadhar: null, docPan: null, docBank: null }); setServices(['chatroom']); }
   }, [open]);
 
   if (!open) return null;
@@ -279,6 +335,7 @@ function CreateDrawer({ open, onClose, onCreated }: {
                 <textarea value={form.address} onChange={set('address')} placeholder="123 MG Road, Bengaluru, Karnataka 560001"
                   rows={2} className="w-full bg-gray-50 border border-gray-200 rounded-xl px-4 py-3 text-sm text-gray-800 outline-none focus:border-purple-400 focus:bg-white transition-all resize-none" />
               </div>
+              <ServiceAccessPicker value={services} onChange={setServices} />
             </Section>
 
             <Section title="KYC Details">
@@ -324,6 +381,7 @@ function AgencyDrawer({ agency: initial, onClose, onUpdated }: {
   const [agency, setAgency] = useState<Agency>(initial);
   const [editing, setEditing] = useState(false);
   const [editForm, setEditForm] = useState({ personName: '', age: '', email: '', phone: '', address: '', bankIfsc: '' });
+  const [editServices, setEditServices] = useState<ServiceKey[]>(['chatroom']);
   const [saving, setSaving] = useState(false);
   const [statusLoading, setStatusLoading] = useState(false);
   const [showPass, setShowPass] = useState(false);
@@ -347,14 +405,17 @@ function AgencyDrawer({ agency: initial, onClose, onUpdated }: {
       address: agency.address,
       bankIfsc: agency.bank_ifsc || '',
     });
+    setEditServices(agency.service_access?.length ? agency.service_access : ['chatroom']);
     setEditing(true);
   };
 
   const saveEdit = async () => {
+    if (!editServices.length) { toast('Select at least one Service Access'); return; }
     setSaving(true);
     const result = await api.patch<Agency>(`/admin/agencies/${agency.id}`, {
       personName: editForm.personName, age: editForm.age, email: editForm.email,
       phone: editForm.phone, address: editForm.address, bankIfsc: editForm.bankIfsc,
+      serviceAccess: editServices,
     });
     setSaving(false);
     if (!result.ok) { toast(result.message); return; }
@@ -527,6 +588,7 @@ function AgencyDrawer({ agency: initial, onClose, onUpdated }: {
                   className="w-full bg-gray-50 border border-gray-200 rounded-xl px-4 py-3 text-sm text-gray-800 outline-none focus:border-purple-400 focus:bg-white transition-all resize-none" />
               </div>
               <Field label="IFSC Code" value={editForm.bankIfsc} onChange={setEdit('bankIfsc')} placeholder="SBIN0001234" />
+              <ServiceAccessPicker value={editServices} onChange={setEditServices} />
               <div className="flex gap-3">
                 <button onClick={() => setEditing(false)} className="flex-1 h-10 rounded-xl border border-gray-200 text-sm font-semibold text-gray-500 hover:bg-gray-50 transition-all">Cancel</button>
                 <button onClick={saveEdit} disabled={saving}
@@ -545,6 +607,7 @@ function AgencyDrawer({ agency: initial, onClose, onUpdated }: {
               <InfoRow label="Email" value={agency.email} copyable />
               <InfoRow label="Phone" value={agency.phone} copyable />
               <InfoRow label="Address" value={agency.address} />
+              <ServiceChips value={agency.service_access} />
             </div>
           )}
 

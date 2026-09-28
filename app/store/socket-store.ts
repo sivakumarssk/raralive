@@ -49,6 +49,8 @@ function notify() { listeners.forEach(fn => fn()); }
 const walletBalanceListeners = new Set<(coins: number) => void>();
 const coinsGiftedListeners = new Set<(coinsGifted: number) => void>();
 const giftErrorListeners = new Set<(message: string) => void>();
+// Fired only for gifts arriving live (chat_message), never for chat_history replays.
+const liveGiftListeners = new Set<(msg: ChatMessage) => void>();
 const joinBlockedListeners = new Set<(message: string) => void>();
 const kickedListeners = new Set<(message: string) => void>();
 const reopenBattleListeners = new Set<() => void>();
@@ -70,6 +72,7 @@ const battleInviteCancelledListeners = new Set<(data: { invite_id: string; from_
 const battleScoresListeners = new Set<(data: { invite_id: string; left: number; right: number }) => void>();
 const battleStartedListeners = new Set<(data: { invite_id: string; from_room_id: string; to_room_id: string }) => void>();
 const removedFromStageListeners = new Set<() => void>();
+const forcedMuteListeners = new Set<(isMuted: boolean) => void>();
 const broadcastLikesListeners = new Set<(likesCount: number) => void>();
 const broadcastLikeStateListeners = new Set<(liked: boolean) => void>();
 const pinnedCommentListeners = new Set<(messageId: string | null) => void>();
@@ -88,6 +91,10 @@ export function getMyCoinsGifted() { return state.myCoinsSpent; }
 export function onGiftError(fn: (message: string) => void) {
   giftErrorListeners.add(fn);
   return () => { giftErrorListeners.delete(fn); };
+}
+export function onLiveGift(fn: (msg: ChatMessage) => void) {
+  liveGiftListeners.add(fn);
+  return () => { liveGiftListeners.delete(fn); };
 }
 export function onJoinBlocked(fn: (message: string) => void) {
   joinBlockedListeners.add(fn);
@@ -143,6 +150,10 @@ export function onBattleStarted(fn: (data: { invite_id: string; from_room_id: st
 export function onRemovedFromStage(fn: () => void) {
   removedFromStageListeners.add(fn);
   return () => { removedFromStageListeners.delete(fn); };
+}
+export function onForcedMute(fn: (isMuted: boolean) => void) {
+  forcedMuteListeners.add(fn);
+  return () => { forcedMuteListeners.delete(fn); };
 }
 export function onBroadcastLikesUpdate(fn: (likesCount: number) => void) {
   broadcastLikesListeners.add(fn);
@@ -222,6 +233,8 @@ function resolveMessageAvatar(msg: ChatMessage): ChatMessage {
       const coinsMatch = tail.match(/__coins__(\d+)/);
       const qtyMatch   = tail.match(/__qty__(\d+)/);
       const recipMatch = tail.match(/__recipientid__([^_]+)/);
+      const giftIdMatch = tail.match(/__giftid__([^_]+)/);
+      const forMatch   = tail.match(/__giftfor__([^_]+)/);
       const coins = coinsMatch ? parseInt(coinsMatch[1], 10) : 0;
       const qty   = qtyMatch   ? parseInt(qtyMatch[1],   10) : 1;
       return {
@@ -235,6 +248,8 @@ function resolveMessageAvatar(msg: ChatMessage): ChatMessage {
         giftCoins: coins,
         giftQty: qty,
         giftRecipientId: recipMatch ? recipMatch[1] : undefined,
+        giftId: giftIdMatch ? giftIdMatch[1] : undefined,
+        giftForId: forMatch ? forMatch[1] : undefined,
       };
     }
   }
@@ -312,6 +327,11 @@ export const socketStore = {
     });
 
     socket.on('chat_message', (msg: ChatMessage) => {
+      // Direct messages (1:1 chat) are emitted on the same 'chat_message' event as
+      // { conversationId, message } — those belong to chat-socket-store, not the
+      // room chat. Without this guard they landed in the room feed with no
+      // user/id and crashed ChatBubble.
+      if (!msg || (msg as any).conversationId || !msg.type) return;
       // Deduplicate — skip if message ID already exists
       if (msg.id && state.messages.some(m => m.id === msg.id)) return;
 
@@ -327,6 +347,7 @@ export const socketStore = {
       }
       state.messages = [...state.messages, resolved];
       notify();
+      if (resolved.type === 'gift') liveGiftListeners.forEach(fn => fn(resolved));
     });
 
     socket.on('wallet_update', ({ coins }: { coins: number }) => {
@@ -416,6 +437,10 @@ export const socketStore = {
       removedFromStageListeners.forEach(fn => fn());
     });
 
+    socket.on('forced_mute', ({ isMuted }: { roomId: string; isMuted: boolean }) => {
+      forcedMuteListeners.forEach(fn => fn(isMuted));
+    });
+
     socket.on('broadcast_likes_update', ({ likesCount }: { roomId: string; likesCount: number }) => {
       broadcastLikesListeners.forEach(fn => fn(likesCount));
     });
@@ -460,6 +485,12 @@ export const socketStore = {
     const roomId = state.roomId;
     if (!roomId) return;
     state.socket?.emit('user_mute', { roomId, isMuted });
+  },
+
+  forceMuteUser(targetUserId: string, isMuted: boolean) {
+    const roomId = state.roomId;
+    if (!roomId) return;
+    state.socket?.emit('force_mute_user', { roomId, targetUserId, isMuted });
   },
 
   likeBroadcast(roomId: string) {

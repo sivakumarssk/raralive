@@ -1,7 +1,7 @@
 const express = require('express');
 const roomController = require('../controllers/room.controller');
 const { authenticate, optionalAuth } = require('../middleware/auth.middleware');
-const { getRoomMembers, kickUserFromRoom } = require('../socket');
+const { getRoomMembers, kickUserFromRoom, isUserSeatedInRoom } = require('../socket');
 
 const router = express.Router();
 
@@ -239,7 +239,7 @@ router.get('/:id/members', authenticate, (req, res) => {
   const members = getRoomMembers(req.params.id);
   res.json({ success: true, data: members });
 });
-// Block a user from a room (host only)
+// Block a user from a room (host, or a currently-seated co-host)
 router.post('/:id/block', authenticate, async (req, res, next) => {
   try {
     const db = require('../config/db');
@@ -247,10 +247,11 @@ router.post('/:id/block', authenticate, async (req, res, next) => {
     const { userId } = req.body;
     if (!userId) return res.status(400).json({ success: false, message: 'userId required' });
 
-    // Verify caller is the host
+    // Verify caller is the host or a seated co-host
     const room = await db.query(`SELECT host_user_id FROM rooms WHERE id = $1`, [roomId]);
     if (!room.rows.length) return res.status(404).json({ success: false, message: 'Room not found' });
-    if (room.rows[0].host_user_id !== req.user.id) return res.status(403).json({ success: false, message: 'Only the host can block users' });
+    const canManage = room.rows[0].host_user_id === req.user.id || isUserSeatedInRoom(roomId, req.user.id);
+    if (!canManage) return res.status(403).json({ success: false, message: 'Only the host or a co-host can block users' });
     if (userId === req.user.id) return res.status(400).json({ success: false, message: 'Cannot block yourself' });
 
     await db.query(
@@ -266,7 +267,7 @@ router.post('/:id/block', authenticate, async (req, res, next) => {
   } catch (err) { next(err); }
 });
 
-// Unblock a user from a room (host only)
+// Unblock a user from a room (host, or a currently-seated co-host)
 router.post('/:id/unblock', authenticate, async (req, res, next) => {
   try {
     const db = require('../config/db');
@@ -276,14 +277,15 @@ router.post('/:id/unblock', authenticate, async (req, res, next) => {
 
     const room = await db.query(`SELECT host_user_id FROM rooms WHERE id = $1`, [roomId]);
     if (!room.rows.length) return res.status(404).json({ success: false, message: 'Room not found' });
-    if (room.rows[0].host_user_id !== req.user.id) return res.status(403).json({ success: false, message: 'Only the host can unblock users' });
+    const canManage = room.rows[0].host_user_id === req.user.id || isUserSeatedInRoom(roomId, req.user.id);
+    if (!canManage) return res.status(403).json({ success: false, message: 'Only the host or a co-host can unblock users' });
 
     await db.query(`DELETE FROM room_blocked_users WHERE room_id = $1 AND user_id = $2`, [roomId, userId]);
     return res.json({ success: true });
   } catch (err) { next(err); }
 });
 
-// Get blocked users list (host only)
+// Get blocked users list (host, or a currently-seated co-host)
 router.get('/:id/blocked', authenticate, async (req, res, next) => {
   try {
     const db = require('../config/db');
@@ -291,7 +293,8 @@ router.get('/:id/blocked', authenticate, async (req, res, next) => {
 
     const room = await db.query(`SELECT host_user_id FROM rooms WHERE id = $1`, [roomId]);
     if (!room.rows.length) return res.status(404).json({ success: false, message: 'Room not found' });
-    if (room.rows[0].host_user_id !== req.user.id) return res.status(403).json({ success: false, message: 'Only the host can view blocked users' });
+    const canManage = room.rows[0].host_user_id === req.user.id || isUserSeatedInRoom(roomId, req.user.id);
+    if (!canManage) return res.status(403).json({ success: false, message: 'Only the host or a co-host can view blocked users' });
 
     const r = await db.query(
       `SELECT u.id AS "userId", u.full_name AS "userName", u.avatar_url AS "avatarUrl", b.created_at
@@ -305,7 +308,35 @@ router.get('/:id/blocked', authenticate, async (req, res, next) => {
   } catch (err) { next(err); }
 });
 
+// A specific user's gift totals (sent + received) scoped to one room —
+// powers the profile sheet shown when tapping another user on the audio stage.
+router.get('/:id/users/:userId/gift-stats', async (req, res, next) => {
+  try {
+    const db = require('../config/db');
+    const { id: roomId, userId } = req.params;
+
+    const [sentR, receivedR] = await Promise.all([
+      db.query(
+        `SELECT COALESCE(SUM(coins * quantity), 0)::int AS total
+         FROM room_gift_events WHERE room_id = $1 AND sender_id = $2`,
+        [roomId, userId]
+      ),
+      db.query(
+        `SELECT COALESCE(SUM(coins * quantity), 0)::int AS total
+         FROM room_gift_events WHERE room_id = $1 AND recipient_id = $2`,
+        [roomId, userId]
+      ),
+    ]);
+
+    return res.json({
+      success: true,
+      data: { sent: sentR.rows[0].total, received: receivedR.rows[0].total },
+    });
+  } catch (err) { next(err); }
+});
+
 router.get('/:id', roomController.getRoom);
 router.post('/', authenticate, roomController.createRoom);
+router.post('/:id/rename', authenticate, roomController.renameRoom);
 
 module.exports = router;

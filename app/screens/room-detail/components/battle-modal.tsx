@@ -155,6 +155,7 @@ export function BattleModal({ visible, onClose, roomId, roomImageUrl }: Props) {
           from_room_id: roomId,
           to_room_id: toRoomId,
           duration_minutes: selectedTime,
+          mode: battleMode,
         }),
       });
       const json = await r.json();
@@ -863,8 +864,8 @@ function WaitingPage({
         <View style={w.roomCol}>
           <View style={w.frameWrap}>
             {fromImg
-              ? <Image source={{ uri: fromImg }} style={w.avatar} />
-              : <View style={[w.avatar, w.avatarFallbackBlue]}>
+              ? <Image source={{ uri: fromImg }} style={w.avatarOwn} resizeMode="cover" />
+              : <View style={[w.avatarOwn, w.avatarFallbackBlue]}>
                   <Text style={w.avatarInitial}>{(invite.from_room_name ?? '?')[0].toUpperCase()}</Text>
                 </View>
             }
@@ -883,8 +884,8 @@ function WaitingPage({
         <View style={w.roomCol}>
           <View style={w.frameWrap}>
             {toImg
-              ? <Image source={{ uri: toImg }} style={w.avatar} />
-              : <View style={[w.avatar, w.avatarFallbackGold]}>
+              ? <Image source={{ uri: toImg }} style={w.avatarOpponent} resizeMode="cover" />
+              : <View style={[w.avatarOpponent, w.avatarFallbackGold]}>
                   <Text style={w.avatarInitial}>{(invite.to_room_name ?? '?')[0].toUpperCase()}</Text>
                 </View>
             }
@@ -972,14 +973,33 @@ const w = StyleSheet.create({
   },
   roomCol: { alignItems: 'center', gap: 6, flex: 1 },
 
-  // frame + avatar — avatar sits centered, frame overlays on top
+  // frame + avatar — avatar sits centered, frame overlays on top.
+  // battleownframe.png / battleaoppfrme.png are 1024x1024 shield badges, each
+  // with its own painted double-line ring — the two are NOT identically
+  // sized. Their INNER edges (where the flat fill starts, not the outer
+  // decorative trim) were found by edge-detection per frame:
+  //   own (blue): ~711x743px, centered ~(514, 482) — a slight ellipse, not
+  //   a circle, and vertically off-center (the shield tapers to a point
+  //   below it).
+  //   opponent (gold): ~732x783px, centered ~(517, 477) — a bit larger.
+  // Each avatar box below is an ellipse (different width/height, borderRadius
+  // = half the larger side) sized/positioned to land exactly inside its own
+  // frame's circle. Verified by compositing same-size placeholder ellipses
+  // over both frame PNGs — earlier passes assumed a shared circle radius and
+  // measured out to the ring's outer trim, which left a visible gap.
   frameWrap: {
     width: 140, height: 140,
     alignItems: 'center', justifyContent: 'center',
     position: 'relative',
   },
-  // avatar sits in upper portion of the shield frame
-  avatar: { width: 100, height: 110, borderRadius: 50, position: 'absolute', top: 12 },
+  avatarOwn: {
+    width: 97, height: 102, borderRadius: 51,
+    position: 'absolute', top: 15, left: 22, overflow: 'hidden',
+  },
+  avatarOpponent: {
+    width: 100, height: 107, borderRadius: 54,
+    position: 'absolute', top: 12, left: 21, overflow: 'hidden',
+  },
   avatarFallbackBlue:   { backgroundColor: '#1A3BB5', alignItems: 'center', justifyContent: 'center' },
   avatarFallbackPurple: { backgroundColor: '#6D28D9', alignItems: 'center', justifyContent: 'center' },
   avatarFallbackGold:   { backgroundColor: '#B45309', alignItems: 'center', justifyContent: 'center' },

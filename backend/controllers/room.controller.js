@@ -1,11 +1,39 @@
 const roomModel = require('../models/room.model');
 const agencyModel = require('../models/agency.model');
+const walletModel = require('../models/wallet.model');
 const db = require('../config/db');
 const { getAllOnlineCounts, isRoomHostOnline } = require('../socket');
 
 /** GET /api/rooms/online-counts */
 function onlineCounts(req, res) {
   return res.json({ success: true, data: getAllOnlineCounts() });
+}
+
+// Chatroom name change durations → coin cost. Kept here (not DB-driven) since
+// this is a small fixed price list, same as TIME_OPTIONS/TARGET_OPTIONS in
+// the app's battle-modal.tsx.
+const ROOM_NAME_DURATION_PRICING = {
+  1:  100,
+  7:  500,
+  30: 1500,
+  90: 4000,
+};
+
+/**
+ * Lazy-expiry for a paid room-name change — mirrors the pattern battle
+ * .controller.js uses for auto-finishing battles: no scheduled job, just a
+ * conditional UPDATE run whenever the room is read, reverting room_name back
+ * to previous_room_name once room_name_expires_at has passed.
+ */
+async function applyRoomNameExpiry(roomId) {
+  await db.query(
+    `UPDATE rooms
+     SET room_name = previous_room_name, previous_room_name = NULL, room_name_expires_at = NULL
+     WHERE id = $1
+       AND room_name_expires_at IS NOT NULL
+       AND room_name_expires_at <= NOW()`,
+    [roomId]
+  );
 }
 
 /** GET /api/rooms/public */
@@ -35,10 +63,12 @@ async function publicRooms(req, res, next) {
 async function getRoom(req, res, next) {
   try {
     const { id } = req.params;
+    await applyRoomNameExpiry(id);
     const result = await db.query(
       `SELECT r.id, r.room_code, r.room_name, r.room_image_url, r.visibility, r.status, r.host_user_id,
               r.current_level, r.total_coins_received,
-              a.agency_name,
+              r.previous_room_name, r.room_name_expires_at,
+              r.agency_id, a.agency_name,
               u.full_name AS host_name, u.username AS host_username, u.avatar_url AS host_avatar_url,
               lb.likes_count
        FROM rooms r
@@ -80,6 +110,16 @@ async function myRooms(req, res, next) {
   try {
     const userId = req.user?.id;
     if (!userId) return res.status(401).json({ success: false, message: 'Unauthorized.' });
+    // Revert any of this host's rooms whose paid name change has expired
+    // before listing them, so a stale renamed room doesn't linger here.
+    await db.query(
+      `UPDATE rooms
+       SET room_name = previous_room_name, previous_room_name = NULL, room_name_expires_at = NULL
+       WHERE host_user_id = $1
+         AND room_name_expires_at IS NOT NULL
+         AND room_name_expires_at <= NOW()`,
+      [userId]
+    );
     const rooms = await roomModel.getRoomsByHost(userId);
     return res.json({ success: true, data: rooms });
   } catch (error) {
@@ -184,6 +224,88 @@ async function createRoom(req, res, next) {
   }
 }
 
+/** POST /api/rooms/:id/rename — host pays coins for a time-limited name change */
+async function renameRoom(req, res, next) {
+  try {
+    const userId = req.user?.id;
+    const { id } = req.params;
+    const { room_name, duration_days } = req.body;
+
+    const newName = (room_name ?? '').trim();
+    if (!newName) {
+      return res.status(400).json({ success: false, message: 'room_name is required.' });
+    }
+    if (newName.length > 20) {
+      return res.status(400).json({ success: false, message: 'Chatroom name must be 20 characters or fewer.' });
+    }
+
+    const durationDays = Number(duration_days);
+    const cost = ROOM_NAME_DURATION_PRICING[durationDays];
+    if (!cost) {
+      return res.status(400).json({
+        success: false,
+        message: `duration_days must be one of: ${Object.keys(ROOM_NAME_DURATION_PRICING).join(', ')}.`,
+      });
+    }
+
+    const roomResult = await db.query(`SELECT id, host_user_id, room_name FROM rooms WHERE id = $1`, [id]);
+    const room = roomResult.rows[0];
+    if (!room) {
+      return res.status(404).json({ success: false, message: 'Room not found.' });
+    }
+    if (room.host_user_id !== userId) {
+      return res.status(403).json({ success: false, message: 'Only the room host can rename this room.' });
+    }
+
+    let balanceAfter;
+    try {
+      balanceAfter = await walletModel.debitCoins(
+        userId, cost, `Chatroom name change (${durationDays} day${durationDays === 1 ? '' : 's'})`, id
+      );
+    } catch (err) {
+      if (err.code === 'INSUFFICIENT_COINS') {
+        return res.status(400).json({ success: false, code: 'INSUFFICIENT_COINS', message: 'Not enough coins for this duration.' });
+      }
+      throw err;
+    }
+
+    const expiresAt = new Date(Date.now() + durationDays * 24 * 60 * 60 * 1000);
+    let updated;
+    try {
+      const result = await db.query(
+        `UPDATE rooms
+         SET previous_room_name = COALESCE(previous_room_name, room_name),
+             room_name = $1,
+             room_name_expires_at = $2
+         WHERE id = $3
+         RETURNING id, room_name, previous_room_name, room_name_expires_at`,
+        [newName, expiresAt, id]
+      );
+      updated = result.rows[0];
+    } catch (err) {
+      // Roll the coin spend back if the rename itself fails (e.g. unique name clash).
+      await walletModel.creditCoins(userId, cost, 'Refund: chatroom name change failed', null, id);
+      if (err.code === '23505' && err.constraint?.includes('room_name')) {
+        return res.status(409).json({ success: false, message: 'A room with this name already exists. Please choose a different name.' });
+      }
+      throw err;
+    }
+
+    return res.json({
+      success: true,
+      data: {
+        room_name: updated.room_name,
+        previous_room_name: updated.previous_room_name,
+        room_name_expires_at: updated.room_name_expires_at,
+        coins_spent: cost,
+        balance_after: balanceAfter,
+      },
+    });
+  } catch (error) {
+    next(error);
+  }
+}
+
 /** GET /api/rooms/public-for-battle?exclude_room_id=X */
 async function publicRoomsForBattle(req, res, next) {
   try {
@@ -199,4 +321,7 @@ async function publicRoomsForBattle(req, res, next) {
   }
 }
 
-module.exports = { onlineCounts, publicRooms, publicRoomsForBattle, getRoom, getRoomByCode, myRooms, createRoom };
+module.exports = {
+  onlineCounts, publicRooms, publicRoomsForBattle, getRoom, getRoomByCode, myRooms, createRoom, renameRoom,
+  ROOM_NAME_DURATION_PRICING,
+};

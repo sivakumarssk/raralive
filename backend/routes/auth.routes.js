@@ -26,4 +26,7 @@ router.post('/follow/:userId',   authenticate, authController.followUser);
 router.delete('/follow/:userId', authenticate, authController.unfollowUser);
 router.get('/follow/:userId',    authenticate, authController.checkFollow);
 
+// Report a user
+router.post('/users/:userId/report', authenticate, authController.reportUser);
+
 module.exports = router;

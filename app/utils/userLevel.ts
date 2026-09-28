@@ -150,8 +150,12 @@ const BUNDLED_INDIVIDUAL_LEVELS: Record<number, any> = {
   5: require('@/assets/tabs/chatroom/levels-bundled/individual/l-5.png'),
 };
 
+// Bump whenever the badge artwork on the backend changes — expo-image caches to disk by
+// URL and never revalidates, so a new URL is the only way to replace cached badges.
+const INDIVIDUAL_BADGE_VERSION = 2;
+
 function individualLevelUrl(level: number) {
-  return `${MEDIA_BASE}/levels/individual/l-${level}.png`;
+  return `${MEDIA_BASE}/levels/individual/l-${level}.png?v=${INDIVIDUAL_BADGE_VERSION}`;
 }
 
 export const USER_LEVEL_IMAGES: Record<number, any> = Object.fromEntries(

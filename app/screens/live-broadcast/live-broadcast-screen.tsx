@@ -33,12 +33,31 @@ import { useLiveBroadcastAgora } from '@/hooks/useLiveBroadcastAgora';
 import { type IncomingStageInvite, useRoomSocket } from '@/hooks/useRoomSocket';
 import { BASE_URL, MEDIA_BASE, apiEndBroadcast } from '@/services/api';
 import { authStore } from '@/store/auth-store';
+import { subscribeChatEvents } from '@/store/chat-socket-store';
 import {
   onBroadcastLikeState, onBroadcastLikesUpdate, onPinnedCommentUpdate,
   onReportCommentResult, onRemovedFromStage, socketStore,
 } from '@/store/socket-store';
 
 const COIN_IMG = require('@/assets/tabs/coin.png');
+
+// Co-host guest strip (top-left, below the header) and control bar (top-right)
+// share this same vertical offset so they sit level with each other.
+const COHOST_STACK_TOP_OFFSET = 64;
+const MAX_VISIBLE_COHOSTS = 3;
+
+const COMING_SOON_ICON: Record<'beautify' | 'lenses' | 'battle' | 'settings', keyof typeof Ionicons.glyphMap> = {
+  beautify: 'sparkles',
+  lenses: 'color-filter',
+  battle: 'flash',
+  settings: 'settings',
+};
+const COMING_SOON_LABEL: Record<'beautify' | 'lenses' | 'battle' | 'settings', string> = {
+  beautify: 'Beautify',
+  lenses: 'Lenses',
+  battle: 'Battle',
+  settings: 'Settings',
+};
 
 function resolveAvatar(url: string | null | undefined): string | undefined {
   if (!url) return undefined;
@@ -88,11 +107,12 @@ export function LiveBroadcastScreen({ roomId, channelName }: LiveBroadcastScreen
   const [roomInfo, setRoomInfo] = useState<RoomInfo | null>(null);
   const [showExitModal, setShowExitModal] = useState(false);
   const [showInviteSheet, setShowInviteSheet] = useState(false);
-  const [showComingSoon, setShowComingSoon] = useState<'beautify' | 'lenses' | null>(null);
+  const [showComingSoon, setShowComingSoon] = useState<'beautify' | 'lenses' | 'battle' | 'settings' | null>(null);
   const [showGiftShop, setShowGiftShop] = useState(false);
   const [fullscreenGift, setFullscreenGift] = useState<{ imageUrl: string | null; bgColor: string } | null>(null);
   const [toast, setToast] = useState<string | null>(null);
   const [ending, setEnding] = useState(false);
+  const [inputFocused, setInputFocused] = useState(false);
   const [coinsReceived, setCoinsReceived] = useState(0);
   const [likesCount, setLikesCount] = useState(0);
   const [isLiked, setIsLiked] = useState(false);
@@ -185,6 +205,18 @@ export function LiveBroadcastScreen({ roomId, channelName }: LiveBroadcastScreen
     return unsub;
   }, []);
 
+  // Host ended the broadcast (or it was auto-ended after they disconnected) —
+  // don't leave viewers/co-hosts sitting in a dead room, back out for them.
+  useEffect(() => {
+    return subscribeChatEvents((event) => {
+      if (event.type !== 'live_broadcast_ended' || event.roomId !== roomId) return;
+      if (isHost) return; // the host already navigated away via handleExit
+      Alert.alert('Live Ended', 'This broadcast has ended.', [
+        { text: 'OK', onPress: () => router.back() },
+      ]);
+    });
+  }, [roomId, isHost]);
+
   const handleExit = useCallback(async () => {
     setShowExitModal(false);
     if (isHost) {
@@ -225,6 +257,11 @@ export function LiveBroadcastScreen({ roomId, channelName }: LiveBroadcastScreen
 
   const [mentionText, setMentionText] = useState('');
   const [mentionKey, setMentionKey] = useState<number | undefined>(undefined);
+
+  const handleAvatarPress = (userId: string) => {
+    if (!userId || userId === currentUserId) return;
+    router.push(`/user/${userId}` as any);
+  };
 
   const handleCommentPress = (msg: ChatMessage) => {
     if (!msg.user) return;
@@ -364,10 +401,11 @@ export function LiveBroadcastScreen({ roomId, channelName }: LiveBroadcastScreen
         )}
       </View>
 
-      {/* Co-host thumbnails — small tiles stacked top-right, below header */}
+      {/* Co-host guest strip — small rounded live tiles stacked top-left, below
+          header, opposite the mic/camera/beautify control column on the right. */}
       {coTiles.length > 0 && (
-        <View style={[s.coHostStack, { top: insets.top + 64 }]}>
-          {coTiles.slice(0, 3).map(tile => (
+        <View style={[s.coHostStack, { top: insets.top + COHOST_STACK_TOP_OFFSET }]}>
+          {coTiles.slice(0, MAX_VISIBLE_COHOSTS).map(tile => (
             <TouchableOpacity
               key={tile.key}
               activeOpacity={0.9}
@@ -383,7 +421,9 @@ export function LiveBroadcastScreen({ roomId, channelName }: LiveBroadcastScreen
                 isCameraOff={tile.isCameraOff}
                 hasRemoteVideo={tile.hasRemoteVideo}
                 isLocalJoined={joined}
+                compact
               />
+              <View style={s.coHostLiveDot} />
             </TouchableOpacity>
           ))}
         </View>
@@ -464,6 +504,7 @@ export function LiveBroadcastScreen({ roomId, channelName }: LiveBroadcastScreen
                 compact
                 pinnedMessageId={pinnedMessageId}
                 onCommentPress={handleCommentPress}
+                onAvatarPress={handleAvatarPress}
               />
             </ScrollView>
 
@@ -483,23 +524,30 @@ export function LiveBroadcastScreen({ roomId, channelName }: LiveBroadcastScreen
             </View>
           )}
 
-          <GiftBar onGiftPress={() => setShowGiftShop(true)} hasRoomBg />
+          {!inputFocused && <GiftBar onGiftPress={() => setShowGiftShop(true)} hasRoomBg />}
 
           <ChatInputBar
             onSend={sendMessage}
             onGiftOpen={() => setShowGiftShop(true)}
             hasRoomBg
-            showBattle={false}
+            showBattle={isHost}
+            onBattlePress={() => setShowComingSoon('battle')}
+            showSettings={isHost}
+            onSettingsPress={() => setShowComingSoon('settings')}
+            onFocusChange={setInputFocused}
             prefillText={mentionText}
             prefillKey={mentionKey}
           />
         </KeyboardAvoidingView>
       </SafeAreaView>
 
-      {/* Control bar — mic/camera/beautify/lenses/flip, only for host/co-host — vertical column
-          confined to the top area (below the title row), never reaching down toward the chat/input. */}
+      {/* Control bar — mic/camera/beautify/lenses/flip, only for host/co-host — vertical
+          column on the right, opposite the co-host guest strip on the left so
+          neither ever overlaps the other. */}
       {shouldPublish && (
-        <View style={[s.controlBar, { top: insets.top + (coTiles.length > 0 ? 200 : 64) }]} pointerEvents="box-none">
+        <View
+          style={[s.controlBar, { top: insets.top + COHOST_STACK_TOP_OFFSET }]}
+          pointerEvents="box-none">
           <ControlButton icon={isMicMuted ? 'mic-off' : 'mic'} active={!isMicMuted} label="Mic" onPress={toggleMic} />
           <ControlButton icon={isCameraOff ? 'videocam-off' : 'videocam'} active={!isCameraOff} label="Camera" onPress={toggleCamera} />
           <ControlButton icon="sparkles" label="Beautify" onPress={() => setShowComingSoon('beautify')} />
@@ -563,15 +611,19 @@ export function LiveBroadcastScreen({ roomId, channelName }: LiveBroadcastScreen
           avatarUrl: roomInfo?.host_avatar_url ?? null,
         }}
         isHostOnline
-        onSendGift={(gift, targetName, qty, targetUserId) => {
+        onSendGift={(gift, qty, targets) => {
+          if (targets.length === 0) return;
           setFullscreenGift({ imageUrl: gift.image_url, bgColor: gift.bg_color });
           const hostUserId = roomInfo?.host_user_id ?? '';
-          const giftTargetId = targetUserId || hostUserId;
-          sendMessage(
-            `__gift__🎁__to__${targetName}__img__${gift.image_url ?? ''}__bg__${gift.bg_color}` +
-            `__giftid__${gift.id}__coins__${gift.coins}__qty__${qty}` +
-            `__senderid__${currentUserId}__recipientid__${hostUserId}__giftfor__${giftTargetId}`
-          );
+
+          targets.forEach(({ userId: targetUserId, name: targetName }) => {
+            const giftTargetId = targetUserId || hostUserId;
+            sendMessage(
+              `__gift__🎁__to__${targetName}__img__${gift.image_url ?? ''}__bg__${gift.bg_color}` +
+              `__giftid__${gift.id}__coins__${gift.coins}__qty__${qty}` +
+              `__senderid__${currentUserId}__recipientid__${hostUserId}__giftfor__${giftTargetId}`
+            );
+          });
         }}
       />
 
@@ -582,15 +634,15 @@ export function LiveBroadcastScreen({ roomId, channelName }: LiveBroadcastScreen
         onDone={() => setFullscreenGift(null)}
       />
 
-      {/* Beautify/Lenses coming-soon sheet */}
+      {/* Beautify/Lenses/Battle/Settings coming-soon sheet */}
       <Modal visible={!!showComingSoon} transparent animationType="fade" onRequestClose={() => setShowComingSoon(null)}>
         <TouchableOpacity style={m.overlay} activeOpacity={1} onPress={() => setShowComingSoon(null)} />
         <View style={m.sheet}>
           <View style={m.handle} />
           <View style={m.iconWrap}>
-            <Ionicons name={showComingSoon === 'beautify' ? 'sparkles' : 'color-filter'} size={28} color="#7A0EED" />
+            <Ionicons name={COMING_SOON_ICON[showComingSoon ?? 'beautify']} size={28} color="#7A0EED" />
           </View>
-          <Text style={m.title}>{showComingSoon === 'beautify' ? 'Beautify' : 'Lenses'} Coming Soon</Text>
+          <Text style={m.title}>{COMING_SOON_LABEL[showComingSoon ?? 'beautify']} Coming Soon</Text>
           <Text style={m.subtitle}>This feature is on the way — check back in a future update.</Text>
           <TouchableOpacity onPress={() => setShowComingSoon(null)} style={m.okBtn}>
             <Text style={m.okBtnText}>Got it</Text>
@@ -687,11 +739,17 @@ const s = StyleSheet.create({
     textShadowColor: 'rgba(0,0,0,0.5)', textShadowOffset: { width: 0, height: 1 }, textShadowRadius: 3,
   },
   coHostStack: {
-    position: 'absolute', right: 12, gap: 8, zIndex: 5,
+    position: 'absolute', left: 12, gap: 8, zIndex: 5,
   },
   coHostThumb: {
-    width: 76, height: 100, borderRadius: 12, overflow: 'hidden',
-    borderWidth: 1.5, borderColor: 'rgba(255,255,255,0.3)',
+    position: 'relative',
+    width: 68, height: 90, borderRadius: 18, overflow: 'hidden',
+    borderWidth: 2, borderColor: 'rgba(255,255,255,0.85)',
+  },
+  coHostLiveDot: {
+    position: 'absolute', top: 5, left: 5,
+    width: 6, height: 6, borderRadius: 3,
+    backgroundColor: '#FF3B3B',
   },
   connectingOverlay: {
     position: 'absolute', top: '42%', left: 0, right: 0,

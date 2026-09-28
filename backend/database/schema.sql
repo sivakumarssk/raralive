@@ -80,6 +80,8 @@ CREATE TABLE IF NOT EXISTS agencies (
   is_default_password  BOOLEAN NOT NULL DEFAULT TRUE,
 
   status          VARCHAR(20) NOT NULL DEFAULT 'active' CHECK (status IN ('active', 'suspended', 'pending')),
+  -- App services the agency may use: 'chatroom' | 'friend_zone' | 'live'
+  service_access  TEXT[] NOT NULL DEFAULT ARRAY['chatroom']::TEXT[],
   created_by      UUID REFERENCES admins(id) ON DELETE SET NULL,
   created_at      TIMESTAMPTZ NOT NULL DEFAULT NOW(),
   updated_at      TIMESTAMPTZ NOT NULL DEFAULT NOW()

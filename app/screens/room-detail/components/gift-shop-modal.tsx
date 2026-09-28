@@ -45,7 +45,9 @@ type Props = {
   seats: SeatSlot[];
   hostInfo: { userId: string; name: string; avatarUrl: string | null };
   isHostOnline?: boolean;
-  onSendGift: (gift: ShopGift, targetName: string, qty: number, targetUserId?: string) => void;
+  onSendGift: (gift: ShopGift, qty: number, targets: { userId: string; name: string }[]) => void;
+  initialTargetUserId?: string;
+  initialTargetName?: string;
 };
 
 function resolveImg(url: string | null) {
@@ -53,7 +55,10 @@ function resolveImg(url: string | null) {
   return `${MEDIA_BASE}/${url.replace(/^\//, '')}`;
 }
 
-export function GiftShopModal({ visible, onClose, seats, hostInfo, isHostOnline = true, onSendGift }: Props) {
+export function GiftShopModal({
+  visible, onClose, seats, hostInfo, isHostOnline = true, onSendGift,
+  initialTargetUserId, initialTargetName,
+}: Props) {
   const insets = useSafeAreaInsets();
   const translateY = useRef(new Animated.Value(SHEET_HEIGHT)).current;
   const { coinsSpent, level } = useUserLevel();
@@ -64,8 +69,8 @@ export function GiftShopModal({ visible, onClose, seats, hostInfo, isHostOnline 
   const [quantity, setQuantity] = useState(1);
   const [showUserPicker, setShowUserPicker] = useState(false);
   const [showQtyPicker, setShowQtyPicker] = useState(false);
-  const [selectedUserId, setSelectedUserId] = useState<string>(hostInfo.userId);
-  const [selectedUserName, setSelectedUserName] = useState<string>(hostInfo.name);
+  // Multiple recipients can be selected — sending fires one gift per target.
+  const [selectedUserIds, setSelectedUserIds] = useState<string[]>([hostInfo.userId]);
 
   // Targets: host first (only if online) then on-stage seats
   const targets = [
@@ -88,18 +93,22 @@ export function GiftShopModal({ visible, onClose, seats, hostInfo, isHostOnline 
       .catch(() => {});
   }, [visible]);
 
-  // Reset selection when modal opens — pick first available target
+  // Reset selection when modal opens — prefer an explicit preselected target
+  // (e.g. tapped from a user's profile sheet), else pick the first available target
   useEffect(() => {
     if (visible) {
-      const firstTarget = isHostOnline
-        ? { userId: hostInfo.userId, name: hostInfo.name }
-        : (seats.find(s => s.slotIndex !== 0 && s.userId !== hostInfo.userId) ?? { userId: hostInfo.userId, name: hostInfo.name });
-      setSelectedUserId(firstTarget.userId);
-      setSelectedUserName('name' in firstTarget ? firstTarget.name : (firstTarget as any).userName ?? 'User');
+      if (initialTargetUserId) {
+        setSelectedUserIds([initialTargetUserId]);
+      } else {
+        const firstTargetId = isHostOnline
+          ? hostInfo.userId
+          : (seats.find(s => s.slotIndex !== 0 && s.userId !== hostInfo.userId)?.userId ?? hostInfo.userId);
+        setSelectedUserIds([firstTargetId]);
+      }
       setSelectedGift(null);
       setQuantity(1);
     }
-  }, [visible]);
+  }, [visible, initialTargetUserId]);
 
   const panResponder = useRef(
     PanResponder.create({
@@ -124,13 +133,22 @@ export function GiftShopModal({ visible, onClose, seats, hostInfo, isHostOnline 
   }
 
   function handleSend() {
-    if (!selectedGift) return;
+    if (!selectedGift || selectedUserIds.length === 0) return;
+    const chosenTargets = selectedUserIds
+      .map(id => targets.find(t => t.userId === id))
+      .filter((t): t is (typeof targets)[number] => !!t)
+      .map(t => ({ userId: t.userId, name: t.name }));
+    if (chosenTargets.length === 0) return;
     close();
-    onSendGift(selectedGift, selectedUserName, quantity, selectedUserId);
+    onSendGift(selectedGift, quantity, chosenTargets);
   }
 
   const activeGifts = categories.find(c => c.id === activeCatId)?.gifts ?? [];
 
+  // THRESHOLDS is cumulative lifetime coins spent — each level's real range
+  // is [currentThreshold, nextThreshold], e.g. level 2 is 250 → 650, level 3
+  // is 650 → 1,200. The bar's corner labels show that actual range, not a
+  // range re-based to 0.
   const currentThreshold = getLevelThreshold(level);
   const nextThreshold = getNextLevelThreshold(level);
   const coinsNeeded = Math.max(1, (nextThreshold ?? currentThreshold + 1) - currentThreshold);
@@ -150,25 +168,40 @@ export function GiftShopModal({ visible, onClose, seats, hostInfo, isHostOnline 
 
         {/* ID Level bar — shows the logged-in user's own level progress */}
         <View style={s.pointsBar}>
-          <View style={s.levelPill}>
-            <Text style={s.levelPillText}>Lv {level}</Text>
-          </View>
-          <View style={s.pointsLeft}>
-            <View style={s.pointsTrack}>
-              <View style={[s.pointsFill, { width: `${Math.round(levelProgress * 100)}%` }]} />
-            </View>
-            <View style={s.pointsSubRow}>
-              <Text style={s.pointsText}>
-                {nextThreshold != null
-                  ? `${formatCoins(coinsIntoLevel)}/${formatCoins(coinsNeeded)} to Lv ${level + 1}`
-                  : 'Max Level'}
+          {/* Row 1: coin icon + "Progress to Level N" · percentage pill */}
+          <View style={s.pointsTopRow}>
+            <View style={s.pointsTitleRow}>
+              <Image source={COIN_IMG} style={s.pointsTitleCoin} resizeMode="contain" />
+              <Text style={s.pointsTitleText}>
+                {nextThreshold != null ? `Progress to Level ${level + 1}` : 'Max Level'}
               </Text>
+            </View>
+            <View style={s.pointsPercentPill}>
               <Text style={s.pointsPercent}>{Math.round(levelProgress * 100)}%</Text>
             </View>
           </View>
-          <View style={s.pointsRight}>
-            <Image source={COIN_IMG} style={s.pointsCoin} resizeMode="contain" />
-            <Text style={s.pointsBalance}>{formatCoins(coinsSpent)}</Text>
+
+          {/* Row 2: gradient progress bar */}
+          <View style={s.pointsTrack}>
+            <View style={[s.pointsFill, { width: `${Math.round(levelProgress * 100)}%` }]} />
+          </View>
+
+          {/* Row 3: this level's actual start threshold · the user's current
+              cumulative coins · this level's end threshold — e.g. level 2
+              reads 250 / current / 650, not re-based to 0 */}
+          <View style={s.pointsStatsRow}>
+            <View style={s.pointsStat}>
+              <Image source={COIN_IMG} style={s.pointsStatCoin} resizeMode="contain" />
+              <Text style={s.pointsStatText}>{formatCoins(currentThreshold)}</Text>
+            </View>
+            <View style={s.pointsStat}>
+              <Image source={COIN_IMG} style={s.pointsStatCoin} resizeMode="contain" />
+              <Text style={s.pointsStatText}>{formatCoins(coinsSpent)}</Text>
+            </View>
+            <View style={s.pointsStat}>
+              <Image source={COIN_IMG} style={s.pointsStatCoin} resizeMode="contain" />
+              <Text style={s.pointsStatText}>{formatCoins(nextThreshold ?? currentThreshold)}</Text>
+            </View>
           </View>
         </View>
 
@@ -217,9 +250,15 @@ export function GiftShopModal({ visible, onClose, seats, hostInfo, isHostOnline 
 
         {/* Bottom bar */}
         <View style={s.bottomBar}>
-          {/* User picker */}
+          {/* User picker — tap a row in the dropdown below to toggle it; several can be selected */}
           <TouchableOpacity style={s.userPicker} activeOpacity={0.8} onPress={() => { setShowQtyPicker(false); setShowUserPicker(v => !v); }}>
-            <Text style={s.userPickerText} numberOfLines={1}>{selectedUserName}</Text>
+            <Text style={s.userPickerText} numberOfLines={1}>
+              {selectedUserIds.length === 0
+                ? 'Select recipient'
+                : selectedUserIds.length === 1
+                  ? (targets.find(t => t.userId === selectedUserIds[0])?.name ?? 'User')
+                  : `${selectedUserIds.length} selected`}
+            </Text>
             <Ionicons name={showUserPicker ? 'chevron-down' : 'chevron-up'} size={14} color="#ABADB2" />
           </TouchableOpacity>
 
@@ -231,25 +270,29 @@ export function GiftShopModal({ visible, onClose, seats, hostInfo, isHostOnline 
 
           {/* Send */}
           <TouchableOpacity
-            style={[s.sendBtn, !selectedGift && s.sendBtnDisabled]}
+            style={[s.sendBtn, (!selectedGift || selectedUserIds.length === 0) && s.sendBtnDisabled]}
             activeOpacity={0.85}
-            disabled={!selectedGift}
+            disabled={!selectedGift || selectedUserIds.length === 0}
             onPress={handleSend}>
             <Ionicons name="arrow-forward" size={20} color="#FFFFFF" />
           </TouchableOpacity>
         </View>
 
-        {/* User picker dropdown */}
+        {/* User picker dropdown — tap toggles a recipient in/out of the selection */}
         {showUserPicker && (
           <View style={s.dropdown}>
             {targets.map(t => {
               const uri = resolveImg(t.avatarUrl);
-              const isSelected = t.userId === selectedUserId;
+              const isSelected = selectedUserIds.includes(t.userId);
               return (
                 <TouchableOpacity
                   key={t.userId}
                   style={[s.dropdownItem, isSelected && s.dropdownItemSelected]}
-                  onPress={() => { setSelectedUserId(t.userId); setSelectedUserName(t.name); setShowUserPicker(false); }}>
+                  onPress={() => {
+                    setSelectedUserIds(prev =>
+                      prev.includes(t.userId) ? prev.filter(id => id !== t.userId) : [...prev, t.userId]
+                    );
+                  }}>
                   {uri
                     ? <Image source={{ uri }} style={s.dropdownAvatar} />
                     : <View style={[s.dropdownAvatar, s.dropdownAvatarFallback]}><Text style={s.dropdownInitial}>{t.name[0]}</Text></View>
@@ -293,22 +336,31 @@ const s = StyleSheet.create({
   handle: { width: 36, height: 4, borderRadius: 2, backgroundColor: 'rgba(255,255,255,0.25)' },
 
   pointsBar: {
-    flexDirection: 'row', alignItems: 'center', backgroundColor: '#1E2022',
-    paddingHorizontal: 14, paddingVertical: 10, gap: 10,
+    backgroundColor: '#1E2022',
+    paddingHorizontal: 14, paddingVertical: 10, gap: 8,
   },
-  levelPill: {
-    backgroundColor: '#7A0EED', borderRadius: 20, paddingHorizontal: 10, paddingVertical: 4,
+
+  // Row 1: coin + "Progress to Level N" on the left, percentage pill on the right
+  pointsTopRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
+  pointsTitleRow: { flexDirection: 'row', alignItems: 'center', gap: 6 },
+  pointsTitleCoin: { width: 16, height: 16 },
+  pointsTitleText: { fontSize: 13, fontWeight: '700', color: '#FFFFFF' },
+  pointsPercentPill: {
+    backgroundColor: 'rgba(168,85,247,0.15)', borderRadius: 20,
+    paddingHorizontal: 10, paddingVertical: 3,
   },
-  levelPillText: { fontSize: 11, fontWeight: '900', color: '#FFFFFF', letterSpacing: 0.5 },
-  pointsLeft: { flex: 1, gap: 4 },
-  pointsText: { fontSize: 10, color: 'rgba(255,255,255,0.55)', fontWeight: '600' },
+  pointsPercent: { fontSize: 11, fontWeight: '900', color: '#A855F7' },
+
+  // Row 2: gradient progress bar
   pointsTrack: { height: 6, backgroundColor: 'rgba(255,255,255,0.15)', borderRadius: 3, overflow: 'hidden' },
   pointsFill: { height: '100%', backgroundColor: '#A855F7', borderRadius: 3 },
-  pointsSubRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
-  pointsPercent: { fontSize: 11, fontWeight: '900', color: '#A855F7' },
-  pointsRight: { flexDirection: 'row', alignItems: 'center', gap: 4 },
-  pointsCoin: { width: 16, height: 16 },
-  pointsBalance: { fontSize: 13, fontWeight: '700', color: '#FFFFFF' },
+
+  // Row 3: level start / current progress / level end — start and end pin to
+  // the bar's actual corners (space-between), current sits in the middle.
+  pointsStatsRow: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' },
+  pointsStat: { flexDirection: 'row', alignItems: 'center', gap: 4 },
+  pointsStatCoin: { width: 14, height: 14 },
+  pointsStatText: { fontSize: 13, fontWeight: '700', color: '#FFFFFF' },
 
   tabsScroll: { flexShrink: 0, maxHeight: 40 },
   tabsContent: { paddingHorizontal: 12, gap: 4 },

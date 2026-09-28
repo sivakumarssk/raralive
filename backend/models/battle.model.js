@@ -3,13 +3,13 @@ const db = require('../config/db');
 /**
  * Create a new battle invite row.
  */
-async function createInvite({ fromRoomId, toRoomId, fromUserId, toUserId, durationMinutes }) {
+async function createInvite({ fromRoomId, toRoomId, fromUserId, toUserId, durationMinutes, mode = 'normal' }) {
   const result = await db.query(
     `INSERT INTO battle_invites
-       (from_room_id, to_room_id, from_user_id, to_user_id, duration_minutes)
-     VALUES ($1, $2, $3, $4, $5)
+       (from_room_id, to_room_id, from_user_id, to_user_id, duration_minutes, mode)
+     VALUES ($1, $2, $3, $4, $5, $6)
      RETURNING *`,
-    [fromRoomId, toRoomId, fromUserId, toUserId, durationMinutes]
+    [fromRoomId, toRoomId, fromUserId, toUserId, durationMinutes, mode]
   );
   return result.rows[0];
 }

@@ -1,3 +1,4 @@
+import { useRouter } from 'expo-router';
 import { ActivityIndicator, Image, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
 
 import { resolveImageUrl, type ChatConversation } from '@/services/api';
@@ -11,19 +12,24 @@ type RequestListItemProps = {
 };
 
 export function RequestListItem({ conversation, busy, onAccept, onReject, onPress }: RequestListItemProps) {
+  const router = useRouter();
   const avatarUri = resolveImageUrl(conversation.peer_avatar_url);
   const name = conversation.peer_name || conversation.peer_username || 'User';
   const initial = name.charAt(0).toUpperCase();
 
   return (
     <TouchableOpacity style={styles.row} onPress={onPress} activeOpacity={0.85}>
-      {avatarUri ? (
-        <Image source={{ uri: avatarUri }} style={styles.avatar} />
-      ) : (
-        <View style={styles.avatarFallback}>
-          <Text style={styles.avatarInitial}>{initial}</Text>
-        </View>
-      )}
+      <TouchableOpacity
+        activeOpacity={0.7}
+        onPress={() => conversation.peer_id && router.push(`/user/${conversation.peer_id}` as any)}>
+        {avatarUri ? (
+          <Image source={{ uri: avatarUri }} style={styles.avatar} />
+        ) : (
+          <View style={styles.avatarFallback}>
+            <Text style={styles.avatarInitial}>{initial}</Text>
+          </View>
+        )}
+      </TouchableOpacity>
       <View style={styles.body}>
         <Text style={styles.name} numberOfLines={1}>{name}</Text>
         <Text style={styles.preview} numberOfLines={1}>{conversation.last_message_preview || 'wants to message you'}</Text>

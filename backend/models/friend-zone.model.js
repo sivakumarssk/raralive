@@ -150,24 +150,6 @@ async function setCallStatus(id, status) {
   return r.rows[0] || null;
 }
 
-// "First call" pricing applies until the caller has had at least one prior
-// call that actually connected — missed/rejected/failed attempts don't burn
-// off the discount, only a call that reached 'accepted' or 'ended' does.
-// excludeCallId may be null (e.g. checked at invite time, before the new
-// call row exists yet) — `id != NULL` would otherwise silently match no
-// rows in Postgres, so it's only applied when actually provided.
-async function hasPriorConnectedCall(callerId, excludeCallId) {
-  const r = await db.query(
-    `SELECT 1 FROM friend_zone_calls
-     WHERE caller_id = $1
-       AND ($2::uuid IS NULL OR id != $2)
-       AND status IN ('accepted', 'ended')
-     LIMIT 1`,
-    [callerId, excludeCallId]
-  );
-  return r.rows.length > 0;
-}
-
 async function markCallStarted(id) {
   const r = await db.query(
     `UPDATE friend_zone_calls SET status = 'accepted', started_at = NOW() WHERE id = $1 RETURNING *`,
@@ -276,6 +258,6 @@ async function listCallGifts({ limit = 50, offset = 0 } = {}) {
 module.exports = {
   getLatestForUser, createApplication, listApplications, getApplicationById, setApplicationStatus,
   updateApplicationDetails, updateTogglePrefs, listPublicFriends,
-  createCall, getCallById, setCallStatus, markCallStarted, hasPriorConnectedCall, endCall, listCallHistory, listCalls,
+  createCall, getCallById, setCallStatus, markCallStarted, endCall, listCallHistory, listCalls,
   logCallGift, listCallGifts,
 };

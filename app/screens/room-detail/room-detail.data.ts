@@ -15,6 +15,8 @@ export type ChatMessage = {
   type: 'join' | 'message' | 'gift';
   user?: { id?: string; name: string; avatarUri: string; level: number; levelColor?: string };
   text?: string;
+  // ISO time from the server — older cached messages may not have it
+  createdAt?: string;
   // gift event
   giftName?: string;
   giftTo?: string;
@@ -23,6 +25,9 @@ export type ChatMessage = {
   giftCoins?: number;
   giftQty?: number;
   giftRecipientId?: string;
+  giftId?: string;
+  // Actual gift target (giftRecipientId is always the host, for wallet/gems)
+  giftForId?: string;
 };
 
 export type GiftItem = {

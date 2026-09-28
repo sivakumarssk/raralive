@@ -14,7 +14,10 @@ export type ChatSocketEvent =
   | { type: 'read'; conversationId: string; readBy: string }
   | { type: 'request_accepted'; conversationId: string }
   | { type: 'request_rejected'; conversationId: string }
-  | { type: 'error'; conversationId: string; message: string };
+  | { type: 'error'; conversationId: string; message: string }
+  | { type: 'online_status'; userId: string; isOnline: boolean; lastSeenAt: string | null }
+  | { type: 'live_broadcast_started'; broadcastId: string; roomId: string; hostUserId: string }
+  | { type: 'live_broadcast_ended'; broadcastId: string; roomId: string; hostUserId: string };
 
 const state = {
   socket: null as Socket | null,
@@ -77,6 +80,26 @@ export const chatSocketStore = {
     socket.on('chat_error', (data: { conversationId: string; message: string }) => {
       notifyEvent({ type: 'error', ...data });
     });
+
+    // Online status — reuses the same app-wide presence system as Friend Zone
+    // (every socket already receives this broadcast; there's nothing chat-specific
+    // to it). 'chat_online_status' is the one-off reply to checkOnline() below.
+    socket.on('friend_zone_user_status', (data: { userId: string; isOnline: boolean }) => {
+      notifyEvent({ type: 'online_status', userId: data.userId, isOnline: data.isOnline, lastSeenAt: null });
+    });
+    socket.on('chat_online_status', (data: { userId: string; isOnline: boolean; lastSeenAt: string | null }) => {
+      notifyEvent({ type: 'online_status', ...data });
+    });
+
+    // Live Now grid — real-time add/remove as broadcasts start/end, instead of
+    // relying on the user to pull-to-refresh (which left ended broadcasts
+    // visible/joinable until the next manual refresh).
+    socket.on('live_broadcast_started', (data: { broadcastId: string; roomId: string; hostUserId: string }) => {
+      notifyEvent({ type: 'live_broadcast_started', ...data });
+    });
+    socket.on('live_broadcast_ended', (data: { broadcastId: string; roomId: string; hostUserId: string }) => {
+      notifyEvent({ type: 'live_broadcast_ended', ...data });
+    });
   },
 
   reconnect() {
@@ -99,5 +122,8 @@ export const chatSocketStore = {
   },
   setTyping(conversationId: string, isTyping: boolean) {
     state.socket?.emit('chat_typing', { conversationId, isTyping });
+  },
+  checkOnline(userId: string) {
+    state.socket?.emit('chat_check_online', { userId });
   },
 };

@@ -8,7 +8,7 @@ const giftModel = require('../models/gift.model');
 const { checkLevelUp } = require('../utils/room-levels');
 const taskModel = require('../models/task.model');
 const { getUserLevelFromDb } = require('../utils/user-levels');
-const { coinsForMinute, gemsForCoins } = require('../utils/friend-zone-pricing');
+const { coinsPerTickForMinute, gemsForCoins, TICK_SECONDS } = require('../utils/friend-zone-pricing');
 const chatModel = require('../models/chat.model');
 const liveBroadcastModel = require('../models/live-broadcast.model');
 
@@ -21,16 +21,17 @@ const roomSeats       = new Map(); // roomId -> SeatSlot[]
 const roomUsers       = new Map(); // roomId -> Map<socketId, {userId, userName, avatarUrl}>
 const broadcastLikers = new Map(); // roomId -> Set<userId> who currently have the broadcast liked (toggle, not a tap counter)
 const roomPinnedMessageId = new Map(); // roomId -> pinned chat message id (string), or unset if none
+const pendingBroadcastEndTimers = new Map(); // roomId -> Timeout — grace period before auto-ending a live broadcast whose host disconnected
 
 // Friend Zone global presence — not room-scoped, tracked app-wide
 const friendZoneOnlineUsers = new Map(); // userId -> Set<socketId> (connections currently open)
 
-// Friend Zone 1:1 calls — per-minute pricing is tiered (see
-// utils/friend-zone-pricing.js), not a flat rate.
+// Friend Zone 1:1 calls — billed every 5 seconds (see
+// utils/friend-zone-pricing.js for the per-minute rate schedule that each
+// tick's cost is looked up from).
 const FZ_CALL_GEMS_PER_COIN = 5; // matches the room-gift conversion rate — callee earns gems, not coins
-const FZ_CALL_WARNING_LEAD_MS = 20 * 1000; // warn this long before the next minute is charged
-const FZ_CALL_MINUTE_MS = 60 * 1000;
-const friendZoneActiveCalls = new Map(); // callId -> { callerId, calleeId, callType, isFirstCall, minuteIndex, coinsCharged, gemsEarned, warnTimer, chargeTimer }
+const FZ_CALL_TICK_MS = TICK_SECONDS * 1000;
+const friendZoneActiveCalls = new Map(); // callId -> { callerId, calleeId, callType, tickIndex, coinsCharged, gemsEarned, chargeTimer }
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
@@ -60,29 +61,31 @@ function emitToUser(io, userId, event, payload) {
   io.to(`user_${userId}`).emit(event, payload);
 }
 
-// The first minute's cost was already confirmed affordable at invite time,
-// so it's charged immediately when the call connects. Every minute after
-// that: warn FZ_CALL_WARNING_LEAD_MS before the boundary if the balance
-// looks short, then attempt the actual charge at the boundary — ending the
-// call if it can't be covered. Price per minute comes from the tiered
-// schedule (utils/friend-zone-pricing.js), keyed by call type, whether this
-// is the caller's first-ever connected call, and how many minutes of this
-// call have already been billed.
+const TICKS_PER_MINUTE = Math.round(60 / TICK_SECONDS);
+
+// The first 5-second tick's cost was already confirmed affordable at invite
+// time, so it's charged immediately when the call connects. Every tick
+// after that fires every FZ_CALL_TICK_MS and charges whatever that tick's
+// minute-based rate is (utils/friend-zone-pricing.js) — ending the call the
+// moment a tick can't be covered. A low-balance warning fires once per
+// minute-boundary if the caller's balance can't cover a full minute
+// (12 ticks) at the upcoming rate, giving real lead time instead of a
+// pointless 5-second heads-up before a 5-second charge.
 async function startFriendZoneCallBilling(io, call) {
-  const isFirstCall = !(await friendZoneModel.hasPriorConnectedCall(call.caller_id, call.id));
   const entry = {
-    callerId: call.caller_id, calleeId: call.callee_id, callType: call.call_type, isFirstCall,
-    minuteIndex: 0, coinsCharged: 0, gemsEarned: 0, warnTimer: null, chargeTimer: null,
+    callerId: call.caller_id, calleeId: call.callee_id, callType: call.call_type,
+    tickIndex: 0, coinsCharged: 0, gemsEarned: 0, chargeTimer: null,
   };
   friendZoneActiveCalls.set(call.id, entry);
 
-  // Charge the caller and credit the callee together for each minute —
+  // Charge the caller and credit the callee together for each tick —
   // mirrors the room-gift economy (sender pays coins, recipient earns gems).
   // The callee's gems are best-effort: if crediting them fails for some
   // reason, the call keeps going rather than penalizing the caller for it.
-  const billMinute = async () => {
-    entry.minuteIndex += 1;
-    const coins = coinsForMinute({ callType: entry.callType, isFirstCall: entry.isFirstCall, minuteNumber: entry.minuteIndex });
+  const billTick = async () => {
+    entry.tickIndex += 1;
+    const minuteNumber = Math.floor((entry.tickIndex - 1) / TICKS_PER_MINUTE) + 1;
+    const coins = coinsPerTickForMinute({ callType: entry.callType, minuteNumber });
     const gems = gemsForCoins(coins);
 
     await walletModel.debitCoins(entry.callerId, coins, `Friend Zone ${entry.callType} call`, call.id);
@@ -95,10 +98,23 @@ async function startFriendZoneCallBilling(io, call) {
       console.error('friend_zone call gems credit error:', e.message);
     }
     emitToFriendZoneUser(io, entry.callerId, 'friend_zone_call_charged', { callId: call.id, coins, totalCoins: entry.coinsCharged });
+
+    // Once per minute boundary (right after the tick that starts a new
+    // minute), warn if the caller can't afford the coming minute's ticks.
+    if ((entry.tickIndex - 1) % TICKS_PER_MINUTE === 0) {
+      const nextMinuteNumber = minuteNumber + 1;
+      const nextMinuteCoins = coinsPerTickForMinute({ callType: entry.callType, minuteNumber: nextMinuteNumber }) * TICKS_PER_MINUTE;
+      try {
+        const wallet = await walletModel.getWallet(entry.callerId);
+        if (!wallet || wallet.coins < nextMinuteCoins) {
+          emitToFriendZoneUser(io, entry.callerId, 'friend_zone_call_low_balance', { callId: call.id });
+        }
+      } catch (e) { console.error('friend_zone call balance warn error:', e.message); }
+    }
   };
 
   try {
-    await billMinute();
+    await billTick();
   } catch (e) {
     if (e.code === 'INSUFFICIENT_COINS') {
       await endFriendZoneCall(io, call.id, 'insufficient_coins');
@@ -108,27 +124,11 @@ async function startFriendZoneCallBilling(io, call) {
     return;
   }
 
-  const scheduleNextMinute = () => {
-    const warnDelay = FZ_CALL_MINUTE_MS - FZ_CALL_WARNING_LEAD_MS;
-    // The upcoming minute's cost — used only for the low-balance warning,
-    // the real charge is computed fresh inside billMinute() when it fires.
-    const nextMinuteCoins = coinsForMinute({ callType: entry.callType, isFirstCall: entry.isFirstCall, minuteNumber: entry.minuteIndex + 1 });
-
-    entry.warnTimer = setTimeout(async () => {
-      try {
-        const wallet = await walletModel.getWallet(entry.callerId);
-        if (!wallet || wallet.coins < nextMinuteCoins) {
-          emitToFriendZoneUser(io, entry.callerId, 'friend_zone_call_low_balance', {
-            callId: call.id, secondsLeft: Math.round(FZ_CALL_WARNING_LEAD_MS / 1000),
-          });
-        }
-      } catch (e) { console.error('friend_zone call balance warn error:', e.message); }
-    }, warnDelay);
-
+  const scheduleNextTick = () => {
     entry.chargeTimer = setTimeout(async () => {
       try {
-        await billMinute();
-        scheduleNextMinute();
+        await billTick();
+        scheduleNextTick();
       } catch (e) {
         if (e.code === 'INSUFFICIENT_COINS') {
           await endFriendZoneCall(io, call.id, 'insufficient_coins');
@@ -136,16 +136,15 @@ async function startFriendZoneCallBilling(io, call) {
           console.error('friend_zone call billing error:', e.message);
         }
       }
-    }, FZ_CALL_MINUTE_MS);
+    }, FZ_CALL_TICK_MS);
   };
 
-  scheduleNextMinute();
+  scheduleNextTick();
 }
 
 function stopFriendZoneCallBilling(callId) {
   const entry = friendZoneActiveCalls.get(callId);
   if (!entry) return;
-  clearTimeout(entry.warnTimer);
   clearTimeout(entry.chargeTimer);
   friendZoneActiveCalls.delete(callId);
 }
@@ -199,6 +198,7 @@ async function loadMessages(roomId) {
       type: row.type,
       text: row.type === 'message' ? row.content : undefined,
       content: row.content,
+      createdAt: row.created_at,
       user: row.user_id ? {
         id: row.user_id,
         name: row.full_name || row.username || 'User',
@@ -391,13 +391,10 @@ function setupSocket(httpServer) {
           socket.emit('friend_zone_call_failed', { reason: 'busy' });
           return;
         }
-        // Caller must be able to afford at least the first minute up front.
-        // Minute 1's price depends on whether this caller has ever had a
-        // call that actually connected before (see hasPriorConnectedCall).
-        const isFirstCall = !(await friendZoneModel.hasPriorConnectedCall(userId, null));
-        const firstMinuteCoins = coinsForMinute({ callType, isFirstCall, minuteNumber: 1 });
+        // Caller must be able to afford at least the first 5-second tick up front.
+        const firstTickCoins = coinsPerTickForMinute({ callType, minuteNumber: 1 });
         const wallet = await walletModel.getWallet(userId);
-        if (!wallet || wallet.coins < firstMinuteCoins) {
+        if (!wallet || wallet.coins < firstTickCoins) {
           socket.emit('friend_zone_call_failed', { reason: 'insufficient_coins' });
           return;
         }
@@ -563,6 +560,9 @@ function setupSocket(httpServer) {
         await chatModel.touchConversation(conversationId, preview);
 
         const peerId = await chatModel.getPeerId(conversation, userId);
+        // If the recipient had hidden (deleted-for-me) this conversation, a new
+        // message brings it back into their list — same as most chat apps.
+        await chatModel.unhideForNewMessage(conversationId, peerId);
         emitToUser(io, peerId, 'chat_message', { conversationId, message });
         emitToUser(io, userId, 'chat_message', { conversationId, message });
       } catch (e) { console.error('chat_send_message error:', e.message); }
@@ -577,6 +577,24 @@ function setupSocket(httpServer) {
         const peerId = await chatModel.getPeerId(conversation, userId);
         emitToUser(io, peerId, 'chat_typing', { conversationId, userId, isTyping: !!isTyping });
       } catch (e) { console.error('chat_typing error:', e.message); }
+    });
+
+    // One-off online check for a DM peer (e.g. opening a conversation) — reuses
+    // the same global presence map Friend Zone maintains, since "online" is an
+    // app-wide concept, not scoped to any one feature. Live updates after this
+    // come from the 'friend_zone_user_status' broadcast every socket already
+    // receives (see the 'friend_zone_presence' room join above).
+    socket.on('chat_check_online', async ({ userId: peerId }) => {
+      if (!peerId) return;
+      const isOnline = isFriendZoneUserOnline(peerId);
+      let lastSeenAt = null;
+      if (!isOnline) {
+        try {
+          const r = await db.query(`SELECT last_seen_at FROM users WHERE id = $1`, [peerId]);
+          lastSeenAt = r.rows[0]?.last_seen_at ?? null;
+        } catch { /* non-fatal */ }
+      }
+      socket.emit('chat_online_status', { userId: peerId, isOnline, lastSeenAt });
     });
 
     socket.on('join_room', async ({ roomId }) => {
@@ -629,6 +647,13 @@ function setupSocket(httpServer) {
         if (!hostSlot) seats.unshift({ slotIndex: 0, userId, userName, avatarUrl, isHost: true });
         else { hostSlot.userName = userName; hostSlot.avatarUrl = avatarUrl; }
         io.to(roomId).emit('host_status', { isOnline: true, userName, avatarUrl });
+
+        // Host reconnected within the grace period — cancel the pending auto-end.
+        const pendingTimer = pendingBroadcastEndTimers.get(roomId);
+        if (pendingTimer) {
+          clearTimeout(pendingTimer);
+          pendingBroadcastEndTimers.delete(roomId);
+        }
       }
 
       // Load messages from DB (or use cache if already loaded this session)
@@ -687,6 +712,7 @@ function setupSocket(httpServer) {
       const joinMsg = {
         id: `join_${socket.id}_${Date.now()}`,
         type: 'join',
+        createdAt: new Date().toISOString(),
         user: { id: userId, name: userName, avatarUri: avatarUrl ?? '', level: socket.userLevel ?? 0 },
       };
       const msgs = roomMessages.get(roomId) ?? [];
@@ -807,6 +833,33 @@ function setupSocket(httpServer) {
       }
     });
 
+    // Host or a currently-seated co-host force-mutes/unmutes another stage user.
+    // "Co-host" isn't a persisted role — it's whoever currently occupies a
+    // non-zero seat, same definition used on the live-broadcast screen.
+    socket.on('force_mute_user', ({ roomId, targetUserId, isMuted }) => {
+      if (!roomId || !socket.userId || !targetUserId) return;
+      const seats = roomSeats.get(roomId);
+      if (!seats) return;
+
+      const callerIsHost = socket.isHost;
+      const callerIsCoHost = seats.some(s => s.userId === socket.userId && s.slotIndex !== 0);
+      if (!callerIsHost && !callerIsCoHost) return;
+
+      const targetSeat = seats.find(s => s.userId === targetUserId);
+      if (!targetSeat) return;
+      targetSeat.isMuted = !!isMuted;
+      io.to(roomId).emit('seats_update', serializeSeats(roomId));
+
+      // Tell the target's socket(s) to actually stop/resume publishing audio —
+      // seat.isMuted alone only updates the UI badge, it doesn't touch Agora.
+      const usersMap = roomUsers.get(roomId);
+      if (usersMap) {
+        for (const [sid, u] of usersMap.entries()) {
+          if (u.userId === targetUserId) io.to(sid).emit('forced_mute', { roomId, isMuted: !!isMuted });
+        }
+      }
+    });
+
     // ── Mute state broadcast ───────────────────────────────────────────────────
 
     socket.on('user_mute', ({ roomId, isMuted }) => {
@@ -878,6 +931,9 @@ function setupSocket(httpServer) {
           giftCoins: coins,
           giftQty: qty,
           giftRecipientId: giftForUserId || recipientId,
+          giftId,
+          giftForId: giftForUserId || recipientId,
+          createdAt: new Date().toISOString(),
         };
 
         if (!roomMessages.has(roomId)) roomMessages.set(roomId, []);
@@ -989,6 +1045,7 @@ function setupSocket(httpServer) {
         type: 'message',
         user: { id: socket.userId, name: socket.userName ?? 'User', avatarUri: socket.avatarUrl ?? '', level: socket.userLevel ?? 0 },
         text: trimmed,
+        createdAt: new Date().toISOString(),
       };
 
       if (!roomMessages.has(roomId)) roomMessages.set(roomId, []);
@@ -1062,6 +1119,7 @@ function setupSocket(httpServer) {
           friendZoneOnlineUsers.delete(userId);
           console.log('[FZ-PRESENCE] broadcasting OFFLINE for', userId);
           io.to('friend_zone_presence').emit('friend_zone_user_status', { userId, isOnline: false });
+          db.query(`UPDATE users SET last_seen_at = NOW() WHERE id = $1`, [userId]).catch(() => {});
 
           // If this was the user's last open connection, end any Friend Zone
           // call they're currently in rather than leave it billing forever.
@@ -1088,6 +1146,27 @@ function setupSocket(httpServer) {
           userName: hostSeat?.userName ?? 'Host',
           avatarUrl: hostSeat?.avatarUrl ?? null,
         });
+
+        // Grace period before treating this as a real broadcast end (covers brief
+        // network blips / app backgrounding) — if the host doesn't reconnect in
+        // time, auto-end the live broadcast so it drops out of the Live Now list
+        // for everyone instead of sitting there as a zombie session.
+        const existingTimer = pendingBroadcastEndTimers.get(roomId);
+        if (existingTimer) clearTimeout(existingTimer);
+        pendingBroadcastEndTimers.set(roomId, setTimeout(async () => {
+          pendingBroadcastEndTimers.delete(roomId);
+          if (roomHostSockets.get(roomId)) return; // host reconnected under a different socket id
+          try {
+            const activeBroadcast = await liveBroadcastModel.getBroadcastByRoomId(roomId);
+            if (!activeBroadcast) return;
+            const ended = await liveBroadcastModel.endBroadcast(activeBroadcast.id);
+            if (ended) {
+              io.emit('live_broadcast_ended', { broadcastId: ended.id, roomId, hostUserId: ended.host_user_id });
+            }
+          } catch (err) {
+            console.warn('[LiveBroadcast] auto-end on host disconnect failed:', err);
+          }
+        }, 20000));
       }
 
       if (!socket.isHost) {
@@ -1114,6 +1193,14 @@ function getAllOnlineCounts() {
 }
 function isRoomHostOnline(roomId) { return !!roomHostSockets.get(roomId); }
 function getHostSocketId(roomId) { return roomHostSockets.get(roomId) ?? null; }
+// "Co-host" isn't a persisted role — it's whoever currently occupies a
+// non-zero stage seat, same live definition used for force-mute and the
+// stage-tap profile actions.
+function isUserSeatedInRoom(roomId, userId) {
+  const seats = roomSeats.get(roomId);
+  if (!seats) return false;
+  return seats.some(s => s.userId === userId && s.slotIndex !== 0);
+}
 function getRoomMembers(roomId) {
   const usersMap = roomUsers.get(roomId);
   if (!usersMap) return [];
@@ -1163,5 +1250,5 @@ function kickUserFromRoom(roomId, targetUserId) {
 
 module.exports = {
   setupSocket, setIo, getOnlineCount, getAllOnlineCounts, isRoomHostOnline, getHostSocketId, getRoomMembers, kickUserFromRoom,
-  isFriendZoneUserOnline, debugFriendZonePresence, emitToUser,
+  isFriendZoneUserOnline, debugFriendZonePresence, emitToUser, isUserSeatedInRoom,
 };

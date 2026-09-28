@@ -276,100 +276,109 @@ export function PerformanceScreen() {
                 <>
                   <View style={lb.podiumRow}>
                     {/* 2nd — left */}
-                    <View style={lb.podiumSide}>
-                      {top3[1] ? (
-                        <>
-                          <View style={[lb.podRing, lb.podRingSilver]}>
-                            {resolveAvatar(top3[1].avatar_url) ? (
-                              <Image source={{ uri: resolveAvatar(top3[1].avatar_url)! }} style={lb.podAvatar} />
-                            ) : (
-                              <View style={[lb.podAvatar, { backgroundColor: '#C0C0C0', alignItems: 'center', justifyContent: 'center' }]}>
-                                <Text style={lb.podInitial}>{(top3[1].full_name || top3[1].username || '?')[0]?.toUpperCase()}</Text>
-                              </View>
-                            )}
-                            <View style={[lb.podRankBadge, { backgroundColor: '#C0C0C0' }]}>
-                              <Text style={lb.podRankText}>2</Text>
+                    {top3[1] ? (
+                      <TouchableOpacity
+                        style={lb.podiumSide}
+                        activeOpacity={0.75}
+                        onPress={() => router.push(`/user/${top3[1].id}` as any)}>
+                        <View style={[lb.podRing, lb.podRingSilver]}>
+                          {resolveAvatar(top3[1].avatar_url) ? (
+                            <Image source={{ uri: resolveAvatar(top3[1].avatar_url)! }} style={lb.podAvatar} />
+                          ) : (
+                            <View style={[lb.podAvatar, { backgroundColor: '#C0C0C0', alignItems: 'center', justifyContent: 'center' }]}>
+                              <Text style={lb.podInitial}>{(top3[1].full_name || top3[1].username || '?')[0]?.toUpperCase()}</Text>
                             </View>
+                          )}
+                          <View style={[lb.podRankBadge, { backgroundColor: '#C0C0C0' }]}>
+                            <Text style={lb.podRankText}>2</Text>
                           </View>
-                          <Text style={lb.podName} numberOfLines={1}>{top3[1].full_name || top3[1].username || 'User'}</Text>
-                          <View style={lb.podCoinRow}>
-                            <Image source={COIN_IMG} style={lb.podCoinImg} resizeMode="contain" />
-                            <Text style={lb.podCoinText}>{formatCoins(Number(top3[1].total_coins))}</Text>
-                          </View>
-                        </>
-                      ) : (
+                        </View>
+                        <Text style={lb.podName} numberOfLines={1}>{top3[1].full_name || top3[1].username || 'User'}</Text>
+                        <View style={lb.podCoinRow}>
+                          <Image source={COIN_IMG} style={lb.podCoinImg} resizeMode="contain" />
+                          <Text style={lb.podCoinText}>{formatCoins(Number(top3[1].total_coins))}</Text>
+                        </View>
+                      </TouchableOpacity>
+                    ) : (
+                      <View style={lb.podiumSide}>
                         <View style={[lb.podRing, lb.podRingSilver, lb.podEmpty]}>
                           <Ionicons name="person-outline" size={22} color="rgba(255,255,255,0.25)" />
                           <View style={[lb.podRankBadge, { backgroundColor: '#C0C0C0' }]}>
                             <Text style={lb.podRankText}>2</Text>
                           </View>
                         </View>
-                      )}
-                    </View>
+                      </View>
+                    )}
 
                     {/* 1st — center */}
-                    <View style={lb.podiumCenter}>
-                      {top3[0] ? (
-                        <>
-                          <View style={[lb.podRing, lb.podRingGold, lb.podRingBig]}>
-                            {resolveAvatar(top3[0].avatar_url) ? (
-                              <Image source={{ uri: resolveAvatar(top3[0].avatar_url)! }} style={lb.podAvatarBig} />
-                            ) : (
-                              <View style={[lb.podAvatarBig, { backgroundColor: '#FFD700', alignItems: 'center', justifyContent: 'center' }]}>
-                                <Text style={[lb.podInitial, { fontSize: 28 }]}>{(top3[0].full_name || top3[0].username || '?')[0]?.toUpperCase()}</Text>
-                              </View>
-                            )}
-                            <View style={[lb.podRankBadge, lb.podRankBadgeBig, { backgroundColor: '#FFD700' }]}>
-                              <Text style={[lb.podRankText, { fontSize: 12 }]}>1</Text>
+                    {top3[0] ? (
+                      <TouchableOpacity
+                        style={lb.podiumCenter}
+                        activeOpacity={0.75}
+                        onPress={() => router.push(`/user/${top3[0].id}` as any)}>
+                        <View style={[lb.podRing, lb.podRingGold, lb.podRingBig]}>
+                          {resolveAvatar(top3[0].avatar_url) ? (
+                            <Image source={{ uri: resolveAvatar(top3[0].avatar_url)! }} style={lb.podAvatarBig} />
+                          ) : (
+                            <View style={[lb.podAvatarBig, { backgroundColor: '#FFD700', alignItems: 'center', justifyContent: 'center' }]}>
+                              <Text style={[lb.podInitial, { fontSize: 28 }]}>{(top3[0].full_name || top3[0].username || '?')[0]?.toUpperCase()}</Text>
                             </View>
+                          )}
+                          <View style={[lb.podRankBadge, lb.podRankBadgeBig, { backgroundColor: '#FFD700' }]}>
+                            <Text style={[lb.podRankText, { fontSize: 12 }]}>1</Text>
                           </View>
-                          <Text style={[lb.podName, { fontSize: 13 }]} numberOfLines={1}>{top3[0].full_name || top3[0].username || 'User'}</Text>
-                          <View style={lb.podCoinRow}>
-                            <Image source={COIN_IMG} style={lb.podCoinImg} resizeMode="contain" />
-                            <Text style={[lb.podCoinText, { fontSize: 14 }]}>{formatCoins(Number(top3[0].total_coins))}</Text>
-                          </View>
-                        </>
-                      ) : (
+                        </View>
+                        <Text style={[lb.podName, { fontSize: 13 }]} numberOfLines={1}>{top3[0].full_name || top3[0].username || 'User'}</Text>
+                        <View style={lb.podCoinRow}>
+                          <Image source={COIN_IMG} style={lb.podCoinImg} resizeMode="contain" />
+                          <Text style={[lb.podCoinText, { fontSize: 14 }]}>{formatCoins(Number(top3[0].total_coins))}</Text>
+                        </View>
+                      </TouchableOpacity>
+                    ) : (
+                      <View style={lb.podiumCenter}>
                         <View style={[lb.podRing, lb.podRingGold, lb.podRingBig, lb.podEmpty]}>
                           <Ionicons name="person-outline" size={28} color="rgba(255,255,255,0.25)" />
                           <View style={[lb.podRankBadge, lb.podRankBadgeBig, { backgroundColor: '#FFD700' }]}>
                             <Text style={[lb.podRankText, { fontSize: 12 }]}>1</Text>
                           </View>
                         </View>
-                      )}
-                    </View>
+                      </View>
+                    )}
 
                     {/* 3rd — right */}
-                    <View style={lb.podiumSide}>
-                      {top3[2] ? (
-                        <>
-                          <View style={[lb.podRing, lb.podRingBronze]}>
-                            {resolveAvatar(top3[2].avatar_url) ? (
-                              <Image source={{ uri: resolveAvatar(top3[2].avatar_url)! }} style={lb.podAvatar} />
-                            ) : (
-                              <View style={[lb.podAvatar, { backgroundColor: '#CD7F32', alignItems: 'center', justifyContent: 'center' }]}>
-                                <Text style={lb.podInitial}>{(top3[2].full_name || top3[2].username || '?')[0]?.toUpperCase()}</Text>
-                              </View>
-                            )}
-                            <View style={[lb.podRankBadge, { backgroundColor: '#CD7F32' }]}>
-                              <Text style={lb.podRankText}>3</Text>
+                    {top3[2] ? (
+                      <TouchableOpacity
+                        style={lb.podiumSide}
+                        activeOpacity={0.75}
+                        onPress={() => router.push(`/user/${top3[2].id}` as any)}>
+                        <View style={[lb.podRing, lb.podRingBronze]}>
+                          {resolveAvatar(top3[2].avatar_url) ? (
+                            <Image source={{ uri: resolveAvatar(top3[2].avatar_url)! }} style={lb.podAvatar} />
+                          ) : (
+                            <View style={[lb.podAvatar, { backgroundColor: '#CD7F32', alignItems: 'center', justifyContent: 'center' }]}>
+                              <Text style={lb.podInitial}>{(top3[2].full_name || top3[2].username || '?')[0]?.toUpperCase()}</Text>
                             </View>
+                          )}
+                          <View style={[lb.podRankBadge, { backgroundColor: '#CD7F32' }]}>
+                            <Text style={lb.podRankText}>3</Text>
                           </View>
-                          <Text style={lb.podName} numberOfLines={1}>{top3[2].full_name || top3[2].username || 'User'}</Text>
-                          <View style={lb.podCoinRow}>
-                            <Image source={COIN_IMG} style={lb.podCoinImg} resizeMode="contain" />
-                            <Text style={lb.podCoinText}>{formatCoins(Number(top3[2].total_coins))}</Text>
-                          </View>
-                        </>
-                      ) : (
+                        </View>
+                        <Text style={lb.podName} numberOfLines={1}>{top3[2].full_name || top3[2].username || 'User'}</Text>
+                        <View style={lb.podCoinRow}>
+                          <Image source={COIN_IMG} style={lb.podCoinImg} resizeMode="contain" />
+                          <Text style={lb.podCoinText}>{formatCoins(Number(top3[2].total_coins))}</Text>
+                        </View>
+                      </TouchableOpacity>
+                    ) : (
+                      <View style={lb.podiumSide}>
                         <View style={[lb.podRing, lb.podRingBronze, lb.podEmpty]}>
                           <Ionicons name="person-outline" size={22} color="rgba(255,255,255,0.25)" />
                           <View style={[lb.podRankBadge, { backgroundColor: '#CD7F32' }]}>
                             <Text style={lb.podRankText}>3</Text>
                           </View>
                         </View>
-                      )}
-                    </View>
+                      </View>
+                    )}
                   </View>
 
                   {/* Podium blocks */}
@@ -391,7 +400,11 @@ export function PerformanceScreen() {
                   const name = entry.full_name || entry.username || 'User';
                   const initials = name[0]?.toUpperCase() ?? '?';
                   return (
-                    <View key={entry.id} style={lb.listRow}>
+                    <TouchableOpacity
+                      key={entry.id}
+                      style={lb.listRow}
+                      activeOpacity={0.75}
+                      onPress={() => router.push(`/user/${entry.id}` as any)}>
                       <View style={lb.listRankWrap}>
                         <Text style={lb.listRankNum}>{rank}</Text>
                       </View>
@@ -412,7 +425,7 @@ export function PerformanceScreen() {
                         <Image source={COIN_IMG} style={lb.listCoinImg} resizeMode="contain" />
                         <Text style={lb.listCoinText}>{formatCoins(Number(entry.total_coins))}</Text>
                       </View>
-                    </View>
+                    </TouchableOpacity>
                   );
                 })}
               </View>

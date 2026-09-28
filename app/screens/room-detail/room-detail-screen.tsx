@@ -1,4 +1,5 @@
 import { Ionicons } from '@expo/vector-icons';
+import { Image as ExpoImage } from 'expo-image';
 import { LinearGradient } from 'expo-linear-gradient';
 import { StatusBar } from 'expo-status-bar';
 import { router, useFocusEffect } from 'expo-router';
@@ -21,11 +22,12 @@ import {
 } from 'react-native';
 import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useAgoraVoice } from '@/hooks/useAgoraVoice';
-import { agoraStore } from '@/store/agora-store';
-import { socketStore, onGiftError, onLevelUp, onTaskCompleted, onRewardApplied, onBattleInvite, onBattleInviteAccepted, onBattleInviteDeclined, onBattleInviteCancelled, onBattleStarted, onJoinBlocked, onKickedFromRoom, onReopenBattle, subscribeSocket, getSocketState, type BattleInvitePayload } from '@/store/socket-store';
+import { agoraStore, getAgoraState } from '@/store/agora-store';
+import { socketStore, onGiftError, onLiveGift, getMyCoinsGifted, onLevelUp, onTaskCompleted, onRewardApplied, onBattleInvite, onBattleInviteAccepted, onBattleInviteDeclined, onBattleInviteCancelled, onBattleStarted, onJoinBlocked, onKickedFromRoom, onForcedMute, onReopenBattle, subscribeSocket, getSocketState, type BattleInvitePayload } from '@/store/socket-store';
 import { type IncomingSeatRequest, type IncomingStageInvite, useRoomSocket } from '@/hooks/useRoomSocket';
-import { BASE_URL, MEDIA_BASE } from '@/services/api';
+import { BASE_URL, MEDIA_BASE, resolveImageUrl } from '@/services/api';
 import { authStore } from '@/store/auth-store';
+import { getUserLevel } from '@/utils/userLevel';
 import { roomStore } from '@/store/room-store';
 import { ChatFeed } from './components/chat-feed';
 import { ChatInputBar } from './components/chat-input-bar';
@@ -35,21 +37,25 @@ import { DailyTaskModal } from './components/daily-task-modal';
 import { GiftShopModal } from './components/gift-shop-modal';
 import { GiftFullscreenAnim } from './components/gift-fullscreen-anim';
 import { GiftBar, GiftPickerBar, type GiftTarget } from './components/gift-tray';
-import { GiftFlyAnimation, type FlyItem, type SlotPosition } from './components/gift-fly-animation';
+import { GiftFlyAnimation, type GiftFlyHandle, type SlotPosition } from './components/gift-fly-animation';
+import { BANNER_GIFT_CENTER, BANNER_ROW_STEP, GiftComboBanners, type GiftBannersHandle } from './components/gift-combo-banner';
 import { BattleBanner } from './components/battle-banner';
 import { RoomHeader } from './components/room-header';
 import { RoomStage, type HostInfo, type BattleStageInfo } from './components/room-stage';
 import { RoomLevelUp, prefetchUpcomingGroupBadges } from './components/room-level-up';
-import { type GiftItem } from './room-detail.data';
+import { UserProfileSheet, type UserProfileSheetTarget } from './components/user-profile-sheet';
+import { type ChatMessage, type GiftItem } from './room-detail.data';
 
 const FLOATING_ACTIONS = [
   { key: 'dailytask', src: require('@/assets/tabs/chatroom/dailyTask.png') },
   { key: 'coinbox',   src: require('@/assets/tabs/chatroom/coinbox.png') },
+  { key: 'game',      src: require('@/assets/tabs/chatroom/game.png') },
 ];
 
 type RoomInfo = {
   room_code: string;
   room_name: string;
+  agency_id?: string | null;
   agency_name: string;
   room_image_url: string | null;
   host_user_id: string;
@@ -95,6 +101,8 @@ export function RoomDetailScreen({ roomId = '', onBack, openBattle }: RoomDetail
   const [showBattle, setShowBattle] = useState(!!openBattle);
   const [showNoBattle, setShowNoBattle] = useState(false);
   const [showGiftShop, setShowGiftShop] = useState(false);
+  const [giftShopTarget, setGiftShopTarget] = useState<{ userId: string; userName: string } | null>(null);
+  const [profileSheetTarget, setProfileSheetTarget] = useState<UserProfileSheetTarget | null>(null);
   const [keyboardVisible, setKeyboardVisible] = useState(false);
   const [keyboardHeight, setKeyboardHeight] = useState(0);
   const [roomInfo, setRoomInfo] = useState<RoomInfo | null>(null);
@@ -104,7 +112,6 @@ export function RoomDetailScreen({ roomId = '', onBack, openBattle }: RoomDetail
   }, [roomInfo?.current_level]);
 
   const [showExitModal, setShowExitModal] = useState(false);
-  const [showCoHostModal, setShowCoHostModal] = useState(false);
   const [seatToast, setSeatToast] = useState<string | null>(null);
 
   // Battle stage info (VS bar in audio box)
@@ -120,10 +127,16 @@ export function RoomDetailScreen({ roomId = '', onBack, openBattle }: RoomDetail
   // Gift target picker + fly animation (gift bar)
   const [pendingGift, setPendingGift] = useState<GiftItem | null>(null);
   const [showGiftPicker, setShowGiftPicker] = useState(false);
-  const [selectedTargetId, setSelectedTargetId] = useState<string | null>(null);
+  // Multiple recipients can be selected at once — sending fires one gift
+  // event per selected user (see handleGiftSend below).
+  const [selectedTargetIds, setSelectedTargetIds] = useState<string[]>([]);
   const [allGifts, setAllGifts] = useState<GiftItem[]>([]);
-  const [flyItems, setFlyItems] = useState<FlyItem[]>([]);
+  const giftFlyRef = useRef<GiftFlyHandle>(null);
   const slotPositions = useRef<Map<string, SlotPosition>>(new Map());
+  // Window position of the chat area's top-left — the gift combo banners sit there,
+  // and the gift fly animation starts from the banner's gift image.
+  const chatAreaRef = useRef<View>(null);
+  const chatAreaPos = useRef<SlotPosition | null>(null);
 
   // Gift shop fullscreen animation
   const [fullscreenGift, setFullscreenGift] = useState<{ imageUrl: string | null; bgColor: string } | null>(null);
@@ -291,6 +304,7 @@ export function RoomDetailScreen({ roomId = '', onBack, openBattle }: RoomDetail
             toRoomId: d.to_room_id,
             fromHostUserId: d.from_user_id,
             toHostUserId: d.to_user_id,
+            mode: d.mode,
           });
         }
       } catch { if (!cancelled) setBattleStageInfo(null); }
@@ -360,6 +374,121 @@ export function RoomDetailScreen({ roomId = '', onBack, openBattle }: RoomDetail
     return unsub;
   }, []);
 
+  // Live gifts for EVERYONE in the room (sender included). Each SENDER has their
+  // own queue: different senders play simultaneously (never wait on each other),
+  // while one sender's gifts play in order. Each gift updates its sender's banner,
+  // then flies from that banner's gift image to the recipient's seat. The pace
+  // follows how fast the sender taps — their next gift launches a short gap after
+  // the previous one takes off, without waiting for it to land. When a sender's
+  // gifts pile up, the gap and flight time shrink so the animation keeps up.
+  type SenderQueue = { items: ChatMessage[]; timer: ReturnType<typeof setTimeout> | null };
+  const giftBannersRef = useRef<GiftBannersHandle>(null);
+  const giftQueues = useRef<Map<string, SenderQueue>>(new Map());
+  // Senders waiting for a banner slot (all 3 busy), first come first served
+  const giftWaiting = useRef<string[]>([]);
+
+  const playNextGift = useCallback((senderKey: string) => {
+    const q = giftQueues.current.get(senderKey);
+    if (!q) return;
+    const msg = q.items.shift();
+    if (!msg) { giftQueues.current.delete(senderKey); return; }
+
+    const shown = giftBannersRef.current ? giftBannersRef.current.show(msg) : { isNew: true, row: 0 };
+    if (!shown) {
+      // All slots busy with other senders: hold this gift (and the rest of this
+      // sender's line) until a slot frees up, see handleGiftSlotFree.
+      q.items.unshift(msg);
+      q.timer = null;
+      if (!giftWaiting.current.includes(senderKey)) giftWaiting.current.push(senderKey);
+      return;
+    }
+    const { isNew: isNewBox, row } = shown;
+    // A new box needs a moment to slide in before the gift flies out of it
+    const startDelay = isNewBox ? 250 : 0;
+    const backlog = q.items.length;
+    const duration = backlog >= 3 ? 300 : backlog >= 1 ? 400 : 500;
+    const gap = backlog >= 3 ? 40 : backlog >= 1 ? 70 : 100;
+    const targetId = msg.giftForId ?? msg.giftRecipientId;
+    giftFlyRef.current?.launch(
+      {
+        id: `${msg.id}-${Date.now()}`,
+        gift: {
+          id: msg.giftId ?? '',
+          name: msg.giftName ?? '',
+          image_url: msg.giftImageUrl ?? null,
+          coins: msg.giftCoins ?? 0,
+          bg_color: msg.giftBgColor ?? '',
+        },
+        qty: msg.giftQty ?? 1,
+        targetUserId: targetId,
+        targetPos: targetId ? slotPositions.current.get(targetId) : undefined,
+        origin: chatAreaPos.current
+          ? {
+              x: chatAreaPos.current.x + BANNER_GIFT_CENTER.x,
+              y: chatAreaPos.current.y + BANNER_GIFT_CENTER.y + row * BANNER_ROW_STEP,
+            }
+          : undefined,
+        startDelay,
+        duration,
+      },
+    );
+    // This sender's next gift launches right after this one takes off (keeps order)
+    q.timer = setTimeout(() => playNextGift(senderKey), startDelay + gap);
+  }, []);
+
+  const enqueueGift = useCallback((msg: ChatMessage) => {
+    const senderKey = String(msg.user?.id ?? msg.user?.name ?? 'unknown');
+    const existing = giftQueues.current.get(senderKey);
+    if (existing) { existing.items.push(msg); return; }  // already playing — joins the line
+    giftQueues.current.set(senderKey, { items: [msg], timer: null });
+    playNextGift(senderKey);  // new sender starts immediately, alongside others
+  }, [playNextGift]);
+
+  // A banner slot freed up: let the longest-waiting sender in
+  const handleGiftSlotFree = useCallback(() => {
+    const next = giftWaiting.current.shift();
+    if (next) playNextGift(next);
+  }, [playNextGift]);
+
+  // My own gifts are played instantly on tap (see playMyGift) — skip the server
+  // echo of them so they don't animate twice. Everyone else's come from here.
+  useEffect(() => {
+    const unsub = onLiveGift(msg => {
+      if (msg.user?.id && msg.user.id === authStore.getUserId()) return;
+      enqueueGift(msg);
+    });
+    return () => {
+      unsub();
+      giftQueues.current.forEach(q => { if (q.timer) clearTimeout(q.timer); });
+      giftQueues.current.clear();
+      giftWaiting.current = [];
+    };
+  }, [enqueueGift]);
+
+  // Plays the sender's own gift immediately on tap — no waiting for the server
+  // round trip (wallet transaction + broadcast), which made rapid taps lag.
+  const playMyGift = (gift: GiftItem, qty: number, targetId: string, targetName: string) => {
+    const me = authStore.getUser();
+    enqueueGift({
+      id: `local_${Date.now()}_${Math.random()}`,
+      type: 'gift',
+      user: {
+        id: authStore.getUserId() ?? undefined,
+        name: me?.fullName || me?.username || 'You',
+        avatarUri: resolveImageUrl(me?.avatarUrl) ?? '',
+        level: getUserLevel(getMyCoinsGifted()),
+      },
+      giftName: gift.name,
+      giftTo: targetName,
+      giftImageUrl: gift.image_url,
+      giftBgColor: gift.bg_color,
+      giftCoins: gift.coins,
+      giftQty: qty,
+      giftId: gift.id,
+      giftForId: targetId,
+    });
+  };
+
   // Keep ref in sync
   useEffect(() => { battleStageRef.current = battleStageInfo; }, [battleStageInfo]);
 
@@ -404,7 +533,13 @@ export function RoomDetailScreen({ roomId = '', onBack, openBattle }: RoomDetail
     const unsub3 = onReopenBattle(() => {
       setShowBattle(true);
     });
-    return () => { unsub1(); unsub2(); unsub3(); };
+    const unsub4 = onForcedMute((isMuted) => {
+      // Only act if this actually changes our local state — toggleMute() is a
+      // toggle, not a setter, so calling it when already in the target state
+      // would flip it the wrong way.
+      if (getAgoraState().isMuted !== isMuted) agoraStore.toggleMute();
+    });
+    return () => { unsub1(); unsub2(); unsub3(); unsub4(); };
   }, []);
 
   const {
@@ -413,7 +548,7 @@ export function RoomDetailScreen({ roomId = '', onBack, openBattle }: RoomDetail
     incomingRequest, seatRequestResult,
     sendMessage, requestSeat,
     acceptSeatRequest, rejectSeatRequest,
-    clearSeatRequestResult, inviteToStage,
+    clearSeatRequestResult, inviteToStage, removeFromStage, leaveStage,
     incomingStageInvite, acceptStageInvite, rejectStageInvite, clearStageInvite,
   } = useRoomSocket(roomId);
 
@@ -439,8 +574,8 @@ export function RoomDetailScreen({ roomId = '', onBack, openBattle }: RoomDetail
 
   const roomAvatarUri = resolveAvatar(roomInfo?.room_image_url ?? roomInfo?.host_avatar_url);
 
-  // Fetch room info once
-  useEffect(() => {
+  // Fetch room info (initial load + manual "Refresh Room" from the header menu)
+  const fetchRoomInfo = useCallback(() => {
     if (!roomId) return;
     const token = authStore.getToken();
     fetch(`${BASE_URL}/rooms/${roomId}`, {
@@ -450,6 +585,16 @@ export function RoomDetailScreen({ roomId = '', onBack, openBattle }: RoomDetail
       .then(json => { if (json.success) setRoomInfo(json.data); })
       .catch(() => {});
   }, [roomId]);
+
+  useEffect(() => {
+    fetchRoomInfo();
+  }, [fetchRoomInfo]);
+
+  // Re-fetch whenever this screen regains focus — picks up a chatroom name
+  // change made on the Edit Chatroom Name screen (no other way to get that
+  // update back across a navigation boundary) as well as any lazy expiry
+  // revert the server applied while we were away.
+  useFocusEffect(useCallback(() => { fetchRoomInfo(); }, [fetchRoomInfo]));
 
   // Fetch active reward visuals for this room's host
   useEffect(() => {
@@ -548,45 +693,45 @@ export function RoomDetailScreen({ roomId = '', onBack, openBattle }: RoomDetail
   const handleGiftPress = (gift: GiftItem) => {
     setPendingGift(gift);
     // Pre-select first available target (host if online, otherwise first on-stage user)
-    setSelectedTargetId(giftTargets[0]?.userId ?? null);
+    const firstTarget = giftTargets[0]?.userId;
+    setSelectedTargetIds(firstTarget ? [firstTarget] : []);
     setShowGiftPicker(true);
   };
 
-  const handleGiftSend = (qty: number = 1) => {
-    if (!pendingGift || !selectedTargetId) return;
-    const totalCost = pendingGift.coins * qty;
+  const handleToggleGiftTarget = (userId: string) => {
+    setSelectedTargetIds(prev =>
+      prev.includes(userId) ? prev.filter(id => id !== userId) : [...prev, userId]
+    );
+  };
 
-    // Check balance before doing anything — no animation if insufficient
+  const handleGiftSend = (qty: number = 1) => {
+    if (!pendingGift || selectedTargetIds.length === 0) return;
+    const totalCost = pendingGift.coins * qty * selectedTargetIds.length;
+
+    // Check balance against the FULL batch before sending anything — no
+    // partial sends, no animation if the combined cost is insufficient.
     if (coinBalanceRef.current < totalCost) {
       setShowGiftPicker(false);
       router.push('/wallet' as any);
       return;
     }
 
-    const target = giftTargets.find(t => t.userId === selectedTargetId);
-    const hostUserId = roomInfo?.host_user_id ?? selectedTargetId;
-    const giftTargetId = selectedTargetId ?? hostUserId;
-    // Encode all data the socket needs for wallet debit + gift event
-    // recipientid = host (for wallet/gems), giftfor = actual target (for stage display)
-    sendMessage(
-      `__gift__🎁__to__${target?.name ?? 'someone'}__img__${pendingGift.image_url ?? ''}__bg__${pendingGift.bg_color}` +
-      `__giftid__${pendingGift.id}__coins__${pendingGift.coins}__qty__${qty}` +
-      `__senderid__${currentUserId}__recipientid__${hostUserId}__giftfor__${giftTargetId}`
-    );
-    // Optimistically deduct from local balance
-    coinBalanceRef.current = Math.max(0, coinBalanceRef.current - totalCost);
+    const hostUserId = roomInfo?.host_user_id ?? selectedTargetIds[0];
 
-    const targetPos = slotPositions.current.get(giftTargetId) ?? undefined;
-    setFlyItems(prev => [
-      ...prev,
-      {
-        id: `${Date.now()}-${Math.random()}`,
-        gift: pendingGift,
-        qty,
-        targetUserId: hostUserId,
-        targetPos,
-      },
-    ]);
+    selectedTargetIds.forEach(targetId => {
+      const target = giftTargets.find(t => t.userId === targetId);
+      // Encode all data the socket needs for wallet debit + gift event
+      // recipientid = host (for wallet/gems), giftfor = actual target (for stage display)
+      sendMessage(
+        `__gift__🎁__to__${target?.name ?? 'someone'}__img__${pendingGift.image_url ?? ''}__bg__${pendingGift.bg_color}` +
+        `__giftid__${pendingGift.id}__coins__${pendingGift.coins}__qty__${qty}` +
+        `__senderid__${currentUserId}__recipientid__${hostUserId}__giftfor__${targetId}`
+      );
+      playMyGift(pendingGift, qty, targetId, target?.name ?? 'someone');
+    });
+
+    // Optimistically deduct the full batch cost from local balance
+    coinBalanceRef.current = Math.max(0, coinBalanceRef.current - totalCost);
   };
 
   const handleShare = () => {
@@ -596,6 +741,45 @@ export function RoomDetailScreen({ roomId = '', onBack, openBattle }: RoomDetail
     Share.share({
       message: `Join me in "${name}" on Rara Live!\n\nRoom Code: ${code}\n\nOpen Rara Live → Live tab → Join by Code → enter ${code}`,
     });
+  };
+
+  const handleAvatarPress = (
+    userId: string, userName: string, avatarUrl: string | null, isRoomHost: boolean, slotIndex?: number
+  ) => {
+    setProfileSheetTarget({ userId, userName, avatarUrl, isRoomHost, slotIndex });
+  };
+
+  const handleSendGiftFromProfile = (userId: string, userName: string) => {
+    setGiftShopTarget({ userId, userName });
+    setShowGiftShop(true);
+  };
+
+  const handleBlockUser = async (userId: string) => {
+    const token = authStore.getToken();
+    if (!token) return;
+    await fetch(`${BASE_URL}/rooms/${roomId}/block`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+      body: JSON.stringify({ userId }),
+    });
+  };
+
+  const handleAddToStageFromProfile = (userId: string) => {
+    const usedSlots = new Set(seats.filter(s => s.slotIndex !== 0).map(s => s.slotIndex));
+    const nextSlot = [1, 2, 3, 4, 5, 6, 7].find(i => !usedSlots.has(i)) ?? 1;
+    inviteToStage(userId, nextSlot);
+  };
+
+  const handleToggleTargetMuteFromProfile = (userId: string, mute: boolean) => {
+    socketStore.forceMuteUser(userId, mute);
+  };
+
+  const handleOpponentRoomPress = (opponentRoomId: string) => {
+    // Leaving this room's audio stage before navigating away — the user
+    // can't hold a seat in two rooms' stages at once.
+    const iAmOnStage = seats.some(s => s.userId === currentUserId && s.slotIndex !== 0);
+    if (iAmOnStage) leaveStage();
+    router.push(`/room/${opponentRoomId}` as any);
   };
 
   const handleMinimize = () => {
@@ -617,24 +801,19 @@ export function RoomDetailScreen({ roomId = '', onBack, openBattle }: RoomDetail
     onBack?.();
   };
 
-  const handleHostExit = () => {
-    setShowExitModal(false);
-    if (onlineCount > 1) {
-      setShowCoHostModal(true);
-    } else {
-      handleExit();
-    }
-  };
-
   const screenContent = (
     <>
       <RoomHeader
         name={roomInfo?.room_name ?? 'Loading...'}
         agencyName={roomInfo?.agency_name}
+        agencyId={roomInfo?.agency_id}
         memberCount={onlineCount}
         level={roomInfo?.current_level ?? 0}
         roomId={roomId}
+        roomCode={roomInfo?.room_code}
         totalCoins={roomInfo?.total_coins_received ?? 0}
+        hostName={roomInfo?.host_name || roomInfo?.host_username}
+        visibility={roomInfo?.visibility}
         hasRoomBg={!!rewardBgUrl}
         onBack={handleBackPress}
         onShare={handleShare}
@@ -642,6 +821,7 @@ export function RoomDetailScreen({ roomId = '', onBack, openBattle }: RoomDetail
         isHost={isHost}
         seats={seats}
         onInviteToStage={(userId, slotIndex) => inviteToStage(userId, slotIndex)}
+        onRefreshRoom={fetchRoomInfo}
       />
 
       <View style={styles.stageWrap}>
@@ -661,26 +841,53 @@ export function RoomDetailScreen({ roomId = '', onBack, openBattle }: RoomDetail
           coinsByUserId={coinsByUserId}
           hasRoomBg={!!rewardBgUrl}
           rewardFrameUrl={rewardFrameUrl}
+          onAvatarPress={handleAvatarPress}
         />
 
         {/* Battle banner overlays the bottom of the stage, on top of the seat grid.
             bottom is computed (not hardcoded) so the banner's internal bridge line
             lands flush on the stage's bottom edge across all screen widths. */}
         <View style={[styles.battleOverlay, { bottom: battleOverlayBottom }]} pointerEvents="box-none">
-          <BattleBanner roomId={roomId} coinsByUserId={coinsByUserId} giftersByUserId={giftersByUserId} />
+          <BattleBanner
+            roomId={roomId}
+            coinsByUserId={coinsByUserId}
+            giftersByUserId={giftersByUserId}
+            onOpponentRoomPress={handleOpponentRoomPress}
+          />
         </View>
       </View>
 
       {/* Chat area — scroll only, no floating icons here */}
-      <View style={[styles.chatArea, rewardBgUrl && { backgroundColor: 'transparent' }]}>
+      <View
+        ref={chatAreaRef}
+        onLayout={() => chatAreaRef.current?.measureInWindow((x, y) => { chatAreaPos.current = { x, y }; })}
+        style={[styles.chatArea, rewardBgUrl && { backgroundColor: 'transparent' }]}>
         <ScrollView
           ref={scrollRef}
           style={styles.flex}
           contentContainerStyle={styles.scrollContent}
           showsVerticalScrollIndicator={false}
           keyboardShouldPersistTaps="handled">
-          <ChatFeed messages={messages} hasRoomBg={!!rewardBgUrl} />
+          <ChatFeed
+            messages={messages}
+            hasRoomBg={!!rewardBgUrl}
+            // Same profile popup as tapping an avatar on the stage
+            onAvatarPress={(userId, user) => {
+              if (!userId) return;
+              const seat = seats.find(s => s.userId === userId);
+              handleAvatarPress(
+                userId,
+                user?.name ?? 'User',
+                user?.avatarUri || null,
+                userId === roomInfo?.host_user_id,
+                seat?.slotIndex,
+              );
+            }}
+          />
         </ScrollView>
+
+        {/* Live gift combo banners — float over the top of the chat, just under the stage */}
+        <GiftComboBanners ref={giftBannersRef} myUserId={currentUserId} onSlotFree={handleGiftSlotFree} />
 
         {/* Toast inside chat area */}
         {seatToast && (
@@ -690,7 +897,13 @@ export function RoomDetailScreen({ roomId = '', onBack, openBattle }: RoomDetail
         )}
       </View>
 
-      <View style={{ marginBottom: keyboardHeight }}>
+      {/* On Android, windowSoftInputMode adjustResize already shrinks the
+          screen by the keyboard's height, so the input bar naturally lands
+          just above it — adding marginBottom: keyboardHeight on top of that
+          double-compensates and leaves a keyboard-height gap. iOS doesn't
+          resize the root view for the keyboard (no KeyboardAvoidingView on
+          this screen), so it still needs the manual push there. */}
+      <View style={{ marginBottom: Platform.OS === 'ios' ? keyboardHeight : 0 }}>
         {!keyboardVisible && (
           <GiftBar onGiftPress={handleGiftPress} hasRoomBg={!!rewardBgUrl} />
         )}
@@ -725,27 +938,35 @@ export function RoomDetailScreen({ roomId = '', onBack, openBattle }: RoomDetail
         </View>
       )}
 
-      {/* Floating action icons — anchored to root, never affected by keyboard */}
-      <View style={styles.floatingBar} pointerEvents="box-none">
-        {FLOATING_ACTIONS.map((item, index) => (
-          <View key={item.key} style={styles.floatingItem}>
-            <TouchableOpacity
-              activeOpacity={0.8}
-              style={styles.floatingBtn}
-              onPress={
-                item.key === 'dailytask' ? () => setShowDailyTask(true) :
-                item.key === 'coinbox'   ? () => setShowCoinBox(true)   : undefined
-              }>
-              <Image source={item.src} style={styles.floatingImg} resizeMode="contain" />
-            </TouchableOpacity>
-            {index === FLOATING_ACTIONS.length - 1 && (
-              <View style={styles.rankTrack}>
-                <View style={styles.rankFill} />
-              </View>
-            )}
-          </View>
-        ))}
-      </View>
+      {/* Floating action icons — anchored to root, hidden while the keyboard is
+          up. floatingBar's `bottom` is measured against this View's positioned
+          ancestor, whose height Android shrinks under the keyboard
+          (windowSoftInputMode adjustResize) — a fixed `bottom` would then sit
+          at the wrong spot (and once the keyboard is taller than that offset,
+          overlap the input bar). Simplest correct fix: don't render the
+          shortcuts while typing, same as GiftBar already does. */}
+      {!keyboardVisible && (
+        <View style={styles.floatingBar} pointerEvents="box-none">
+          {FLOATING_ACTIONS.map((item) => (
+            <View key={item.key} style={styles.floatingItem}>
+              <TouchableOpacity
+                activeOpacity={0.8}
+                style={styles.floatingBtn}
+                onPress={
+                  item.key === 'dailytask' ? () => setShowDailyTask(true) :
+                  item.key === 'coinbox'   ? () => setShowCoinBox(true)   : undefined
+                }>
+                <ExpoImage source={item.src} style={styles.floatingImg} contentFit="contain" />
+              </TouchableOpacity>
+              {item.key === 'coinbox' && (
+                <View style={styles.rankTrack}>
+                  <View style={styles.rankFill} />
+                </View>
+              )}
+            </View>
+          ))}
+        </View>
+      )}
 
       <DailyTaskModal visible={showDailyTask} onClose={() => setShowDailyTask(false)} roomId={roomId} refreshKey={taskRefreshKey} />
       <CoinBoxModal visible={showCoinBox} onClose={() => setShowCoinBox(false)} />
@@ -771,7 +992,7 @@ export function RoomDetailScreen({ roomId = '', onBack, openBattle }: RoomDetail
       />
       <GiftShopModal
         visible={showGiftShop}
-        onClose={() => setShowGiftShop(false)}
+        onClose={() => { setShowGiftShop(false); setGiftShopTarget(null); }}
         seats={seats}
         hostInfo={{
           userId: roomInfo?.host_user_id ?? '',
@@ -779,15 +1000,34 @@ export function RoomDetailScreen({ roomId = '', onBack, openBattle }: RoomDetail
           avatarUrl: roomInfo?.host_avatar_url ?? null,
         }}
         isHostOnline={hostInfo.isOnline}
-        onSendGift={(gift, targetName, qty, targetUserId) => {
+        initialTargetUserId={giftShopTarget?.userId}
+        initialTargetName={giftShopTarget?.userName}
+        onSendGift={(gift, qty, targets) => {
+          if (targets.length === 0) return;
+          const totalCost = gift.coins * qty * targets.length;
+
+          // Check balance against the FULL batch before sending anything —
+          // no partial sends, navigate to wallet if the combined cost is
+          // insufficient (same rule as the gift bar's multi-select send).
+          if (coinBalanceRef.current < totalCost) {
+            router.push('/wallet' as any);
+            return;
+          }
+
           setFullscreenGift({ imageUrl: gift.image_url, bgColor: gift.bg_color });
           const hostUserId = roomInfo?.host_user_id ?? '';
-          const giftTargetId = targetUserId || hostUserId;
-          sendMessage(
-            `__gift__🎁__to__${targetName}__img__${gift.image_url ?? ''}__bg__${gift.bg_color}` +
-            `__giftid__${gift.id}__coins__${gift.coins}__qty__${qty}` +
-            `__senderid__${currentUserId}__recipientid__${hostUserId}__giftfor__${giftTargetId}`
-          );
+
+          targets.forEach(({ userId: targetUserId, name: targetName }) => {
+            const giftTargetId = targetUserId || hostUserId;
+            sendMessage(
+              `__gift__🎁__to__${targetName}__img__${gift.image_url ?? ''}__bg__${gift.bg_color}` +
+              `__giftid__${gift.id}__coins__${gift.coins}__qty__${qty}` +
+              `__senderid__${currentUserId}__recipientid__${hostUserId}__giftfor__${giftTargetId}`
+            );
+            playMyGift(gift, qty, giftTargetId, targetName);
+          });
+
+          coinBalanceRef.current = Math.max(0, coinBalanceRef.current - totalCost);
         }}
       />
 
@@ -796,6 +1036,20 @@ export function RoomDetailScreen({ roomId = '', onBack, openBattle }: RoomDetail
         imageUrl={fullscreenGift?.imageUrl ?? null}
         bgColor={fullscreenGift?.bgColor}
         onDone={() => setFullscreenGift(null)}
+      />
+
+      <UserProfileSheet
+        visible={!!profileSheetTarget}
+        onClose={() => setProfileSheetTarget(null)}
+        roomId={roomId}
+        target={profileSheetTarget}
+        canManage={isHost || seats.some(s => s.userId === currentUserId && s.slotIndex !== 0)}
+        targetIsMuted={profileSheetTarget ? seats.find(s => s.userId === profileSheetTarget.userId)?.isMuted : undefined}
+        onSendGift={handleSendGiftFromProfile}
+        onBlock={handleBlockUser}
+        onRemoveFromStage={removeFromStage}
+        onAddToStage={handleAddToStageFromProfile}
+        onToggleTargetMute={handleToggleTargetMuteFromProfile}
       />
 
       <RoomLevelUp
@@ -811,17 +1065,14 @@ export function RoomDetailScreen({ roomId = '', onBack, openBattle }: RoomDetail
         gift={pendingGift}
         gifts={allGifts}
         targets={giftTargets}
-        selectedTargetId={selectedTargetId}
-        onSelectTarget={setSelectedTargetId}
+        selectedTargetIds={selectedTargetIds}
+        onToggleTarget={handleToggleGiftTarget}
         onGiftChange={setPendingGift}
         onSend={handleGiftSend}
         onClose={() => setShowGiftPicker(false)}
       />
 
-      <GiftFlyAnimation
-        items={flyItems}
-        onItemDone={id => setFlyItems(prev => prev.filter(i => i.id !== id))}
-      />
+      <GiftFlyAnimation ref={giftFlyRef} />
 
       {/* Daily task congrats overlay — shown to all users for 10s */}
       {taskCongrats && (
@@ -940,57 +1191,30 @@ export function RoomDetailScreen({ roomId = '', onBack, openBattle }: RoomDetail
       {/* Exit / Minimize modal */}
       <Modal visible={showExitModal} transparent animationType="fade" onRequestClose={() => setShowExitModal(false)}>
         <TouchableOpacity style={modal.overlay} activeOpacity={1} onPress={() => setShowExitModal(false)} />
-        <View style={modal.sheet}>
-          <View style={modal.handle} />
-          <Text style={modal.title}>Leave Room?</Text>
-          <Text style={modal.subtitle}>You can minimize and come back, or exit the room.</Text>
-
-          <TouchableOpacity onPress={handleMinimize} activeOpacity={0.9} style={modal.minimizeBtn}>
-            <LinearGradient colors={['#7A0EED', '#B50357']} start={{ x: 0, y: 0 }} end={{ x: 1, y: 0 }} style={modal.btnGradient}>
-              <Ionicons name="remove-circle-outline" size={20} color="#FFFFFF" />
-              <Text style={modal.btnLabel}>Minimize</Text>
-            </LinearGradient>
-          </TouchableOpacity>
-
-          <TouchableOpacity
-            onPress={isHost ? handleHostExit : handleExit}
-            activeOpacity={0.9}
-            style={modal.exitBtn}>
-            <Ionicons name="exit-outline" size={20} color="#E14C57" />
-            <Text style={modal.exitLabel}>Exit Room</Text>
-          </TouchableOpacity>
-
-          <TouchableOpacity onPress={() => setShowExitModal(false)} style={modal.cancelBtn}>
-            <Text style={modal.cancelLabel}>Stay</Text>
-          </TouchableOpacity>
-        </View>
-      </Modal>
-
-      {/* Co-host modal (host only) */}
-      <Modal visible={showCoHostModal} transparent animationType="fade" onRequestClose={() => setShowCoHostModal(false)}>
-        <TouchableOpacity style={modal.overlay} activeOpacity={1} onPress={() => setShowCoHostModal(false)} />
-        <View style={modal.sheet}>
-          <View style={modal.handle} />
-          <View style={modal.coHostIconWrap}>
-            <Ionicons name="people" size={32} color="#7A0EED" />
-          </View>
-          <Text style={modal.title}>Assign a Co-host</Text>
-          <Text style={modal.subtitle}>
-            Please assign a co-host before leaving so the room can continue.
+        <View style={[modal.exitSheet, { paddingBottom: Math.max(insets.bottom, 8) }]}>
+          <View style={modal.exitHandle} />
+          <Text style={modal.exitTitle}>Exit Chat?</Text>
+          <Text style={modal.exitSubtitle}>
+            Users can enter chatroom and interact with others in your absence
           </Text>
-          <View style={modal.coHostNote}>
-            <Ionicons name="information-circle-outline" size={16} color="#7A0EED" />
-            <Text style={modal.coHostNoteText}>Co-host assignment will be available once seat management is fully implemented.</Text>
+
+          <View style={modal.exitActionRow}>
+            <TouchableOpacity onPress={handleMinimize} activeOpacity={0.7} style={modal.exitActionBtn}>
+              <Text style={modal.minimiseLabel}>Minimise</Text>
+            </TouchableOpacity>
+
+            <View style={modal.exitActionDivider} />
+
+            <TouchableOpacity
+              onPress={handleExit}
+              activeOpacity={0.7}
+              style={modal.exitActionBtn}>
+              <Text style={modal.exitActionLabel}>Exit</Text>
+            </TouchableOpacity>
           </View>
-          <TouchableOpacity onPress={() => { setShowCoHostModal(false); handleExit(); }} activeOpacity={0.9} style={modal.exitBtn}>
-            <Ionicons name="exit-outline" size={20} color="#E14C57" />
-            <Text style={modal.exitLabel}>Exit Without Co-host</Text>
-          </TouchableOpacity>
-          <TouchableOpacity onPress={() => setShowCoHostModal(false)} style={modal.cancelBtn}>
-            <Text style={modal.cancelLabel}>Stay & Assign</Text>
-          </TouchableOpacity>
         </View>
       </Modal>
+
     </>
   );
 
@@ -1222,7 +1446,7 @@ const styles = StyleSheet.create({
   floatingBar: {
     position: 'absolute',
     right: 10,
-    bottom: 180,   // fixed above input bar height — never moves with keyboard
+    bottom: 150,   // default/fallback — actual bottom is set inline to counter keyboard resize, see usage
     zIndex: 4,
     flexDirection: 'column',
     alignItems: 'center',
@@ -1230,10 +1454,10 @@ const styles = StyleSheet.create({
     // picker bar zIndex: 30 sits above this when open
   },
   floatingItem: { alignItems: 'center', gap: 4 },
-  floatingBtn: { width: 42, height: 42 },
-  floatingImg: { width: 42, height: 42 },
+  floatingBtn: { width: 48, height: 48, alignItems: 'center', justifyContent: 'center' },
+  floatingImg: { width: 48, height: 48 },
   rankTrack: {
-    width: 42, height: 5, borderRadius: 3,
+    width: 46, height: 5, borderRadius: 3,
     backgroundColor: '#E8E0FA', overflow: 'hidden',
   },
   rankFill: {
@@ -1294,18 +1518,8 @@ const modal = StyleSheet.create({
     gap: 12, alignItems: 'center',
   },
   handle: { width: 40, height: 4, borderRadius: 2, backgroundColor: '#E0DDED', marginBottom: 8 },
-  coHostIconWrap: {
-    width: 64, height: 64, borderRadius: 32,
-    backgroundColor: '#F4EEFF', alignItems: 'center', justifyContent: 'center', marginBottom: 4,
-  },
   title: { fontSize: 20, fontWeight: '800', color: '#1C1E22', letterSpacing: -0.3 },
   subtitle: { fontSize: 14, color: '#60626A', textAlign: 'center', lineHeight: 20 },
-  minimizeBtn: { width: '100%', borderRadius: 48, overflow: 'hidden', marginTop: 4 },
-  btnGradient: {
-    flexDirection: 'row', alignItems: 'center', justifyContent: 'center',
-    gap: 8, paddingVertical: 14,
-  },
-  btnLabel: { fontSize: 16, fontWeight: '700', color: '#FFFFFF' },
   exitBtn: {
     width: '100%', flexDirection: 'row', alignItems: 'center',
     justifyContent: 'center', gap: 8, paddingVertical: 14,
@@ -1315,9 +1529,27 @@ const modal = StyleSheet.create({
   exitLabel: { fontSize: 16, fontWeight: '700', color: '#E14C57' },
   cancelBtn: { paddingVertical: 10 },
   cancelLabel: { fontSize: 15, color: '#ABADB2', fontWeight: '600' },
-  coHostNote: {
-    flexDirection: 'row', alignItems: 'flex-start', gap: 8,
-    backgroundColor: '#F4EEFF', borderRadius: 12, padding: 12, width: '100%',
+  exitSheet: {
+    position: 'absolute',
+    bottom: 0, left: 0, right: 0,
+    backgroundColor: '#FFFFFF',
+    borderTopLeftRadius: 28, borderTopRightRadius: 28,
+    paddingTop: 12, paddingBottom: 4,
+    alignItems: 'center',
   },
-  coHostNoteText: { flex: 1, fontSize: 13, color: '#7A0EED', lineHeight: 18 },
+  exitHandle: { width: 40, height: 4, borderRadius: 2, backgroundColor: '#E0DDED', marginBottom: 16 },
+  exitTitle: { fontSize: 18, fontWeight: '700', color: '#1C1E22' },
+  exitSubtitle: {
+    fontSize: 13, color: '#8A8C94', textAlign: 'center', lineHeight: 19,
+    paddingHorizontal: 32, marginTop: 8,
+  },
+  exitActionRow: {
+    flexDirection: 'row', alignItems: 'stretch',
+    width: '100%', marginTop: 20,
+    borderTopWidth: StyleSheet.hairlineWidth, borderTopColor: '#EDEDF0',
+  },
+  exitActionBtn: { flex: 1, alignItems: 'center', paddingVertical: 16 },
+  exitActionDivider: { width: StyleSheet.hairlineWidth, backgroundColor: '#EDEDF0' },
+  minimiseLabel: { fontSize: 16, fontWeight: '700', color: '#1C1E22' },
+  exitActionLabel: { fontSize: 16, fontWeight: '700', color: '#E14C57' },
 });

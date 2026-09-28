@@ -12,6 +12,8 @@ import {
   View,
 } from 'react-native';
 
+import { BannerCarousel, type Banner } from './banner-carousel';
+
 const { width: SCREEN_W } = Dimensions.get('window');
 const CARD_GAP = 10;
 const CARD_PADDING = 16;
@@ -32,9 +34,11 @@ export type LiveBroadcaster = {
   statusLine?: string;
 };
 
-export type LiveFilter = 'popular' | 'nearby' | 'new' | 'following';
+export type LiveFilter = 'popular' | 'new' | 'following';
 
 type LiveScreenProps = {
+  /** Admin-uploaded promo banners, shown as a carousel above the Go Live header — same source as the Home tab. */
+  banners?: Banner[];
   broadcasters: LiveBroadcaster[];
   onGoLive: () => void;
   onBroadcasterPress: (b: LiveBroadcaster) => void;
@@ -49,7 +53,6 @@ type LiveScreenProps = {
 
 const FILTERS: { key: LiveFilter; label: string }[] = [
   { key: 'popular', label: 'Popular' },
-  { key: 'nearby', label: 'Nearby' },
   { key: 'new', label: 'New' },
   { key: 'following', label: 'Following' },
 ];
@@ -152,12 +155,15 @@ function BroadcasterCard({ item, onPress }: {
 // ── Main Screen ───────────────────────────────────────────────────────────────
 
 export function LiveScreen({
-  broadcasters, onGoLive, onBroadcasterPress, onRefresh, refreshing = false, myLiveBroadcast, onResumeMyLive,
+  banners = [], broadcasters, onGoLive, onBroadcasterPress, onRefresh, refreshing = false, myLiveBroadcast, onResumeMyLive,
 }: LiveScreenProps) {
   const [activeFilter, setActiveFilter] = useState<LiveFilter>('popular');
 
   return (
     <View style={s.container}>
+      {/* Banner carousel — above the Go Live header, same admin-uploaded banners as Home */}
+      <BannerCarousel banners={banners} />
+
       {/* Header row */}
       <View style={s.headerRow}>
         <View>
@@ -165,11 +171,6 @@ export function LiveScreen({
           <Text style={s.subtitle}>Broadcasters</Text>
         </View>
         <View style={s.headerActions}>
-          {onRefresh && (
-            <TouchableOpacity onPress={onRefresh} activeOpacity={0.85} style={s.refreshBtn} disabled={refreshing}>
-              <Ionicons name="refresh" size={16} color="#7A0EED" />
-            </TouchableOpacity>
-          )}
           <TouchableOpacity onPress={onGoLive} activeOpacity={0.88} style={s.goLiveBtn}>
             <LinearGradient
               colors={['#7A0EED', '#B50357']}
@@ -278,14 +279,6 @@ const s = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     gap: 8,
-  },
-  refreshBtn: {
-    width: 32,
-    height: 32,
-    borderRadius: 16,
-    backgroundColor: '#F0EAFF',
-    alignItems: 'center',
-    justifyContent: 'center',
   },
   myLiveBanner: {
     marginHorizontal: CARD_PADDING,
