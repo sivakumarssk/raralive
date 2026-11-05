@@ -1,6 +1,6 @@
 import { io, type Socket } from 'socket.io-client';
 
-import { MEDIA_BASE, type DirectMessage } from '@/services/api';
+import { MEDIA_BASE, triggerSessionRevoked, type DirectMessage } from '@/services/api';
 import { authStore } from '@/store/auth-store';
 
 // Persistent, app-wide socket for 1:1 direct-message chat — independent of
@@ -16,8 +16,11 @@ export type ChatSocketEvent =
   | { type: 'request_rejected'; conversationId: string }
   | { type: 'error'; conversationId: string; message: string }
   | { type: 'online_status'; userId: string; isOnline: boolean; lastSeenAt: string | null }
+  | { type: 'block_status'; conversationId: string; blocked: boolean }
   | { type: 'live_broadcast_started'; broadcastId: string; roomId: string; hostUserId: string }
-  | { type: 'live_broadcast_ended'; broadcastId: string; roomId: string; hostUserId: string };
+  | { type: 'live_broadcast_ended'; broadcastId: string; roomId: string; hostUserId: string }
+  | { type: 'agency_wallet_balance'; agencyId: string; balance: number }
+  | { type: 'moderation_warning'; id: string; message: string; createdAt: string };
 
 const state = {
   socket: null as Socket | null,
@@ -59,8 +62,16 @@ export const chatSocketStore = {
     });
     state.socket = socket;
 
-    socket.on('connect', () => { state.connected = true; notify(); });
+    socket.on('connect', () => {
+      state.connected = true;
+      notify();
+      // Warnings issued while we were offline come back on this request
+      socket.emit('moderation_sync');
+    });
     socket.on('disconnect', () => { state.connected = false; notify(); });
+    // "Log out of all devices" from another device: told live, or refused on reconnect.
+    socket.on('session_revoked', () => triggerSessionRevoked());
+    socket.on('connect_error', (err) => { if (err.message === 'Session revoked') triggerSessionRevoked(); });
 
     socket.on('chat_message', (data: { conversationId: string; message: DirectMessage }) => {
       notifyEvent({ type: 'message', ...data });
@@ -79,6 +90,11 @@ export const chatSocketStore = {
     });
     socket.on('chat_error', (data: { conversationId: string; message: string }) => {
       notifyEvent({ type: 'error', ...data });
+    });
+    // The other person blocked / unblocked me — the conversation screen swaps
+    // its input for a "You can't send messages" bar (or back).
+    socket.on('chat_block_status', (data: { conversationId: string; blocked: boolean }) => {
+      notifyEvent({ type: 'block_status', ...data });
     });
 
     // Online status — reuses the same app-wide presence system as Friend Zone
@@ -99,6 +115,14 @@ export const chatSocketStore = {
     });
     socket.on('live_broadcast_ended', (data: { broadcastId: string; roomId: string; hostUserId: string }) => {
       notifyEvent({ type: 'live_broadcast_ended', ...data });
+    });
+    // 5 different people reported this user — a warning from the server
+    socket.on('moderation_warning', (data: { id: string; message: string; createdAt: string }) => {
+      notifyEvent({ type: 'moderation_warning', id: data.id, message: data.message, createdAt: data.createdAt });
+    });
+    // Agency account: its agency's coin balance changed (credited or spent)
+    socket.on('agency_wallet_balance', (data: { agencyId: string; balance: number }) => {
+      notifyEvent({ type: 'agency_wallet_balance', agencyId: data.agencyId, balance: Number(data.balance) || 0 });
     });
   },
 

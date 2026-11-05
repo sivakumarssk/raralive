@@ -88,10 +88,11 @@ async function listRequests(userId) {
   return r.rows;
 }
 
-// Messages = accepted conversations, OR pending conversations this user
-// themself started (so their sent request shows in their own Messages tab
-// while it waits on the other side). Conversations this user has hidden
-// (deleted-for-me) are excluded; pinned ones sort first.
+// The single chat list — accepted conversations and pending requests in both
+// directions (the app marks incoming requests; the recipient accepts, removes
+// or blocks from inside the conversation). Conversations this user has hidden
+// (deleted-for-me) or whose peer they've blocked are excluded; pinned ones
+// sort first.
 async function listConversations(userId) {
   const r = await db.query(
     `SELECT c.*,
@@ -103,12 +104,51 @@ async function listConversations(userId) {
      JOIN users peer ON peer.id = (CASE WHEN c.user_a_id = $1 THEN c.user_b_id ELSE c.user_a_id END)
      LEFT JOIN user_conversation_state s ON s.conversation_id = c.id AND s.user_id = $1
      WHERE (c.user_a_id = $1 OR c.user_b_id = $1)
-       AND (c.status = 'accepted' OR c.initiated_by = $1)
        AND COALESCE(s.hidden, FALSE) = FALSE
+       AND NOT EXISTS (SELECT 1 FROM user_blocks ub WHERE ub.blocker_id = $1 AND ub.blocked_id = peer.id)
      ORDER BY COALESCE(s.pinned, FALSE) DESC, COALESCE(c.last_message_at, c.created_at) DESC`,
     [userId]
   );
   return r.rows;
+}
+
+async function blockUser(blockerId, blockedId) {
+  await db.query(
+    `INSERT INTO user_blocks (blocker_id, blocked_id) VALUES ($1, $2)
+     ON CONFLICT (blocker_id, blocked_id) DO NOTHING`,
+    [blockerId, blockedId]
+  );
+}
+
+async function unblockUser(blockerId, blockedId) {
+  await db.query(`DELETE FROM user_blocks WHERE blocker_id = $1 AND blocked_id = $2`, [blockerId, blockedId]);
+}
+
+/** Users this user has blocked, newest first, with their DM conversation (if any). */
+async function listBlockedUsers(userId) {
+  const r = await db.query(
+    `SELECT u.id, u.full_name, u.username, u.avatar_url, ub.created_at AS blocked_at,
+            c.id AS conversation_id
+     FROM user_blocks ub
+     JOIN users u ON u.id = ub.blocked_id
+     LEFT JOIN conversations c
+       ON (c.user_a_id = LEAST(ub.blocker_id, ub.blocked_id) AND c.user_b_id = GREATEST(ub.blocker_id, ub.blocked_id))
+     WHERE ub.blocker_id = $1
+     ORDER BY ub.created_at DESC`,
+    [userId]
+  );
+  return r.rows;
+}
+
+// True if either user has blocked the other — DMs between them are refused.
+async function isBlockedBetween(userId1, userId2) {
+  const r = await db.query(
+    `SELECT 1 FROM user_blocks
+     WHERE (blocker_id = $1 AND blocked_id = $2) OR (blocker_id = $2 AND blocked_id = $1)
+     LIMIT 1`,
+    [userId1, userId2]
+  );
+  return r.rows.length > 0;
 }
 
 async function setPinned(conversationId, userId, pinned) {
@@ -162,7 +202,9 @@ async function markUnread(conversationId, userId) {
 async function getConversationWithPeer(conversationId, userId) {
   const r = await db.query(
     `SELECT c.*,
-            peer.id AS peer_id, peer.full_name AS peer_name, peer.username AS peer_username, peer.avatar_url AS peer_avatar_url
+            peer.id AS peer_id, peer.full_name AS peer_name, peer.username AS peer_username, peer.avatar_url AS peer_avatar_url,
+            EXISTS (SELECT 1 FROM user_blocks ub WHERE ub.blocker_id = $2 AND ub.blocked_id = peer.id) AS blocked_by_me,
+            EXISTS (SELECT 1 FROM user_blocks ub WHERE ub.blocker_id = peer.id AND ub.blocked_id = $2) AS blocked_by_peer
      FROM conversations c
      JOIN users peer ON peer.id = (CASE WHEN c.user_a_id = $2 THEN c.user_b_id ELSE c.user_a_id END)
      WHERE c.id = $1 AND (c.user_a_id = $2 OR c.user_b_id = $2)`,
@@ -223,9 +265,9 @@ async function totalUnreadCount(userId) {
      FROM direct_messages dm
      JOIN conversations c ON c.id = dm.conversation_id
      WHERE (c.user_a_id = $1 OR c.user_b_id = $1)
-       AND c.status = 'accepted'
        AND dm.sender_id != $1
-       AND dm.read_at IS NULL`,
+       AND dm.read_at IS NULL
+       AND NOT EXISTS (SELECT 1 FROM user_blocks ub WHERE ub.blocker_id = $1 AND ub.blocked_id = dm.sender_id)`,
     [userId]
   );
   return r.rows[0]?.count ?? 0;
@@ -237,4 +279,5 @@ module.exports = {
   listRequests, listConversations, isParticipant, getPeerId,
   listMessages, createMessage, markRead, totalUnreadCount,
   setPinned, hideConversation, unhideForNewMessage, markUnread,
+  blockUser, unblockUser, isBlockedBetween, listBlockedUsers,
 };

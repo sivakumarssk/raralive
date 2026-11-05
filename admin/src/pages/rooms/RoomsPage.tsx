@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { api } from '../../api/client';
 import { DropdownMenu } from '../../components/ui/DropdownMenu';
@@ -6,16 +6,6 @@ import { DropdownMenu } from '../../components/ui/DropdownMenu';
 const API_BASE = import.meta.env.VITE_API_URL ?? 'http://192.168.0.6:5000';
 
 // ── Types ──────────────────────────────────────────────────────────────────────
-
-type Agency = { id: string; agency_name: string; agent_code: string };
-
-type UserResult = {
-  id: string;
-  full_name: string | null;
-  username: string | null;
-  phone: string;
-  avatar_url: string | null;
-};
 
 type Room = {
   id: string;
@@ -62,185 +52,6 @@ function Avatar({ name, phone, avatarUrl, size = 8 }: { name?: string | null; ph
   );
 }
 
-// ── Create Drawer ──────────────────────────────────────────────────────────────
-
-function CreateDrawer({ open, onClose, onCreated }: { open: boolean; onClose: () => void; onCreated: (room: Room) => void }) {
-  const [agencies, setAgencies] = useState<Agency[]>([]);
-  const [agencyId, setAgencyId] = useState('');
-  const [roomName, setRoomName] = useState('');
-  const [description, setDescription] = useState('');
-
-  const [userQuery, setUserQuery] = useState('');
-  const [userResults, setUserResults] = useState<UserResult[]>([]);
-  const [selectedUser, setSelectedUser] = useState<UserResult | null>(null);
-  const [searching, setSearching] = useState(false);
-  const searchRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-
-  const [saving, setSaving] = useState(false);
-  const [error, setError] = useState('');
-
-  useEffect(() => {
-    if (!open) return;
-    api.get<Agency[]>('/admin/rooms/agencies').then(r => { if (r.ok) setAgencies(r.data); });
-  }, [open]);
-
-  useEffect(() => {
-    if (!open) {
-      setAgencyId(''); setRoomName(''); setDescription('');
-      setUserQuery(''); setUserResults([]); setSelectedUser(null);
-      setError('');
-    }
-  }, [open]);
-
-  const handleUserSearch = (q: string) => {
-    setUserQuery(q);
-    setSelectedUser(null);
-    if (searchRef.current) clearTimeout(searchRef.current);
-    if (!q.trim()) { setUserResults([]); return; }
-    searchRef.current = setTimeout(async () => {
-      setSearching(true);
-      const r = await api.get<UserResult[]>(`/admin/rooms/users/search?q=${encodeURIComponent(q)}`);
-      setSearching(false);
-      if (r.ok) setUserResults(r.data);
-    }, 300);
-  };
-
-  const handleSubmit = async () => {
-    if (!roomName.trim()) { setError('Room name is required.'); return; }
-    if (!agencyId) { setError('Select an agency.'); return; }
-    if (!selectedUser) { setError('Select a host user.'); return; }
-    setSaving(true);
-    setError('');
-    const result = await api.post<Room>('/admin/rooms', {
-      room_name: roomName.trim(),
-      description: description.trim() || null,
-      agency_id: agencyId,
-      host_user_id: selectedUser.id,
-    });
-    setSaving(false);
-    if (!result.ok) { setError(result.message); return; }
-    onCreated(result.data);
-    onClose();
-  };
-
-  if (!open) return null;
-
-  return (
-    <div className="fixed inset-0 z-40 flex">
-      <div className="flex-1 bg-black/30" onClick={onClose} />
-      <div className="w-[440px] bg-white h-full shadow-2xl flex flex-col overflow-y-auto">
-        <div className="px-6 py-5 border-b border-gray-100 flex items-center justify-between shrink-0">
-          <div>
-            <h2 className="text-base font-black text-gray-900">Create Room</h2>
-            <p className="text-xs text-gray-400 mt-0.5">New chat room under an agency</p>
-          </div>
-          <button onClick={onClose} className="p-2 rounded-lg hover:bg-gray-100 text-gray-400 transition-colors">
-            <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" /></svg>
-          </button>
-        </div>
-
-        <div className="flex-1 px-6 py-5 space-y-5">
-          {/* Room name */}
-          <div>
-            <label className="block text-xs font-bold text-gray-600 mb-1.5 uppercase tracking-wide">Room Name *</label>
-            <input
-              value={roomName}
-              onChange={e => setRoomName(e.target.value)}
-              placeholder="e.g. Morning Show Live"
-              className="w-full px-3 py-2.5 text-sm border border-gray-200 rounded-xl outline-none focus:border-purple-400 transition-colors"
-            />
-          </div>
-
-          {/* Agency */}
-          <div>
-            <label className="block text-xs font-bold text-gray-600 mb-1.5 uppercase tracking-wide">Agency *</label>
-            <select
-              value={agencyId}
-              onChange={e => setAgencyId(e.target.value)}
-              className="w-full px-3 py-2.5 text-sm border border-gray-200 rounded-xl outline-none focus:border-purple-400 transition-colors bg-white"
-            >
-              <option value="">Select agency…</option>
-              {agencies.map(a => (
-                <option key={a.id} value={a.id}>{a.agency_name} ({a.agent_code})</option>
-              ))}
-            </select>
-          </div>
-
-          {/* Host user search */}
-          <div>
-            <label className="block text-xs font-bold text-gray-600 mb-1.5 uppercase tracking-wide">Host User *</label>
-            {selectedUser ? (
-              <div className="flex items-center gap-3 px-3 py-2.5 border border-purple-300 bg-purple-50 rounded-xl">
-                <Avatar name={selectedUser.full_name} phone={selectedUser.phone} avatarUrl={selectedUser.avatar_url} size={8} />
-                <div className="flex-1 min-w-0">
-                  <p className="text-sm font-semibold text-gray-800 truncate">{selectedUser.full_name || selectedUser.phone}</p>
-                  {selectedUser.username && <p className="text-xs text-gray-400">@{selectedUser.username}</p>}
-                </div>
-                <button onClick={() => { setSelectedUser(null); setUserQuery(''); setUserResults([]); }} className="text-gray-400 hover:text-gray-600 text-xs font-semibold">Change</button>
-              </div>
-            ) : (
-              <div className="relative">
-                <input
-                  value={userQuery}
-                  onChange={e => handleUserSearch(e.target.value)}
-                  placeholder="Search by name, phone, or username…"
-                  className="w-full px-3 py-2.5 text-sm border border-gray-200 rounded-xl outline-none focus:border-purple-400 transition-colors"
-                />
-                {(userResults.length > 0 || searching) && (
-                  <div className="absolute top-full mt-1 left-0 right-0 bg-white border border-gray-100 rounded-xl shadow-lg z-10 overflow-hidden max-h-52 overflow-y-auto">
-                    {searching ? (
-                      <div className="px-4 py-3 text-xs text-gray-400">Searching…</div>
-                    ) : userResults.map(u => (
-                      <button
-                        key={u.id}
-                        onClick={() => { setSelectedUser(u); setUserResults([]); setUserQuery(''); }}
-                        className="w-full flex items-center gap-3 px-4 py-2.5 hover:bg-purple-50 transition-colors text-left"
-                      >
-                        <Avatar name={u.full_name} phone={u.phone} avatarUrl={u.avatar_url} size={8} />
-                        <div className="flex-1 min-w-0">
-                          <p className="text-sm font-semibold text-gray-800 truncate">{u.full_name || <span className="text-gray-400 italic">No name</span>}</p>
-                          <p className="text-xs text-gray-400">{u.phone}{u.username ? ` · @${u.username}` : ''}</p>
-                        </div>
-                      </button>
-                    ))}
-                  </div>
-                )}
-              </div>
-            )}
-            {selectedUser && (
-              <p className="text-xs text-gray-400 mt-1.5">Room profile image will use this user's avatar.</p>
-            )}
-          </div>
-
-          {/* Description */}
-          <div>
-            <label className="block text-xs font-bold text-gray-600 mb-1.5 uppercase tracking-wide">Description</label>
-            <textarea
-              value={description}
-              onChange={e => setDescription(e.target.value)}
-              rows={3}
-              placeholder="Optional description…"
-              className="w-full px-3 py-2.5 text-sm border border-gray-200 rounded-xl outline-none focus:border-purple-400 transition-colors resize-none"
-            />
-          </div>
-
-          {error && <p className="text-sm text-red-500 font-medium">{error}</p>}
-        </div>
-
-        <div className="px-6 py-4 border-t border-gray-100 shrink-0">
-          <button
-            onClick={handleSubmit}
-            disabled={saving}
-            className="w-full py-2.5 rounded-xl bg-gradient-to-r from-purple-600 to-violet-600 text-white text-sm font-bold hover:from-purple-700 hover:to-violet-700 disabled:opacity-60 transition-all"
-          >
-            {saving ? 'Creating…' : 'Create Room'}
-          </button>
-        </div>
-      </div>
-    </div>
-  );
-}
-
 // ── Status Badge ───────────────────────────────────────────────────────────────
 
 function StatusBadge({ status }: { status: Room['status'] }) {
@@ -279,7 +90,6 @@ export function RoomsPage() {
   const [search, setSearch] = useState('');
   const [loading, setLoading] = useState(true);
   const [page, setPage] = useState(1);
-  const [drawerOpen, setDrawerOpen] = useState(false);
   const [agencyRoomCounts, setAgencyRoomCounts] = useState<Record<string, number>>({});
   const [visibilityTab, setVisibilityTab] = useState<'all' | 'public' | 'private'>('all');
   const [statusFilter, setStatusFilter] = useState<'all' | 'active' | 'closed' | 'banned'>('all');
@@ -313,31 +123,13 @@ export function RoomsPage() {
     fetchRooms(q, 1);
   };
 
-  const handleCreated = (room: Room) => {
-    setRooms(prev => [room, ...prev]);
-    setTotal(prev => prev + 1);
-    setAgencyRoomCounts(prev => ({
-      ...prev,
-      [room.agency_id]: (prev[room.agency_id] || 0) + 1,
-    }));
-  };
-
   const totalPages = Math.ceil(total / LIMIT);
 
   return (
     <div className="p-6 max-w-6xl mx-auto">
-      <div className="mb-8 flex items-center justify-between">
-        <div>
-          <h1 className="text-2xl font-black text-gray-900 tracking-tight">Chat Rooms</h1>
-          <p className="text-gray-400 text-sm mt-1">All rooms created across agencies</p>
-        </div>
-        <button
-          onClick={() => setDrawerOpen(true)}
-          className="flex items-center gap-2 px-4 py-2 rounded-xl bg-gradient-to-r from-purple-600 to-violet-600 text-white text-sm font-bold hover:from-purple-700 hover:to-violet-700 transition-all shadow-sm"
-        >
-          <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4v16m8-8H4" /></svg>
-          Create Room
-        </button>
+      <div className="mb-8">
+        <h1 className="text-2xl font-black text-gray-900 tracking-tight">Chat Rooms</h1>
+        <p className="text-gray-400 text-sm mt-1">All rooms created across agencies</p>
       </div>
 
       {/* Visibility tabs */}
@@ -393,14 +185,6 @@ export function RoomsPage() {
             <p className="text-sm font-semibold text-gray-400">
               {search ? 'No rooms match your search' : 'No rooms yet'}
             </p>
-            {!search && (
-              <button
-                onClick={() => setDrawerOpen(true)}
-                className="mt-3 text-xs font-semibold text-purple-500 hover:text-purple-700 transition-colors"
-              >
-                Create your first room →
-              </button>
-            )}
           </div>
         ) : (
           <>
@@ -506,7 +290,6 @@ export function RoomsPage() {
         )}
       </div>
 
-      <CreateDrawer open={drawerOpen} onClose={() => setDrawerOpen(false)} onCreated={handleCreated} />
     </div>
   );
 }

@@ -16,6 +16,7 @@ import {
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { BASE_URL, MEDIA_BASE } from '@/services/api';
 import { getLevelImage } from '@/screens/room-detail/components/room-level-up';
+import { avatarSource } from '@/utils/default-avatar';
 
 const COIN_IMG = require('@/assets/tabs/coin.png');
 const { width: W } = Dimensions.get('window');
@@ -55,19 +56,15 @@ type LeaderEntry = {
 };
 
 type Tab = 'levels' | 'leaderboard';
-type Period = 'today' | 'yesterday' | 'this_week' | 'last_week' | 'this_month' | '6_months';
+type Period = 'today' | 'this_week' | 'this_month';
 type LbTab = 'gifters' | 'supporters';
 
 const PERIODS: { key: Period; label: string }[] = [
   { key: 'today', label: 'Today' },
-  { key: 'yesterday', label: 'Yesterday' },
-  { key: 'this_week', label: 'This Week' },
-  { key: 'last_week', label: 'Last Week' },
-  { key: 'this_month', label: 'This Month' },
-  { key: '6_months', label: '6 Months' },
+  { key: 'this_week', label: 'Weekly' },
+  { key: 'this_month', label: 'Monthly' },
 ];
 
-const AVATAR_COLORS = ['#F7A8D0', '#A8D0F7', '#A8F7C6', '#F7D6A8', '#D0A8F7'];
 
 function ProgressBar({ progress }: { progress: number }) {
   const anim = useRef(new Animated.Value(0)).current;
@@ -150,7 +147,6 @@ export function PerformanceScreen() {
           <Ionicons name="arrow-back" size={22} color="#1C1E22" />
         </TouchableOpacity>
         <Text style={s.headerTitle}>Performance</Text>
-        <View style={s.headerBtn} />
       </View>
 
       {/* Tab bar */}
@@ -175,15 +171,7 @@ export function PerformanceScreen() {
               <View style={[s.circle, s.circleBottomLeft]} />
               <View style={[s.circleSm, s.circleTopLeft]} />
 
-              <View style={s.heroTopRow}>
-                <LinearGradient colors={['#F59E0B', '#EF4444']} start={{ x: 0, y: 0 }} end={{ x: 1, y: 0 }} style={s.levelBadge}>
-                  <Text style={s.levelBadgeText}>LEVEL {level}</Text>
-                </LinearGradient>
-                <View style={s.heroCoinsBadge}>
-                  <Image source={COIN_IMG} style={s.heroCoin} resizeMode="contain" />
-                  <Text style={s.heroCoins}>{formatCoins(totalCoins)}</Text>
-                </View>
-              </View>
+
 
               <ExpoImage source={levelImg} style={s.levelImg} contentFit="contain" />
 
@@ -249,13 +237,13 @@ export function PerformanceScreen() {
                 <TouchableOpacity
                   style={[lb.catTab, lbTab === 'supporters' && lb.catTabActive]}
                   onPress={() => setLbTab('supporters')} activeOpacity={0.75}>
-                  <Text style={[lb.catTabText, lbTab === 'supporters' && lb.catTabTextActive]}>Top Supporters</Text>
+                  <Text style={[lb.catTabText, lbTab === 'supporters' && lb.catTabTextActive]}>Top Receivers</Text>
                   {lbTab === 'supporters' && <View style={lb.catTabLine} />}
                 </TouchableOpacity>
               </View>
 
-              {/* Period pills inside stage */}
-              <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={lb.periodRow}>
+              {/* Period pills inside stage — centred */}
+              <View style={lb.periodRow}>
                 {PERIODS.map(p => (
                   <TouchableOpacity
                     key={p.key}
@@ -265,7 +253,7 @@ export function PerformanceScreen() {
                     <Text style={[lb.periodText, period === p.key && lb.periodTextActive]}>{p.label}</Text>
                   </TouchableOpacity>
                 ))}
-              </ScrollView>
+              </View>
 
               {/* Podium — always show 3 slots */}
               {loadingLb ? (
@@ -282,13 +270,7 @@ export function PerformanceScreen() {
                         activeOpacity={0.75}
                         onPress={() => router.push(`/user/${top3[1].id}` as any)}>
                         <View style={[lb.podRing, lb.podRingSilver]}>
-                          {resolveAvatar(top3[1].avatar_url) ? (
-                            <Image source={{ uri: resolveAvatar(top3[1].avatar_url)! }} style={lb.podAvatar} />
-                          ) : (
-                            <View style={[lb.podAvatar, { backgroundColor: '#C0C0C0', alignItems: 'center', justifyContent: 'center' }]}>
-                              <Text style={lb.podInitial}>{(top3[1].full_name || top3[1].username || '?')[0]?.toUpperCase()}</Text>
-                            </View>
-                          )}
+                          <Image source={avatarSource(resolveAvatar(top3[1].avatar_url))} style={lb.podAvatar} />
                           <View style={[lb.podRankBadge, { backgroundColor: '#C0C0C0' }]}>
                             <Text style={lb.podRankText}>2</Text>
                           </View>
@@ -317,13 +299,7 @@ export function PerformanceScreen() {
                         activeOpacity={0.75}
                         onPress={() => router.push(`/user/${top3[0].id}` as any)}>
                         <View style={[lb.podRing, lb.podRingGold, lb.podRingBig]}>
-                          {resolveAvatar(top3[0].avatar_url) ? (
-                            <Image source={{ uri: resolveAvatar(top3[0].avatar_url)! }} style={lb.podAvatarBig} />
-                          ) : (
-                            <View style={[lb.podAvatarBig, { backgroundColor: '#FFD700', alignItems: 'center', justifyContent: 'center' }]}>
-                              <Text style={[lb.podInitial, { fontSize: 28 }]}>{(top3[0].full_name || top3[0].username || '?')[0]?.toUpperCase()}</Text>
-                            </View>
-                          )}
+                          <Image source={avatarSource(resolveAvatar(top3[0].avatar_url))} style={lb.podAvatarBig} />
                           <View style={[lb.podRankBadge, lb.podRankBadgeBig, { backgroundColor: '#FFD700' }]}>
                             <Text style={[lb.podRankText, { fontSize: 12 }]}>1</Text>
                           </View>
@@ -352,13 +328,7 @@ export function PerformanceScreen() {
                         activeOpacity={0.75}
                         onPress={() => router.push(`/user/${top3[2].id}` as any)}>
                         <View style={[lb.podRing, lb.podRingBronze]}>
-                          {resolveAvatar(top3[2].avatar_url) ? (
-                            <Image source={{ uri: resolveAvatar(top3[2].avatar_url)! }} style={lb.podAvatar} />
-                          ) : (
-                            <View style={[lb.podAvatar, { backgroundColor: '#CD7F32', alignItems: 'center', justifyContent: 'center' }]}>
-                              <Text style={lb.podInitial}>{(top3[2].full_name || top3[2].username || '?')[0]?.toUpperCase()}</Text>
-                            </View>
-                          )}
+                          <Image source={avatarSource(resolveAvatar(top3[2].avatar_url))} style={lb.podAvatar} />
                           <View style={[lb.podRankBadge, { backgroundColor: '#CD7F32' }]}>
                             <Text style={lb.podRankText}>3</Text>
                           </View>
@@ -398,7 +368,6 @@ export function PerformanceScreen() {
                   const rank = i + 4;
                   const uri = resolveAvatar(entry.avatar_url);
                   const name = entry.full_name || entry.username || 'User';
-                  const initials = name[0]?.toUpperCase() ?? '?';
                   return (
                     <TouchableOpacity
                       key={entry.id}
@@ -408,12 +377,8 @@ export function PerformanceScreen() {
                       <View style={lb.listRankWrap}>
                         <Text style={lb.listRankNum}>{rank}</Text>
                       </View>
-                      <View style={[lb.listAvatar, !uri && { backgroundColor: AVATAR_COLORS[rank % 5] }]}>
-                        {uri ? (
-                          <Image source={{ uri }} style={lb.listAvatarImg} />
-                        ) : (
-                          <Text style={lb.listAvatarInitial}>{initials}</Text>
-                        )}
+                      <View style={lb.listAvatar}>
+                        <Image source={avatarSource(uri)} style={lb.listAvatarImg} />
                       </View>
                       <View style={lb.listInfo}>
                         <Text style={lb.listName} numberOfLines={1}>{name}</Text>
@@ -446,18 +411,18 @@ export function PerformanceScreen() {
 
 const s = StyleSheet.create({
   root: { flex: 1, backgroundColor: '#FFFFFF' },
-  header: { flexDirection: 'row', alignItems: 'center', paddingHorizontal: 16, paddingVertical: 12, backgroundColor: '#FFFFFF' },
+  header: { flexDirection: 'row', alignItems: 'center', gap: 8, paddingHorizontal: 12, paddingVertical: 10, backgroundColor: '#FFFFFF' },
   headerBtn: { width: 36, height: 36, alignItems: 'center', justifyContent: 'center' },
-  headerTitle: { flex: 1, textAlign: 'center', fontSize: 18, fontWeight: '700', color: '#1C1E22' },
+  headerTitle: { flex: 1, fontSize: 20, fontWeight: '700', color: '#1C1E22' },
 
   tabBar: { flexDirection: 'row', borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: '#E0DDED', backgroundColor: '#FFFFFF' },
-  tabBtn: { flex: 1, alignItems: 'center', paddingVertical: 13, position: 'relative' },
-  tabLabel: { fontSize: 15, fontWeight: '500', color: '#7A7A8A' },
+  tabBtn: { flex: 1, height: 48, alignItems: 'center', justifyContent: 'center', position: 'relative' },
+  tabLabel: { fontSize: 16, fontWeight: '500', color: '#7A7A8A' },
   tabLabelActive: { color: '#7A0EED', fontWeight: '700' },
-  tabUnderline: { position: 'absolute', bottom: 0, left: 20, right: 20, height: 2.5, borderRadius: 2, backgroundColor: '#7A0EED' },
+  tabUnderline: { position: 'absolute', bottom: 0, left: 28, right: 28, height: 3, borderRadius: 2, backgroundColor: '#7A0EED' },
 
   // Hero
-  hero: { alignItems: 'center', paddingTop: 20, paddingBottom: 24, paddingHorizontal: 20, position: 'relative', overflow: 'hidden' },
+  hero: { alignItems: 'center', paddingTop: 20, paddingBottom: 24, paddingHorizontal: 16, position: 'relative', overflow: 'hidden' },
   circle: { position: 'absolute', width: 180, height: 180, borderRadius: 90, backgroundColor: 'rgba(56,189,248,0.12)', borderWidth: 1, borderColor: 'rgba(56,189,248,0.1)' },
   circleTopRight: { top: -60, right: -60 },
   circleBottomLeft: { bottom: -80, left: -60, width: 220, height: 220, borderRadius: 110, backgroundColor: 'rgba(245,158,11,0.08)' },
@@ -468,7 +433,7 @@ const s = StyleSheet.create({
   levelBadgeText: { fontSize: 12, fontWeight: '900', color: '#FFFFFF', letterSpacing: 1 },
   heroCoinsBadge: { flexDirection: 'row', alignItems: 'center', gap: 6, backgroundColor: 'rgba(255,255,255,0.1)', borderRadius: 20, paddingHorizontal: 12, paddingVertical: 6, borderWidth: 1, borderColor: 'rgba(255,255,255,0.15)' },
   heroCoin: { width: 18, height: 18 },
-  heroCoins: { fontSize: 15, fontWeight: '800', color: '#FFFFFF' },
+  heroCoins: { fontSize: 14, fontWeight: '800', color: '#FFFFFF' },
   levelImg: { width: W * 0.38, height: W * 0.38, marginVertical: 6 },
   progressCard: { width: '100%', backgroundColor: 'rgba(255,255,255,0.08)', borderRadius: 18, padding: 16, borderWidth: 1, borderColor: 'rgba(255,255,255,0.12)', marginTop: 10, gap: 10 },
   progressCardHeader: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
@@ -483,11 +448,11 @@ const s = StyleSheet.create({
 
   // Rewards
   rewardsSection: { paddingTop: 20, paddingHorizontal: 16 },
-  rewardsTitle: { fontSize: 17, fontWeight: '800', color: '#1C1E22', marginBottom: 3 },
+  rewardsTitle: { fontSize: 14, fontWeight: '800', color: '#1C1E22', marginBottom: 3 },
   rewardsSub: { fontSize: 12, color: '#7A7A8A', marginBottom: 14 },
   rewardsRow: { gap: 12, paddingBottom: 8 },
   rewardCard: { width: W * 0.34, height: W * 0.34, borderRadius: 16, alignItems: 'center', justifyContent: 'center', position: 'relative' },
-  rewardEmoji: { fontSize: 44 },
+  rewardEmoji: { fontSize: 32 },
   rewardTag: { position: 'absolute', bottom: 8, paddingHorizontal: 10, paddingVertical: 4, borderRadius: 12 },
   rewardTagText: { fontSize: 10, fontWeight: '700', color: '#FFFFFF' },
 
@@ -511,7 +476,7 @@ const lb = StyleSheet.create({
     gap: 16,
     paddingHorizontal: 16,
   },
-  catTab: { flex: 1, alignItems: 'center', paddingVertical: 14, position: 'relative' },
+  catTab: { flex: 1, alignItems: 'center', paddingVertical: 11, position: 'relative' },
   catTabActive: {},
   catTabText: { fontSize: 14, fontWeight: '500', color: 'rgba(255,255,255,0.45)' },
   catTabTextActive: { color: '#FFFFFF', fontWeight: '700' },
@@ -521,8 +486,8 @@ const lb = StyleSheet.create({
   },
 
   // Period pills inside stage
-  periodRow: { paddingHorizontal: 16, paddingBottom: 16,paddingTop: 16, gap: 6 },
-  periodPill: { paddingHorizontal: 12, paddingVertical: 6, borderRadius: 16, backgroundColor: 'rgba(255,255,255,0.08)', borderWidth: 1, borderColor: 'rgba(255,255,255,0.1)' },
+  periodRow: { flexDirection: 'row', justifyContent: 'center', paddingHorizontal: 16, paddingVertical: 16, gap: 8 },
+  periodPill: { minWidth: 84, alignItems: 'center', paddingHorizontal: 14, paddingVertical: 7, borderRadius: 16, backgroundColor: 'rgba(255,255,255,0.08)', borderWidth: 1, borderColor: 'rgba(255,255,255,0.1)' },
   periodPillActive: { backgroundColor: 'rgba(255,255,255,0.18)', borderColor: 'rgba(255,255,255,0.35)' },
   periodText: { fontSize: 11, fontWeight: '600', color: 'rgba(255,255,255,0.4)' },
   periodTextActive: { color: '#FFFFFF', fontWeight: '700' },
@@ -540,7 +505,7 @@ const lb = StyleSheet.create({
   podEmpty: { backgroundColor: 'rgba(255,255,255,0.06)' },
   podAvatar: { width: 52, height: 52, borderRadius: 26 },
   podAvatarBig: { width: 68, height: 68, borderRadius: 34 },
-  podInitial: { fontSize: 22, fontWeight: '800', color: '#FFFFFF' },
+  podInitial: { fontSize: 20, fontWeight: '800', color: '#FFFFFF' },
 
   podRankBadge: {
     position: 'absolute', bottom: -6,
@@ -571,18 +536,18 @@ const lb = StyleSheet.create({
   },
   listRow: {
     flexDirection: 'row', alignItems: 'center', gap: 12,
-    paddingHorizontal: 16, paddingVertical: 13,
+    paddingHorizontal: 16, paddingVertical: 11,
     borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: '#F0EDF8',
   },
   listRankWrap: { width: 28, alignItems: 'center' },
   listRankNum: { fontSize: 14, fontWeight: '700', color: '#ABADB2' },
-  listAvatar: { width: 44, height: 44, borderRadius: 22, overflow: 'hidden', alignItems: 'center', justifyContent: 'center' },
-  listAvatarImg: { width: 44, height: 44, borderRadius: 22 },
-  listAvatarInitial: { fontSize: 17, fontWeight: '700', color: '#FFFFFF' },
+  listAvatar: { width: 36, height: 36, borderRadius: 18, overflow: 'hidden', alignItems: 'center', justifyContent: 'center' },
+  listAvatarImg: { width: 36, height: 36, borderRadius: 18 },
+  listAvatarInitial: { fontSize: 16, fontWeight: '700', color: '#FFFFFF' },
   listInfo: { flex: 1, gap: 2 },
   listName: { fontSize: 14, fontWeight: '700', color: '#1C1E22' },
   listUsername: { fontSize: 11, color: '#ABADB2' },
   listCoins: { flexDirection: 'row', alignItems: 'center', gap: 5 },
   listCoinImg: { width: 18, height: 18 },
-  listCoinText: { fontSize: 15, fontWeight: '800', color: '#E8944A' },
+  listCoinText: { fontSize: 14, fontWeight: '800', color: '#E8944A' },
 });

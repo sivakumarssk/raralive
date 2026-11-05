@@ -19,6 +19,7 @@ import { CallChatOverlay } from './components/call-chat-overlay';
 import { CallGiftBar, type CallGiftItem } from './components/call-gift-bar';
 import { CallGiftFlyAnimation, type CallFlyItem } from './components/call-gift-fly-animation';
 import { CallMessageInput } from './components/call-message-input';
+import { avatarSource } from '@/utils/default-avatar';
 
 // The Activity is set to android:windowSoftInputMode="adjustResize" app-wide
 // (needed for login/register/room-chat forms), so opening the keyboard here
@@ -193,13 +194,7 @@ function ParticipantCard({ name, avatarUri, verified, online }: { name: string; 
   return (
     <View style={audioStyles.participantCard}>
       <View style={audioStyles.participantAvatarWrap}>
-        {avatarUri ? (
-          <Image source={{ uri: avatarUri }} style={audioStyles.participantAvatar} />
-        ) : (
-          <View style={[audioStyles.participantAvatar, audioStyles.participantAvatarFallback]}>
-            <Text style={audioStyles.participantAvatarInitial}>{name[0]?.toUpperCase()}</Text>
-          </View>
-        )}
+        <Image source={avatarSource(avatarUri)} style={audioStyles.participantAvatar} />
         {online && <View style={audioStyles.participantOnlineDot} />}
       </View>
       <View style={audioStyles.participantNameRow}>
@@ -337,9 +332,7 @@ function VideoCallScreen({
       <View style={[styles.topBar, { paddingTop: insets.top + 12 }]}>
         {!showRemoteVideo && !showFullScreenPhoto && !showRingingPreview && (
           <View style={styles.avatarWrap}>
-            <View style={[styles.avatar, styles.avatarFallback]}>
-              <Text style={styles.avatarInitial}>{name[0]?.toUpperCase()}</Text>
-            </View>
+            <Image source={avatarSource(avatarUri)} style={styles.avatar} />
           </View>
         )}
         <Text style={[styles.name, overlayText && styles.nameOnVideo]} numberOfLines={1}>{name}</Text>

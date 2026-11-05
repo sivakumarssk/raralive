@@ -1,4 +1,5 @@
 const db = require('../config/db');
+const { loadConfigVersions, gemsForCoins } = require('../utils/earning-slabs');
 
 /** GET /api/admin/gift-history/user/:userId */
 async function userGiftHistory(req, res, next) {
@@ -81,7 +82,7 @@ async function getMyGemHistory(req, res, next) {
   try {
     const userId = req.user.id;
 
-    // Chatroom gems: each gift event where user is recipient awards coins*qty*5 gems
+    // Chatroom gems: each gift event where user is recipient, at the admin's gem value
     const r = await db.query(
       `SELECT e.id, e.coins, e.quantity, e.gift_name, e.gift_image_url, e.created_at,
               r.room_name, r.id AS room_id,
@@ -96,32 +97,38 @@ async function getMyGemHistory(req, res, next) {
       [userId]
     );
 
+    // Gem value comes from the admin's settings for the month of each gift
+    const versions = await loadConfigVersions();
+    const liveRooms = new Set((await db.query(`SELECT DISTINCT room_id FROM live_broadcasts`)).rows.map(x => x.room_id));
     const events = r.rows.map(ev => ({
       ...ev,
-      gems_earned: ev.coins * ev.quantity * 5,
+      gems_earned: gemsForCoins(versions, liveRooms.has(ev.room_id) ? 'live' : 'chatroom', ev.created_at, ev.coins * ev.quantity),
     }));
 
     const totalChatroomGems = events.reduce((s, e) => s + e.gems_earned, 0);
 
-    // Friend Zone gems have two sources, merged into one feed:
-    // 1. Per-minute call billing (friend_zone_calls.gems_earned, callee side)
-    // 2. In-call gifting (call_gift_events, recipient side) — same 1:5 ratio
+    // Friend Zone gems have two sources, merged into one feed — both recorded
+    // in coins and converted at the admin's Friend Zone gem value:
+    // 1. Per-minute call billing (friend_zone_calls.coins_charged, callee side)
+    // 2. In-call gifting (call_gift_events, recipient side)
     const fzCalls = await db.query(
-      `SELECT c.id, c.call_type, c.duration_seconds, c.gems_earned, c.created_at,
+      `SELECT c.id, c.call_type, c.duration_seconds, c.coins_charged, c.created_at,
               caller.full_name AS caller_name, caller.username AS caller_username,
               caller.avatar_url AS caller_avatar
        FROM friend_zone_calls c
        JOIN users caller ON caller.id = c.caller_id
-       WHERE c.callee_id = $1 AND c.gems_earned > 0
+       WHERE c.callee_id = $1 AND c.coins_charged > 0
        ORDER BY c.created_at DESC
        LIMIT 200`,
       [userId]
     );
-    const callEvents = fzCalls.rows.map(ev => ({ ...ev, kind: 'call' }));
+    const callEvents = fzCalls.rows.map(ev => ({
+      ...ev, kind: 'call', gems_earned: gemsForCoins(versions, 'friendzone', ev.created_at, ev.coins_charged),
+    }));
 
     const fzGifts = await db.query(
       `SELECT g.id, g.gift_name, g.gift_image_url, g.coins, g.quantity,
-              (g.coins * g.quantity * 5) AS gems_earned, g.created_at,
+              g.created_at,
               c.call_type,
               sender.full_name AS sender_name, sender.username AS sender_username,
               sender.avatar_url AS sender_avatar
@@ -133,7 +140,9 @@ async function getMyGemHistory(req, res, next) {
        LIMIT 200`,
       [userId]
     );
-    const giftEvents = fzGifts.rows.map(ev => ({ ...ev, kind: 'gift' }));
+    const giftEvents = fzGifts.rows.map(ev => ({
+      ...ev, kind: 'gift', gems_earned: gemsForCoins(versions, 'friendzone', ev.created_at, ev.coins * ev.quantity),
+    }));
 
     const fzEvents = [...callEvents, ...giftEvents]
       .sort((a, b) => new Date(b.created_at) - new Date(a.created_at))

@@ -225,7 +225,8 @@ const TABS: { key: GoLiveStatus | ''; label: string }[] = [
   { key: 'rejected', label: 'Rejected' },
 ];
 
-export function GoLivePage() {
+/** `embedded` drops the page title/padding when shown as a tab inside Requests. */
+export function GoLivePage({ embedded = false, onChanged }: { embedded?: boolean; onChanged?: () => void } = {}) {
   const [requests, setRequests] = useState<GoLiveRequest[]>([]);
   const [total, setTotal] = useState(0);
   const [statusFilter, setStatusFilter] = useState<GoLiveStatus | ''>('pending');
@@ -244,6 +245,7 @@ export function GoLivePage() {
   useEffect(() => { fetchRequests(); }, [statusFilter]);
 
   const handleUpdated = (updated: GoLiveRequest) => {
+    onChanged?.();
     setRequests(prev => {
       if (statusFilter && updated.status !== statusFilter) {
         return prev.filter(r => r.id !== updated.id);
@@ -254,12 +256,14 @@ export function GoLivePage() {
   };
 
   return (
-    <div className="p-6 max-w-6xl mx-auto">
+    <div className={embedded ? '' : 'p-6 max-w-6xl mx-auto'}>
       <ToastContainer />
-      <div className="mb-8">
-        <h1 className="text-2xl font-black text-gray-900 tracking-tight">Go Live Requests</h1>
-        <p className="text-gray-400 text-sm mt-1">Review and approve user requests to broadcast live</p>
-      </div>
+      {!embedded && (
+        <div className="mb-8">
+          <h1 className="text-2xl font-black text-gray-900 tracking-tight">Go Live Requests</h1>
+          <p className="text-gray-400 text-sm mt-1">Review and approve user requests to broadcast live</p>
+        </div>
+      )}
 
       <div className="bg-white rounded-2xl border border-gray-100 shadow-sm">
         <div className="px-6 py-4 border-b border-gray-100 flex items-center justify-between">

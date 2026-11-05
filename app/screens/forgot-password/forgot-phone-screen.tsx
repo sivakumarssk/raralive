@@ -29,13 +29,12 @@ export function ForgotPhoneScreen({ onBack, onOtpSent }: ForgotPhoneScreenProps)
   const [loading, setLoading] = useState(false);
 
   const validate = () => {
-    const digits = phone.trim().replace(/\D/g, '');
-    if (!phone.trim()) {
+    if (!phone) {
       setError('Phone number is required.');
       return false;
     }
-    if (digits.length < 8) {
-      setError('Enter a valid phone number.');
+    if (phone.length !== 10) {
+      setError('Enter a valid 10-digit phone number.');
       return false;
     }
     return true;
@@ -46,7 +45,10 @@ export function ForgotPhoneScreen({ onBack, onOtpSent }: ForgotPhoneScreenProps)
     setLoading(true);
     setError('');
 
-    const result = await apiForgotPassword(phone.trim());
+    // Same +91 number format as registration; the server sends the OTP with
+    // the same MSG91 template it uses for sign-up.
+    const normalized = `+91${phone}`;
+    const result = await apiForgotPassword(normalized);
     setLoading(false);
 
     if (!result.ok) {
@@ -54,7 +56,7 @@ export function ForgotPhoneScreen({ onBack, onOtpSent }: ForgotPhoneScreenProps)
       return;
     }
 
-    onOtpSent?.(phone.trim());
+    onOtpSent?.(normalized);
   };
 
   return (
@@ -91,20 +93,25 @@ export function ForgotPhoneScreen({ onBack, onOtpSent }: ForgotPhoneScreenProps)
               </View>
 
               <View style={styles.field}>
-                <Text style={styles.label}>PHONE NUMBER</Text>
-                <View style={[styles.inputBox, error ? styles.inputBoxError : null]}>
-                  <Ionicons name="call-outline" size={15} color="#7A0EED" />
+                <Text style={styles.label}>Phone number</Text>
+                <View style={[styles.inputBox, styles.phoneBox, error ? styles.inputBoxError : null]}>
+                  <View style={styles.countryCode}>
+                    <Text style={styles.flag}>🇮🇳</Text>
+                    <Text style={styles.dialCode}>+91</Text>
+                  </View>
+                  <View style={styles.phoneDivider} />
                   <TextInput
                     style={styles.input}
-                    placeholder="Enter your phone number"
+                    placeholder="Enter phone number"
                     placeholderTextColor="#ABADB2"
-                    keyboardType="phone-pad"
+                    keyboardType="number-pad"
                     returnKeyType="done"
                     autoCapitalize="none"
+                    maxLength={10}
                     underlineColorAndroid="transparent"
                     value={phone}
                     onChangeText={(v) => {
-                      setPhone(v);
+                      setPhone(v.replace(/\D/g, ''));
                       if (error) setError('');
                     }}
                     onSubmitEditing={handleSend}
@@ -171,13 +178,19 @@ const styles = StyleSheet.create({
     alignItems: 'center', justifyContent: 'center',
   },
   field: { width: '100%', gap: 6 },
-  label: { color: '#4D4F56', fontSize: 11, lineHeight: 14, fontWeight: '700', letterSpacing: 1.0 },
+  label: { color: '#4D4F56', fontSize: 12, lineHeight: 16, fontWeight: '700', letterSpacing: 0.2 },
   inputBox: {
     height: 46, borderRadius: 10, backgroundColor: '#F4F5F8', borderWidth: 1, borderColor: 'transparent',
     flexDirection: 'row', alignItems: 'center', paddingHorizontal: 14, gap: 10,
   },
   inputBoxError: { borderColor: '#E14C57' },
   input: { flex: 1, fontSize: 14, lineHeight: 18, color: '#1C1E22', fontWeight: '400' },
+  // +91 prefix — same as the registration phone field
+  phoneBox: { gap: 12 },
+  countryCode: { flexDirection: 'row', alignItems: 'center', gap: 6 },
+  flag: { fontSize: 20 },
+  dialCode: { fontSize: 14, fontWeight: '600', color: '#1C1E22' },
+  phoneDivider: { width: 1, alignSelf: 'stretch', marginVertical: -1, backgroundColor: '#ECEAF2' },
   errorRow: { flexDirection: 'row', alignItems: 'center', gap: 5, marginTop: 2 },
   errorText: { color: '#E14C57', fontSize: 12, lineHeight: 16, fontWeight: '500' },
   ctaButton: { width: '100%' },

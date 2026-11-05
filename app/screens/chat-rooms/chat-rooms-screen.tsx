@@ -23,9 +23,11 @@ import {
 } from '@/services/api';
 import { authStore } from '@/store/auth-store';
 import { subscribeChatEvents } from '@/store/chat-socket-store';
+import { primeRoomInfo, socketStore } from '@/store/socket-store';
+import { chatroomOwnerStore, useHasChatroom } from '@/store/chatroom-owner-store';
 import { consumePendingReturnToFriendZone, friendZoneCallSessionStore } from '@/store/friend-zone-call-session-store';
 import { friendZoneSocketStore, getFriendZoneSocketState, subscribeFriendZoneSocket } from '@/store/friend-zone-socket-store';
-import { BannerCarousel } from './components/banner-carousel';
+import { BannerCarousel, fetchBanners } from './components/banner-carousel';
 import { ChatRoomsHeader } from './components/chat-rooms-header';
 import { CreateRoomCard } from './components/create-room-card';
 import { CreateRoomSheet } from './components/create-room-sheet';
@@ -66,9 +68,15 @@ export function ChatRoomsScreen() {
   const [publicRooms, setPublicRooms] = useState<PublicRoom[]>([]);
   const [onlineCounts, setOnlineCounts] = useState<Record<string, number>>({});
 
+  // Creator options (Go Live, Friend Zone join/toggles) are only for users who
+  // have created a chatroom. Cached locally; the socket keeps it current.
+  const hasChatroom = useHasChatroom();
+  useFocusEffect(useCallback(() => { friendZoneSocketStore.requestChatroomStatus(); }, []));
+
   // Banners
   type Banner = { id: string; title: string | null; image_url: string; link_url: string | null };
   const [banners, setBanners] = useState<Banner[]>([]);
+  const [liveBanners, setLiveBanners] = useState<Banner[]>([]);
 
   // Banners are fetched in loadData
 
@@ -299,10 +307,11 @@ export function ChatRoomsScreen() {
     if (token) {
       promises.push(apiMyRooms(token).then(r => { if (r.ok) setMyRooms(r.data); }));
     }
-    promises.push(apiPublicRooms(token).then(r => { if (r.ok) setPublicRooms(r.data); }));
+    promises.push(apiPublicRooms(token, authStore.getLanguage()).then(r => { if (r.ok) setPublicRooms(r.data); }));
     promises.push(apiOnlineCounts().then(r => { if (r.ok) setOnlineCounts(r.data); }));
     promises.push(
-      fetch(`${BASE_URL}/banners/public`).then(r => r.json()).then(j => { if (j.success) setBanners(j.data); }).catch(() => {})
+      fetchBanners('chatroom').then(setBanners),
+      fetchBanners('live').then(setLiveBanners),
     );
     return Promise.all(promises);
   }, []);
@@ -313,7 +322,33 @@ export function ChatRoomsScreen() {
     apiOnlineCounts().then(result => {
       if (result.ok) setOnlineCounts(result.data);
     });
+    // Re-fetched on every visit: the list is language-filtered, so a language
+    // change in Profile (yours, or a host's) shows up when you come back.
+    apiPublicRooms(authStore.getToken(), authStore.getLanguage()).then(result => {
+      if (result.ok) setPublicRooms(result.data);
+    });
+    // Have a room socket connected before a room is tapped — entering then
+    // only needs join_room, not a fresh websocket handshake.
+    socketStore.prewarm();
   }, []));
+
+  // Open a room with what the list already knows (name, image, level) so its
+  // header renders immediately; the socket fills in the rest on join.
+  const openRoom = (room: MyRoom | PublicRoom) => requireProfile(() => {
+    primeRoomInfo({
+      id: room.id,
+      room_name: room.room_name,
+      room_image_url: room.room_image_url,
+      current_level: room.current_level ?? 0,
+      // "My Chatroom" rooms are hosted by this user — host controls show at once
+      ...('agency_name' in room ? {
+        host_user_id: authStore.getUserId(),
+        agency_name: room.agency_name,
+        visibility: room.visibility,
+      } : {}),
+    });
+    router.push({ pathname: '/room/[id]', params: { id: room.id } });
+  });
 
   const onRefresh = useCallback(() => {
     setRefreshing(true);
@@ -336,6 +371,7 @@ export function ChatRoomsScreen() {
 
   const handleRoomCreated = (newRoom: MyRoom) => {
     setMyRooms(prev => [newRoom, ...prev]);
+    chatroomOwnerStore.set(true);
     if (newRoom.visibility === 'public') {
       setPublicRooms(prev => [
         {
@@ -398,8 +434,9 @@ export function ChatRoomsScreen() {
 
         {activeTab === 'live' ? (
           <LiveScreen
-            banners={banners}
+            banners={liveBanners}
             broadcasters={broadcasters}
+            canGoLive={hasChatroom}
             onGoLive={handleGoLivePress}
             onBroadcasterPress={(b) => requireProfile(() => {
               const target = activeBroadcasts.find(a => a.room_id === b.id);
@@ -416,6 +453,7 @@ export function ChatRoomsScreen() {
           />
         ) : activeTab === 'friend-zone' ? (
           <FriendZoneScreen
+            showCreatorOptions={hasChatroom}
             myProfile={myProfile}
             onEditProfile={() => {
               if (!fzApplication) return;
@@ -449,9 +487,8 @@ export function ChatRoomsScreen() {
               <RefreshControl refreshing={refreshing} onRefresh={onRefresh} colors={['#7A0EED']} tintColor="#7A0EED" />
             }>
 
-            <SectionHeader title="My Chatroom" />
-
-            {/* Banner carousel */}
+            {/* Banner carousel — top of the list (no "My Chatroom" heading) */}
+            <View style={styles.listTopGap} />
             <BannerCarousel banners={banners} />
 
             {myRooms.map(room => (
@@ -465,9 +502,7 @@ export function ChatRoomsScreen() {
                   level: room.current_level ?? 0,
                   location: roomLocation(room),
                 }}
-                onPress={() => requireProfile(() =>
-                  router.push({ pathname: '/room/[id]', params: { id: room.id } })
-                )}
+                onPress={() => openRoom(room)}
               />
             ))}
 
@@ -475,7 +510,7 @@ export function ChatRoomsScreen() {
               <CreateRoomCard onPress={() => requireProfile(() => setShowCreateSheet(true))} />
             )}
 
-            <SectionHeader title="Popular Rooms" />
+            <SectionHeader title="Popular rooms" />
             <View style={styles.popularList}>
               {popularRooms.map(room => (
                 <PopularRoomItem
@@ -489,9 +524,7 @@ export function ChatRoomsScreen() {
                     level: room.current_level ?? 0,
                     location: roomLocation(room),
                   }}
-                  onPress={() => requireProfile(() =>
-                    router.push({ pathname: '/room/[id]', params: { id: room.id } })
-                  )}
+                  onPress={() => openRoom(room)}
                 />
               ))}
             </View>
@@ -501,13 +534,8 @@ export function ChatRoomsScreen() {
         )}
       </View>
 
-      {/* Floating join button — only on Chat Rooms tab */}
-      {activeTab === 'chat-rooms' && (
-        <TouchableOpacity style={styles.fab} onPress={openJoinModal} activeOpacity={0.85}>
-          <Ionicons name="enter-outline" size={24} color="#FFFFFF" />
-          <Text style={{ position: 'absolute', bottom: 5, fontSize: 10, color: '#FFFFFF', fontWeight: '600' }}>Join</Text>
-        </TouchableOpacity>
-      )}
+      {/* No floating JOIN button here — the draggable JOIN bubble
+          (components/MiniRoomPlayer) appears only while a room is minimized. */}
 
       <CreateRoomSheet
         visible={showCreateSheet}
@@ -619,22 +647,7 @@ const styles = StyleSheet.create({
   scrollContent: { flexGrow: 1 },
   popularList: { backgroundColor: '#FAFAFA' },
   bottomSpacer: { height: 100 },
-  fab: {
-    position: 'absolute',
-    bottom: 100,
-    right: 20,
-    width: 52,
-    height: 52,
-    borderRadius: 26,
-    backgroundColor: '#7A0EED',
-    alignItems: 'center',
-    justifyContent: 'center',
-    elevation: 6,
-    shadowColor: '#7A0EED',
-    shadowOpacity: 0.35,
-    shadowRadius: 8,
-    shadowOffset: { width: 0, height: 3 },
-  },
+  listTopGap: { height: 12 },
 });
 
 const jc = StyleSheet.create({

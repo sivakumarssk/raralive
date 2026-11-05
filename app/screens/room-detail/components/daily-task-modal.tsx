@@ -16,6 +16,8 @@ import {
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { BASE_URL, MEDIA_BASE } from '@/services/api';
 import { authStore } from '@/store/auth-store';
+import { RC } from '../room-ui';
+import { avatarSource } from '@/utils/default-avatar';
 
 const COIN_IMG = require('@/assets/tabs/coin.png');
 const { height: SCREEN_H } = Dimensions.get('window');
@@ -178,7 +180,7 @@ function TasksTab({ roomId, refreshKey }: { roomId?: string; refreshKey?: number
 
       {tasks.length === 0 && (
         <View style={{ alignItems: 'center', paddingTop: 60 }}>
-          <Text style={{ fontSize: 40 }}>📋</Text>
+          <Text style={{ fontSize: 28 }}>📋</Text>
           <Text style={{ color: '#ABADB2', marginTop: 12, fontSize: 14 }}>No tasks available yet.</Text>
         </View>
       )}
@@ -216,7 +218,7 @@ function TopGiftersTab({ onClose }: { onClose: () => void }) {
 
   if (gifters.length === 0) return (
     <View style={{ flex: 1, alignItems: 'center', justifyContent: 'center', gap: 8 }}>
-      <Text style={{ fontSize: 36 }}>🎁</Text>
+      <Text style={{ fontSize: 28 }}>🎁</Text>
       <Text style={{ color: '#ABADB2', fontSize: 14 }}>No gifters yet this week</Text>
     </View>
   );
@@ -237,11 +239,7 @@ function TopGiftersTab({ onClose }: { onClose: () => void }) {
             onPress={() => { onClose(); router.push(`/user/${g.id}` as any); }}>
             <Text style={th.rank}>{MEDAL[i] ?? `#${i + 1}`}</Text>
             <View style={th.avatar}>
-              {uri
-                ? <Image source={{ uri }} style={th.avatarImg} />
-                : <View style={[th.avatarImg, { backgroundColor: '#7A0EED', alignItems: 'center', justifyContent: 'center' }]}>
-                    <Text style={{ color: '#fff', fontWeight: '800', fontSize: 16 }}>{name[0]?.toUpperCase()}</Text>
-                  </View>}
+              <Image source={avatarSource(uri)} style={th.avatarImg} />
             </View>
             <View style={{ flex: 1 }}>
               <Text style={th.name}>{name}</Text>
@@ -258,15 +256,15 @@ function TopGiftersTab({ onClose }: { onClose: () => void }) {
 }
 
 const th = StyleSheet.create({
-  sectionLabel: { fontSize: 12, fontWeight: '700', color: '#ABADB2', paddingHorizontal: 20, paddingBottom: 8, textTransform: 'uppercase', letterSpacing: 0.5 },
-  row: { flexDirection: 'row', alignItems: 'center', gap: 12, paddingHorizontal: 20, paddingVertical: 10, borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: '#F0EFF5' },
-  rank: { fontSize: 20, width: 28, textAlign: 'center' },
-  avatar: { width: 44, height: 44, borderRadius: 22, overflow: 'hidden' },
-  avatarImg: { width: 44, height: 44, borderRadius: 22 },
+  sectionLabel: { fontSize: 12, fontWeight: '700', color: '#ABADB2', paddingHorizontal: 16, paddingBottom: 8, letterSpacing: 0.5 },
+  row: { flexDirection: 'row', alignItems: 'center', gap: 12, paddingHorizontal: 16, paddingVertical: 10, borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: '#F0EFF5' },
+  rank: { fontSize: 18, width: 28, textAlign: 'center' },
+  avatar: { width: 36, height: 36, borderRadius: 18, overflow: 'hidden' },
+  avatarImg: { width: 36, height: 36, borderRadius: 18 },
   name: { fontSize: 14, fontWeight: '700', color: '#1C1E22' },
   sub: { fontSize: 12, color: '#ABADB2', marginTop: 1 },
-  coinsBadge: { backgroundColor: '#F0E8FF', paddingHorizontal: 10, paddingVertical: 4, borderRadius: 20 },
-  coinsText: { fontSize: 12, fontWeight: '700', color: '#7A0EED' },
+  coinsBadge: { paddingVertical: 4 },
+  coinsText: { fontSize: 12, fontWeight: '700', color: RC.number },
 });
 
 type Props = { visible: boolean; onClose: () => void; roomId?: string; refreshKey?: number };
@@ -334,7 +332,7 @@ const s = StyleSheet.create({
   handle: { width: 40, height: 4, borderRadius: 2, backgroundColor: '#DDDAE8' },
   tabBar: { flexDirection: 'row', borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: '#EBEBEB' },
   tabBtn: { flex: 1, alignItems: 'center', paddingVertical: 12, position: 'relative' },
-  tabLabel: { fontSize: 15, fontWeight: '500', color: '#7A7A8A' },
+  tabLabel: { fontSize: 14, fontWeight: '500', color: '#7A7A8A' },
   tabLabelActive: { color: '#7A0EED', fontWeight: '700' },
   tabUnderline: { position: 'absolute', bottom: 0, left: 16, right: 16, height: 2.5, borderRadius: 2, backgroundColor: '#7A0EED' },
   content: { flex: 1 },
@@ -342,15 +340,15 @@ const s = StyleSheet.create({
 
 const tab = StyleSheet.create({
   scroll: { paddingBottom: 20 },
-  section: { paddingHorizontal: 20, paddingTop: 16, gap: 0 },
-  sectionTitle: { fontSize: 18, fontWeight: '800', color: '#1C1E22', marginBottom: 4 },
+  section: { paddingHorizontal: 16, paddingTop: 16, gap: 0 },
+  sectionTitle: { fontSize: 14, fontWeight: '800', color: '#1C1E22', marginBottom: 4 },
   taskCard: {
     flexDirection: 'row', alignItems: 'flex-start', gap: 14,
-    paddingVertical: 18, borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: '#EBEBEB',
+    paddingVertical: 12, borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: '#EBEBEB',
   },
   taskCardDone: { opacity: 0.85 },
   taskIcon: {
-    width: 52, height: 52, borderRadius: 26, backgroundColor: '#FFF4E0',
+    width: 40, height: 40, borderRadius: 20, backgroundColor: '#FFF4E0',
     alignItems: 'center', justifyContent: 'center', position: 'relative',
   },
   completedBadge: {
@@ -358,9 +356,9 @@ const tab = StyleSheet.create({
     width: 18, height: 18, borderRadius: 9, backgroundColor: '#4CAF50',
     alignItems: 'center', justifyContent: 'center',
   },
-  iconImg: { width: 36, height: 36, borderRadius: 18 },
-  coinImg: { width: 34, height: 34 },
-  taskEmoji: { fontSize: 28 },
+  iconImg: { width: 28, height: 28, borderRadius: 14 },
+  coinImg: { width: 26, height: 26 },
+  taskEmoji: { fontSize: 22 },
   taskBody: { flex: 1, gap: 6 },
   progressRow: { flexDirection: 'row', alignItems: 'center', gap: 8 },
   progressLabel: { fontSize: 12, fontWeight: '700', color: '#7A0EED', minWidth: 44, textAlign: 'right' },
@@ -378,13 +376,13 @@ const tab = StyleSheet.create({
     flexDirection: 'row', alignItems: 'center', gap: 3,
     backgroundColor: '#F2EAFF', borderRadius: 20, paddingHorizontal: 7, paddingVertical: 3,
   },
-  rewardChipText: { fontSize: 10, fontWeight: '700', color: '#7A0EED' },
-  rewardSection: { paddingHorizontal: 20, paddingTop: 14, paddingBottom: 8 },
-  rewardSectionTitle: { fontSize: 15, fontWeight: '800', color: '#1C1E22', marginBottom: 10 },
+  rewardChipText: { fontSize: 11, fontWeight: '700', color: '#7A0EED' },
+  rewardSection: { paddingHorizontal: 16, paddingTop: 14, paddingBottom: 8 },
+  rewardSectionTitle: { fontSize: 14, fontWeight: '800', color: '#1C1E22', marginBottom: 10 },
   rewardCards: { flexDirection: 'row', gap: 10, flexWrap: 'wrap' },
   rewardCardRow: { flexDirection: 'row', gap: 8 },
   rewardCard: {
-    width: 80, height: 80, borderRadius: 14, overflow: 'hidden',
+    width: 64, height: 64, borderRadius: 12, overflow: 'hidden',
     backgroundColor: '#E0DDED', position: 'relative',
     borderWidth: 2, borderColor: '#C4B8E8',
   },
@@ -399,5 +397,5 @@ const tab = StyleSheet.create({
     backgroundColor: 'rgba(0,0,0,0.55)', borderRadius: 6,
     paddingHorizontal: 5, paddingVertical: 1,
   },
-  rewardCardTagText: { fontSize: 8, fontWeight: '800', color: '#FFFFFF' },
+  rewardCardTagText: { fontSize: 10, fontWeight: '800', color: '#FFFFFF' },
 });

@@ -4,6 +4,8 @@ import { forwardRef, useEffect, useImperativeHandle, useRef, useState } from 're
 import { Animated, Dimensions, Easing, StyleSheet, Text, View } from 'react-native';
 import { resolveImageUrl } from '@/services/api';
 import type { ChatMessage } from '../room-detail.data';
+import { RC } from '../room-ui';
+import { avatarSource } from '@/utils/default-avatar';
 
 const { width: W } = Dimensions.get('window');
 
@@ -203,13 +205,7 @@ function BannerRow({ banner, onExitStart, onDone }: { banner: Banner; onExitStar
         end={{ x: 1, y: 0.5 }}
         style={s.pill}>
         <View style={s.avatarRing}>
-          {banner.avatarUri ? (
-            <ExpoImage source={{ uri: banner.avatarUri }} style={s.avatar} contentFit="cover" />
-          ) : (
-            <View style={[s.avatar, s.avatarFallback]}>
-              <Text style={s.avatarInitial}>{banner.senderName.charAt(0).toUpperCase()}</Text>
-            </View>
-          )}
+          <ExpoImage source={avatarSource(banner.avatarUri)} style={s.avatar} contentFit="cover" />
         </View>
         <View style={s.textCol}>
           <Text style={s.name} numberOfLines={1}>{banner.senderName}</Text>
@@ -286,7 +282,7 @@ const s = StyleSheet.create({
   giftEmoji: { fontSize: 34 },
   count: {
     marginLeft: 4,
-    color: '#FFD76A',
+    color: RC.numberOnDark,
     fontSize: 24,
     fontWeight: '900',
     fontStyle: 'italic',

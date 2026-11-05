@@ -168,12 +168,13 @@ async function claimReward(userId, taskId) {
     await client.query('BEGIN');
     const updated = await client.query(
       `UPDATE task_progress SET reward_claimed = TRUE WHERE user_id=$1 AND task_id=$2
-       AND period_start=$3 AND completed=TRUE AND reward_claimed=FALSE RETURNING id`,
+       AND period_start=$3 AND completed=TRUE AND reward_claimed=FALSE RETURNING id, completed_at`,
       [userId, taskId, ps]
     );
     if (!updated.rows.length) { await client.query('ROLLBACK'); return false; }
     await client.query('COMMIT');
-    return true;
+    // Truthy as before; carries completed_at (the reward's 24h starts there)
+    return updated.rows[0];
   } catch (err) { await client.query('ROLLBACK'); throw err; }
   finally { client.release(); }
 }

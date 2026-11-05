@@ -36,7 +36,7 @@ export function PopularRoomItem({ room, onPress }: PopularRoomItemProps) {
           <Image source={{ uri: room.imageUri }} style={styles.image} />
         ) : (
           <View style={styles.imageFallback}>
-            <Ionicons name="chatbubbles" size={24} color="#7A0EED" />
+            <Ionicons name="chatbubbles" size={20} color="#7A0EED" />
           </View>
         )}
       </View>
@@ -73,24 +73,24 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     paddingHorizontal: 16,
-    paddingVertical: 12,
-    gap: 13,
+    paddingVertical: 9,
+    gap: 12,
     backgroundColor: '#FAFAFA',
   },
   imageContainer: {
     position: 'relative',
-    width: 52,
-    height: 52,
+    width: 44,
+    height: 44,
   },
   image: {
-    width: 52,
-    height: 52,
-    borderRadius: 26,
+    width: 44,
+    height: 44,
+    borderRadius: 22,
   },
   imageFallback: {
-    width: 52,
-    height: 52,
-    borderRadius: 26,
+    width: 44,
+    height: 44,
+    borderRadius: 22,
     backgroundColor: '#EDE8F7',
     alignItems: 'center',
     justifyContent: 'center',
@@ -98,10 +98,10 @@ const styles = StyleSheet.create({
   info: {
     flex: 1,
     minWidth: 0,
-    gap: 3,
+    gap: 2,
   },
   roomName: {
-    fontSize: 15,
+    fontSize: 14,
     fontWeight: '600',
     color: '#1C1E22',
     letterSpacing: -0.1,
@@ -144,7 +144,7 @@ const styles = StyleSheet.create({
   divider: {
     position: 'absolute',
     bottom: 0,
-    left: 81,
+    left: 72, // text start: padding 16 + avatar 44 + gap 12
     right: 0,
     height: StyleSheet.hairlineWidth,
     backgroundColor: '#EFEFEF',

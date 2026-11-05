@@ -10,6 +10,8 @@ import {
   View,
 } from 'react-native';
 
+import { SendButton } from '@/components/SendButton';
+
 const COIN_IMG = require('@/assets/tabs/coin.png');
 const BATTLE_IMG = require('@/assets/tabs/chatroom/battle.png');
 
@@ -65,7 +67,7 @@ export function ChatInputBar({ onSend, onGiftOpen, onCoinPress, onBattlePress, o
           <TextInput
             ref={inputRef}
             style={[bar.input, hasRoomBg && bar.inputBg]}
-            placeholder="Say something..."
+            placeholder="Type..."
             placeholderTextColor={hasRoomBg ? 'rgba(255,255,255,0.5)' : '#ABADB2'}
             value={text}
             onChangeText={setText}
@@ -77,15 +79,7 @@ export function ChatInputBar({ onSend, onGiftOpen, onCoinPress, onBattlePress, o
           />
 
           {/* Send button — embedded inside the input pill */}
-          <TouchableOpacity onPress={handleSend} activeOpacity={0.85} style={bar.sendBtn}>
-            <LinearGradient
-              colors={['#7A0EED', '#B50357']}
-              start={{ x: 0, y: 0 }}
-              end={{ x: 1, y: 1 }}
-              style={bar.sendGradient}>
-              <Ionicons name="arrow-forward" size={18} color="#FFFFFF" />
-            </LinearGradient>
-          </TouchableOpacity>
+          <SendButton onPress={handleSend} size={30} />
         </View>
 
         {!focused && showBattle && (
@@ -98,7 +92,7 @@ export function ChatInputBar({ onSend, onGiftOpen, onCoinPress, onBattlePress, o
         {!focused && (
           <TouchableOpacity onPress={onGiftOpen} activeOpacity={0.85} style={bar.giftBtn}>
             <LinearGradient colors={['#F5A623', '#F07A1A']} style={bar.giftGradient}>
-              <Ionicons name="gift-outline" size={18} color="#FFFFFF" />
+              <Ionicons name="gift-outline" size={20} color="#FFFFFF" />
             </LinearGradient>
           </TouchableOpacity>
         )}
@@ -116,13 +110,13 @@ const bar = StyleSheet.create({
   container: {
     flexDirection: 'row',
     alignItems: 'center',
-    paddingHorizontal: 12,
-    paddingTop: 10,
-    paddingBottom: 14,
+    paddingHorizontal: 10,
+    paddingTop: 6,
+    paddingBottom: 8,
     backgroundColor: '#FFFFFF',
     borderTopWidth: 1,
     borderTopColor: '#F0EDF8',
-    gap: 4,
+    gap: 8,
   },
   containerBg: {
     backgroundColor: 'rgba(0,0,0,0.45)',
@@ -143,29 +137,29 @@ const bar = StyleSheet.create({
     height: 22,
   },
   battleImg: {
-    width: 26,
-    height: 26,
+    width: 30,
+    height: 30,
   },
   inputWrap: {
     flex: 1,
     flexDirection: 'row',
     alignItems: 'center',
-    height: 44,
-    borderRadius: 22,
+    height: 40,
+    borderRadius: 20,
     backgroundColor: '#F4F5F8',
     borderWidth: 1,
     borderColor: '#E7E4F2',
-    paddingLeft: 16,
+    paddingLeft: 14,
     paddingRight: 4,
     gap: 8,
   },
   inputWrapBg: { backgroundColor: 'rgba(255,255,255,0.15)', borderColor: 'rgba(255,255,255,0.25)' },
-  input: { flex: 1, fontSize: 14, color: '#1C1E22', padding: 0, borderWidth: 0 },
+  input: { flex: 1, fontSize: 15, color: '#1C1E22', padding: 0, borderWidth: 0 },
   inputBg: { color: '#FFFFFF' },
   giftBtn: {
-    width: 34,
-    height: 34,
-    borderRadius: 17,
+    width: 36,
+    height: 36,
+    borderRadius: 18,
     alignItems: 'center',
     justifyContent: 'center',
     overflow: 'hidden',
@@ -182,17 +176,6 @@ const bar = StyleSheet.create({
     backgroundColor: '#F4F5F8',
   },
   giftGradient: {
-    width: 34,
-    height: 34,
-    borderRadius: 17,
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  sendBtn: {
-    borderRadius: 18,
-    overflow: 'hidden',
-  },
-  sendGradient: {
     width: 36,
     height: 36,
     borderRadius: 18,

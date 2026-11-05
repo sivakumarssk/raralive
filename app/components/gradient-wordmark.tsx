@@ -16,7 +16,7 @@ type GradientWordmarkProps = {
 const DEFAULT_COLORS = ['#4B00E8', '#7A04E5', '#B40CF0', '#FF2A76'] as const;
 
 export function GradientWordmark({
-  text = 'Rara Live',
+  text = 'RaRa Live',
   containerStyle,
   textStyle,
   fontSize = 46,

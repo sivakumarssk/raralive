@@ -103,7 +103,7 @@ function LevelModal({ visible, onClose, coinsSpent, loading }: {
                 </View>
 
                 <Text style={m.levelNum}>Level {level}</Text>
-                <Text style={m.levelSub}>Individual Gifting Level</Text>
+                <Text style={m.levelSub}>Individual gifting level</Text>
 
                 <View style={m.statRow}>
                   <View style={m.statBox}>
@@ -117,7 +117,7 @@ function LevelModal({ visible, onClose, coinsSpent, loading }: {
                     </View>
                   ) : (
                     <View style={m.statBox}>
-                      <Text style={[m.statValue, { color: '#FFD700' }]}>MAX</Text>
+                      <Text style={[m.statValue, { color: '#FFD700' }]}>Max</Text>
                       <Text style={m.statLabel}>Level Reached!</Text>
                     </View>
                   )}
@@ -164,10 +164,14 @@ function LevelModal({ visible, onClose, coinsSpent, loading }: {
 // size="sm"  → 22×22  (chat feed inline)
 // size="md"  → 40×40  (profile header)
 // size="lg"  → 64×64  (full display, e.g. chatroom header popup)
+// size="pill" → 66×24 (profile header — badge art is a 2.75:1 pill, so a
+//               square box would leave empty space above and below it)
 // tappable=true → tapping badge opens the level detail modal
-type BadgeSize = 'sm' | 'md' | 'lg' | 'xl';
+type BadgeSize = 'sm' | 'md' | 'lg' | 'xl' | 'pill';
 
-const SIZE_MAP: Record<BadgeSize, number> = { sm: 22, md: 40, lg: 64, xl: 100 };
+const SIZE_MAP: Record<BadgeSize, number> = { sm: 22, md: 40, lg: 64, xl: 100, pill: 24 };
+// Width/height ratio of the level badge artwork (495×180)
+const PILL_RATIO = 495 / 180;
 
 type UserLevelBadgeProps = {
   size?: BadgeSize;
@@ -186,7 +190,11 @@ export function UserLevelBadge({ size = 'md', tappable = false, level: externalL
   const px = SIZE_MAP[size];
 
   const badge = (
-    <ExpoImage source={badgeImg} style={{ width: px, height: px }} contentFit="contain" />
+    <ExpoImage
+      source={badgeImg}
+      style={{ width: size === 'pill' ? Math.round(px * PILL_RATIO) : px, height: px }}
+      contentFit="contain"
+    />
   );
 
   if (!tappable || externalLevel != null) return badge;
@@ -268,8 +276,8 @@ const m = StyleSheet.create({
     fontWeight: '500',
     marginTop: 4,
     marginBottom: 24,
-    textTransform: 'uppercase',
-    letterSpacing: 1,
+    
+    letterSpacing: 0.2,
   },
   statRow: { flexDirection: 'row', gap: 16, marginBottom: 20 },
   statBox: {

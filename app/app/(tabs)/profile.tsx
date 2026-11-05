@@ -1,13 +1,17 @@
 import { Ionicons } from '@expo/vector-icons';
 import { LinearGradient } from 'expo-linear-gradient';
+import { useIsFocused } from '@react-navigation/native';
 import { useFocusEffect, useRouter } from 'expo-router';
+import { StatusBar } from 'expo-status-bar';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import {
   ActivityIndicator,
+  Alert,
   Animated,
   Dimensions,
   FlatList,
   Image,
+  Linking,
   Modal,
   Platform,
   ScrollView,
@@ -19,13 +23,31 @@ import {
 } from 'react-native';
 import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
 
-import { apiChatUnreadCount, BASE_URL, MEDIA_BASE } from '@/services/api';
+import { apiChatUnreadCount, apiLogoutAllDevices, BASE_URL, MEDIA_BASE } from '@/services/api';
 import { authStore } from '@/store/auth-store';
-import { UserLevelBadge } from '@/components/UserLevel';
+import { chatSocketStore } from '@/store/chat-socket-store';
+import { friendZoneSocketStore } from '@/store/friend-zone-socket-store';
+import { socketStore } from '@/store/socket-store';
+import { ImageViewer } from '@/components/ImageViewer';
+import { ProfileTags } from '@/components/ProfileTags';
+import { GradientButton } from '@/components/ui/gradient-button';
+import { MenuIcon } from '@/components/ui/menu-icon';
+import { useProfileScroll } from '@/hooks/use-profile-scroll';
+import { LANGUAGE_PICKER_BG, LanguageGrid, LanguagePickerHeading } from '@/screens/language/language-grid';
+import { avatarSource } from '@/utils/default-avatar';
 
 const SCREEN_W = Dimensions.get('window').width;
-const COVER_H = 180;
-const AVATAR_SIZE = 84;
+// Scaled to screen width so proportions stay the same on every device
+const COVER_H = Math.round(SCREEN_W * 0.42);
+const AVATAR_SIZE = Math.round(SCREEN_W * 0.22);
+// How much of the avatar overlaps the cover
+const AVATAR_OVERLAP = Math.round(AVATAR_SIZE * 0.3);
+
+/** "+919876543210" → "+91 98765 43210"; anything else is shown as stored. */
+function formatPhone(phone: string) {
+  const m = phone.match(/^\+91(\d{5})(\d{5})$/);
+  return m ? `+91 ${m[1]} ${m[2]}` : phone;
+}
 
 type UserProfile = {
   id: string;
@@ -43,21 +65,12 @@ type UserProfile = {
   followers_count: number;
   following_count: number;
   posts_count: number;
+  role?: string;
+  agency_id?: string | null;
 };
 
 type PostMedia = { id: string; media_url: string; media_type: 'photo' | 'video'; sort_order: number };
 type FeedPost = { id: string; caption: string | null; likes_count: number; media: PostMedia[] };
-
-const LANGUAGES = [
-  { id: 'en', label: 'English',    native: 'English' },
-  { id: 'hi', label: 'Hindi',      native: 'हिंदी' },
-  { id: 'mr', label: 'Marathi',    native: 'मराठी' },
-  { id: 'te', label: 'Telugu',     native: 'తెలుగు' },
-  { id: 'ta', label: 'Tamil',      native: 'தமிழ்' },
-  { id: 'bn', label: 'Bengali',    native: 'বাংলা' },
-  { id: 'kn', label: 'Kannada',    native: 'ಕನ್ನಡ' },
-  { id: 'ml', label: 'Malayalam',  native: 'മലയാളം' },
-];
 
 const GENDERS = ['Male', 'Female', 'Other', 'Prefer not to say'];
 
@@ -122,7 +135,9 @@ function PostGrid({ posts }: { posts: FeedPost[] }) {
 }
 
 // ── Bottom sheet wrapper ──────────────────────────────────────────────────────
-function BottomSheet({ visible, onClose, children }: { visible: boolean; onClose: () => void; children: React.ReactNode }) {
+function BottomSheet({ visible, onClose, children, style }: {
+  visible: boolean; onClose: () => void; children: React.ReactNode; style?: object;
+}) {
   const insets = useSafeAreaInsets();
   const slideY = useRef(new Animated.Value(600)).current;
 
@@ -138,7 +153,7 @@ function BottomSheet({ visible, onClose, children }: { visible: boolean; onClose
   return (
     <Modal transparent animationType="none" visible={visible} onRequestClose={onClose}>
       <TouchableOpacity style={s.backdrop} activeOpacity={1} onPress={onClose} />
-      <Animated.View style={[s.sheet, { transform: [{ translateY: slideY }], paddingBottom: insets.bottom + 12 }]}>
+      <Animated.View style={[s.sheet, style, { transform: [{ translateY: slideY }], paddingBottom: insets.bottom + 12 }]}>
         <View style={s.sheetHandle} />
         {children}
       </Animated.View>
@@ -147,48 +162,81 @@ function BottomSheet({ visible, onClose, children }: { visible: boolean; onClose
 }
 
 // ── Menu sheet (three dots) ───────────────────────────────────────────────────
-function MenuSheet({ visible, onClose, onEditProfile, onChangeLanguage, onLogout }: {
+const LEGAL_LINKS = [
+  { label: 'Privacy Policy',   icon: 'shield-checkmark', color: '#16A34A', url: 'https://raralive.in/privacy-policy' },
+  { label: 'Terms of Service', icon: 'document-text',    color: '#0D9488', url: 'https://raralive.in/terms' },
+  { label: 'Delete Account',   icon: 'trash',            color: '#E14C57', url: 'https://raralive.in/delete-account' },
+] as const;
+
+
+function MenuSheet({ visible, onClose, onEditProfile, onChangeLanguage, onLogout, onLogoutAll, onAgencyWallet }: {
   visible: boolean; onClose: () => void;
-  onEditProfile: () => void; onChangeLanguage: () => void; onLogout: () => void;
+  onEditProfile: () => void; onChangeLanguage: () => void; onLogout: () => void; onLogoutAll: () => void;
+  /** Only passed for agency accounts. */
+  onAgencyWallet?: () => void;
 }) {
   return (
     <BottomSheet visible={visible} onClose={onClose}>
       <Text style={s.sheetTitle}>More Options</Text>
       <TouchableOpacity style={s.menuItem} onPress={() => { onClose(); onEditProfile(); }} activeOpacity={0.8}>
-        <View style={s.menuIcon}><Ionicons name="person-outline" size={18} color="#7A0EED" /></View>
+        <MenuIcon name="person-circle" color="#7A0EED" />
         <Text style={s.menuItemText}>Edit Profile</Text>
-        <Ionicons name="chevron-forward" size={16} color="#ABADB2" />
+        <Ionicons name="chevron-forward" size={15} color="#ABADB2" />
       </TouchableOpacity>
       <TouchableOpacity style={s.menuItem} onPress={() => { onClose(); onChangeLanguage(); }} activeOpacity={0.8}>
-        <View style={s.menuIcon}><Ionicons name="language-outline" size={18} color="#7A0EED" /></View>
+        <MenuIcon name="language" color="#1D6FE0" />
         <Text style={s.menuItemText}>Change Language</Text>
-        <Ionicons name="chevron-forward" size={16} color="#ABADB2" />
+        <Ionicons name="chevron-forward" size={15} color="#ABADB2" />
       </TouchableOpacity>
+      {onAgencyWallet && (
+        <TouchableOpacity style={s.menuItem} onPress={() => { onClose(); onAgencyWallet(); }} activeOpacity={0.8}>
+          <MenuIcon name="wallet" color="#F59E0B" />
+          <Text style={s.menuItemText}>Agency Wallet</Text>
+          <Ionicons name="chevron-forward" size={15} color="#ABADB2" />
+        </TouchableOpacity>
+      )}
+      <View style={s.menuDivider} />
+      {LEGAL_LINKS.map(link => (
+        <TouchableOpacity key={link.url} style={s.menuItem} onPress={() => { onClose(); Linking.openURL(link.url).catch(() => {}); }} activeOpacity={0.8}>
+          <MenuIcon name={link.icon} color={link.color} />
+          <Text style={s.menuItemText}>{link.label}</Text>
+          <Ionicons name="open-outline" size={15} color="#ABADB2" />
+        </TouchableOpacity>
+      ))}
       <View style={s.menuDivider} />
       <TouchableOpacity style={s.menuItem} onPress={() => { onClose(); onLogout(); }} activeOpacity={0.8}>
-        <View style={[s.menuIcon, { backgroundColor: '#FFF5F5' }]}><Ionicons name="log-out-outline" size={18} color="#E14C57" /></View>
+        <MenuIcon name="log-out" color="#E14C57" />
         <Text style={[s.menuItemText, { color: '#E14C57' }]}>Log Out</Text>
+      </TouchableOpacity>
+      <TouchableOpacity style={s.menuItem} onPress={() => { onClose(); onLogoutAll(); }} activeOpacity={0.8}>
+        <MenuIcon name="phone-portrait" color="#E14C57" />
+        <Text style={[s.menuItemText, { color: '#E14C57' }]}>Log Out of All Devices</Text>
       </TouchableOpacity>
     </BottomSheet>
   );
 }
 
 // ── Language sheet ────────────────────────────────────────────────────────────
+// Same two-column picker as the login language screen: tap a card to select
+// it, then Continue to save.
 function LanguageSheet({ visible, onClose, currentLang, onSelect }: {
   visible: boolean; onClose: () => void; currentLang: string; onSelect: (id: string) => void;
 }) {
+  const [selected, setSelected] = useState(currentLang);
+  useEffect(() => { if (visible) setSelected(currentLang); }, [visible, currentLang]);
   return (
-    <BottomSheet visible={visible} onClose={onClose}>
-      <Text style={s.sheetTitle}>Choose Language</Text>
-      {LANGUAGES.map(lang => (
-        <TouchableOpacity key={lang.id} style={s.langItem} onPress={() => { onSelect(lang.id); onClose(); }} activeOpacity={0.8}>
-          <View style={{ flex: 1 }}>
-            <Text style={s.langLabel}>{lang.label}</Text>
-            <Text style={s.langNative}>{lang.native}</Text>
-          </View>
-          {currentLang === lang.id && <Ionicons name="checkmark-circle" size={22} color="#7A0EED" />}
-        </TouchableOpacity>
-      ))}
+    <BottomSheet visible={visible} onClose={onClose} style={s.langSheet}>
+      <View style={s.langSheetBody}>
+        <LanguagePickerHeading />
+        <LanguageGrid selected={selected} onSelect={setSelected} />
+        <View style={s.langSheetFooter}>
+          <GradientButton
+            label="Continue"
+            iconName="arrow-forward"
+            onPress={() => { if (selected) onSelect(selected); onClose(); }}
+          />
+        </View>
+      </View>
     </BottomSheet>
   );
 }
@@ -248,7 +296,7 @@ function EditProfileSheet({ visible, onClose, profile, onSaved }: {
       <ScrollView showsVerticalScrollIndicator={false} style={{ maxHeight: 480 }} keyboardShouldPersistTaps="handled">
         <View style={{ paddingHorizontal: 20, gap: 14, paddingBottom: 8 }}>
           <View style={s.fieldWrap}>
-            <Text style={s.fieldLabel}>Full Name</Text>
+            <Text style={s.fieldLabel}>Full name</Text>
             <TextInput style={s.fieldInput} value={fullName} onChangeText={setFullName} placeholder="Your name" placeholderTextColor="#C4C5CC" />
           </View>
           <View style={s.fieldWrap}>
@@ -288,6 +336,8 @@ function EditProfileSheet({ visible, onClose, profile, onSaved }: {
 // ── Main screen ───────────────────────────────────────────────────────────────
 export default function ProfileScreen() {
   const router = useRouter();
+  const insets = useSafeAreaInsets();
+  const isFocused = useIsFocused();
   const [profile, setProfile] = useState<UserProfile | null>(null);
   const [posts, setPosts] = useState<FeedPost[]>([]);
   const [loading, setLoading] = useState(true);
@@ -297,6 +347,8 @@ export default function ProfileScreen() {
   const [showLang, setShowLang] = useState(false);
   const [currentLang, setCurrentLang] = useState('en');
   const [unreadChatCount, setUnreadChatCount] = useState(0);
+  const [viewing, setViewing] = useState<'avatar' | 'cover' | null>(null);
+  const scroll = useProfileScroll(COVER_H);
 
   const fetchData = useCallback(async (showSpinner: boolean) => {
     const token = authStore.getToken();
@@ -317,7 +369,10 @@ export default function ProfileScreen() {
         setTimeout(() => router.replace('/login' as never), 100);
         return;
       }
-      if (profileRes.success) setProfile(profileRes.data);
+      if (profileRes.success) {
+        setProfile(profileRes.data);
+        if (profileRes.data?.preferred_language) setCurrentLang(profileRes.data.preferred_language);
+      }
       if (postsRes.success) setPosts(postsRes.data);
     } catch {}
     finally { if (showSpinner) setLoading(false); }
@@ -342,10 +397,44 @@ export default function ProfileScreen() {
     fetchUnreadChatCount();
   }, [fetchData, fetchUnreadChatCount]));
 
-  const handleLogout = () => { authStore.clear(); router.replace('/login' as never); };
+  const handleLogout = () => {
+    authStore.clear();
+    // Drop the old user's sockets so the next login connects with its own token.
+    friendZoneSocketStore.disconnect();
+    chatSocketStore.disconnect();
+    socketStore.leave();
+    router.replace('/login' as never);
+  };
+
+  const logoutAllDevices = async () => {
+    const token = authStore.getToken();
+    if (!token) return;
+    // Close this device's sockets first so the server's "session revoked"
+    // notice reaches only the other devices.
+    friendZoneSocketStore.disconnect();
+    chatSocketStore.disconnect();
+    const res = await apiLogoutAllDevices(token);
+    if (res.ok) { handleLogout(); return; }
+    if (!authStore.getToken()) return; // already signed out by the 401 handler
+    friendZoneSocketStore.connect();
+    chatSocketStore.connect();
+    Alert.alert("Couldn't log out", res.message);
+  };
+
+  const confirmLogoutAll = () => {
+    Alert.alert(
+      'Log out of all devices?',
+      'You will be logged out everywhere your account is signed in, including this device.',
+      [
+        { text: 'Cancel', style: 'cancel' },
+        { text: 'Log Out', style: 'destructive', onPress: logoutAllDevices },
+      ],
+    );
+  };
 
   const handleLanguageSelect = async (langId: string) => {
     setCurrentLang(langId);
+    authStore.setLanguage(langId);
     try {
       const token = authStore.getToken();
       await fetch(`${BASE_URL}/auth/language`, {
@@ -381,69 +470,82 @@ export default function ProfileScreen() {
   const avatarUri = resolveUrl(profile.avatar_url);
   const coverUri = resolveUrl(profile.cover_url);
   const displayName = profile.full_name || profile.username || profile.phone;
-  const initials = displayName.split(' ').map((w: string) => w[0]).join('').toUpperCase().slice(0, 2);
-  const genderLabel = profile.gender ? profile.gender.charAt(0).toUpperCase() + profile.gender.slice(1) : null;
+  // What this account logged in with — own profile only, never shown to others
+  const showEmail = authStore.getUser()?.loginMethod === 'email' && !!profile.email;
 
   return (
-    <SafeAreaView style={s.safe} edges={['top']}>
-      <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={{ paddingBottom: 40 }}>
+    <View style={s.safe}>
+      {/* White status bar icons over the cover — only while this tab is focused */}
+      {isFocused && <StatusBar style="light" />}
+      <Animated.ScrollView
+        showsVerticalScrollIndicator={false}
+        contentContainerStyle={{ paddingBottom: 40, minHeight: scroll.contentMinHeight }}
+        onScroll={scroll.onScroll}
+        scrollEventThrottle={16}>
 
-        {/* Cover */}
-        <View style={s.coverWrap}>
-          {coverUri ? (
-            <Image source={{ uri: coverUri }} style={s.cover} resizeMode="cover" />
-          ) : (
-            <LinearGradient colors={['#4B00E8', '#7A04E5', '#B40CF0', '#FF2A76']} start={{ x: 0, y: 0 }} end={{ x: 1, y: 1 }} style={s.cover} />
-          )}
-          <TouchableOpacity style={s.backBtn} onPress={() => router.back()}>
-            <Ionicons name="chevron-back" size={22} color="#FFFFFF" />
+        {/* Cover — extends up behind the status bar; tap to view it full screen */}
+        <Animated.View style={[s.coverWrap, { height: COVER_H + insets.top }, scroll.coverStyle]}>
+          <TouchableOpacity
+            style={StyleSheet.absoluteFill}
+            activeOpacity={0.9}
+            disabled={!coverUri}
+            onPress={() => setViewing('cover')}
+            accessibilityLabel="View cover photo">
+            {coverUri ? (
+              <Image source={{ uri: coverUri }} style={StyleSheet.absoluteFill} resizeMode="cover" />
+            ) : (
+              <LinearGradient colors={['#4B00E8', '#7A04E5', '#B40CF0', '#FF2A76']} start={{ x: 0, y: 0 }} end={{ x: 1, y: 1 }} style={StyleSheet.absoluteFill} />
+            )}
           </TouchableOpacity>
-          <TouchableOpacity style={s.menuBtn} onPress={() => setShowMenu(true)}>
-            <Ionicons name="ellipsis-horizontal" size={22} color="#FFFFFF" />
-          </TouchableOpacity>
-        </View>
+          <Animated.View pointerEvents="none" style={[StyleSheet.absoluteFill, s.coverDim, scroll.coverDimStyle]} />
+        </Animated.View>
+
+        {/* Everything below the cover slides up over it on scroll */}
+        <View style={s.profileBody}>
+        <View style={s.profileBodyBg} />
 
         {/* Avatar + stats */}
         <View style={s.avatarRow}>
-          <View style={s.avatarWrap}>
-            {avatarUri ? (
-              <Image source={{ uri: avatarUri }} style={s.avatar} />
-            ) : (
-              <LinearGradient colors={['#7A0EED', '#B50357']} style={s.avatar}>
-                <Text style={s.avatarInitials}>{initials}</Text>
-              </LinearGradient>
-            )}
-            {profile.is_phone_verified && (
-              <View style={s.verifiedDot}>
-                <Ionicons name="checkmark" size={9} color="#FFFFFF" />
-              </View>
-            )}
-            {/* Level badge floating at bottom-centre of avatar */}
-            <TouchableOpacity style={s.levelBadgeAbs} onPress={() => router.push('/id-level' as any)} activeOpacity={0.85}>
-              <UserLevelBadge size="xl" />
+          <Animated.View style={[s.avatarWrap, scroll.avatarStyle]}>
+            <TouchableOpacity
+              activeOpacity={0.9}
+              disabled={!avatarUri}
+              onPress={() => setViewing('avatar')}
+              accessibilityLabel="View profile photo">
+              <Image source={avatarSource(avatarUri, profile.gender)} style={s.avatar} />
             </TouchableOpacity>
-          </View>
-          <View style={s.statsRow}>
-            <StatBox value={profile.followers_count} label="Followers" />
-            <View style={s.statDivider} />
-            <StatBox value={profile.following_count} label="Following" />
-            <View style={s.statDivider} />
-            <StatBox value={profile.posts_count} label="Posts" />
+          </Animated.View>
+          {/* @username on top, stats below — beside the avatar */}
+          <View style={s.infoCol}>
+            {profile.username && <Text style={s.username} numberOfLines={1}>@{profile.username}</Text>}
+            <View style={s.statsRow}>
+              <StatBox value={profile.followers_count} label="Followers" />
+              <View style={s.statDivider} />
+              <StatBox value={profile.following_count} label="Following" />
+              <View style={s.statDivider} />
+              <StatBox value={profile.posts_count} label="Posts" />
+            </View>
           </View>
         </View>
 
-        {/* Name / username / gender / bio */}
+        {/* Name / bio */}
         <View style={s.nameBlock}>
           <Text style={s.displayName}>{displayName}</Text>
-          {profile.username && <Text style={s.username}>@{profile.username}</Text>}
-          {genderLabel && (
-            <View style={s.genderBadge}>
-              <Ionicons name={genderLabel === 'Female' ? 'female-outline' : genderLabel === 'Male' ? 'male-outline' : 'person-outline'} size={12} color="#7A0EED" />
-              <Text style={s.genderBadgeText}>{genderLabel}</Text>
-            </View>
+          {profile.bio ? (
+            <Text style={s.bio}>{profile.bio}</Text>
+          ) : (
+            <TouchableOpacity style={s.addBio} onPress={() => router.push('/profile/edit' as any)} activeOpacity={0.7}>
+              <Ionicons name="add-circle-outline" size={14} color="#7A0EED" />
+              <Text style={s.addBioText}>Add bio</Text>
+            </TouchableOpacity>
           )}
-          {profile.bio ? <Text style={s.bio}>{profile.bio}</Text> : null}
+          <View style={s.contactRow}>
+            <Ionicons name={showEmail ? 'mail' : 'call'} size={13} color="#7A0EED" />
+            <Text style={s.contactText} numberOfLines={1}>{showEmail ? profile.email : formatPhone(profile.phone)}</Text>
+          </View>
         </View>
+
+        <ProfileTags isAgency={profile.role === 'agency'} gender={profile.gender} />
 
         {/* Edit + chat + share */}
         <View style={s.actionRow}>
@@ -451,7 +553,7 @@ export default function ProfileScreen() {
             <Text style={s.editBtnText}>Edit Profile</Text>
           </TouchableOpacity>
           <TouchableOpacity style={s.shareBtn} onPress={() => router.push('/chat' as any)} activeOpacity={0.85}>
-            <Ionicons name="chatbubble-ellipses-outline" size={18} color="#7A0EED" />
+            <Ionicons name="chatbubble-ellipses-outline" size={17} color="#7A0EED" />
             {unreadChatCount > 0 && (
               <View style={s.chatBadge}>
                 <Text style={s.chatBadgeText}>{unreadChatCount > 10 ? '10+' : unreadChatCount}</Text>
@@ -459,17 +561,17 @@ export default function ProfileScreen() {
             )}
           </TouchableOpacity>
           <TouchableOpacity style={s.shareBtn} activeOpacity={0.85}>
-            <Ionicons name="share-social-outline" size={18} color="#7A0EED" />
+            <Ionicons name="share-social-outline" size={17} color="#7A0EED" />
           </TouchableOpacity>
         </View>
 
         {/* Tabs */}
         <View style={s.tabRow}>
           <TouchableOpacity style={[s.tab, activeTab === 'posts' && s.tabActive]} onPress={() => setActiveTab('posts')} activeOpacity={0.8}>
-            <Ionicons name="grid-outline" size={20} color={activeTab === 'posts' ? '#7A0EED' : '#ABADB2'} />
+            <Ionicons name="grid-outline" size={19} color={activeTab === 'posts' ? '#7A0EED' : '#ABADB2'} />
           </TouchableOpacity>
           <TouchableOpacity style={[s.tab, activeTab === 'liked' && s.tabActive]} onPress={() => setActiveTab('liked')} activeOpacity={0.8}>
-            <Ionicons name="heart-outline" size={20} color={activeTab === 'liked' ? '#7A0EED' : '#ABADB2'} />
+            <Ionicons name="heart-outline" size={19} color={activeTab === 'liked' ? '#7A0EED' : '#ABADB2'} />
           </TouchableOpacity>
         </View>
 
@@ -479,7 +581,23 @@ export default function ProfileScreen() {
             <Text style={s.emptyGridText}>No liked posts</Text>
           </View>
         )}
-      </ScrollView>
+      </View>
+      </Animated.ScrollView>
+
+      {/* Pinned, so back and the menu stay reachable while the page scrolls */}
+      <TouchableOpacity style={[s.backBtn, { top: insets.top + 8 }]} onPress={() => router.back()}>
+        <Ionicons name="chevron-back" size={22} color="#FFFFFF" />
+      </TouchableOpacity>
+      <TouchableOpacity style={[s.menuBtn, { top: insets.top + 8 }]} onPress={() => setShowMenu(true)}>
+        <Ionicons name="ellipsis-horizontal" size={22} color="#FFFFFF" />
+      </TouchableOpacity>
+
+      <ImageViewer
+        uri={viewing === 'cover' ? coverUri ?? null : viewing === 'avatar' ? avatarUri ?? null : null}
+        title={viewing === 'cover' ? 'Cover photo' : 'Profile photo'}
+        subtitle={displayName}
+        onClose={() => setViewing(null)}
+      />
 
       {/* Sheets */}
       <MenuSheet
@@ -488,6 +606,8 @@ export default function ProfileScreen() {
         onEditProfile={() => router.push('/profile/edit' as any)}
         onChangeLanguage={() => setShowLang(true)}
         onLogout={handleLogout}
+        onLogoutAll={confirmLogoutAll}
+        onAgencyWallet={profile.role === 'agency' && profile.agency_id ? () => router.push('/agency-wallet' as any) : undefined}
       />
       <LanguageSheet
         visible={showLang}
@@ -495,7 +615,7 @@ export default function ProfileScreen() {
         currentLang={currentLang}
         onSelect={handleLanguageSelect}
       />
-    </SafeAreaView>
+    </View>
   );
 }
 
@@ -506,34 +626,39 @@ const s = StyleSheet.create({
   errorText: { fontSize: 14, color: '#ABADB2' },
 
   coverWrap: { width: SCREEN_W, height: COVER_H },
-  cover:     { width: SCREEN_W, height: COVER_H },
-  backBtn:   { position: 'absolute', top: 14, left: 14, width: 36, height: 36, borderRadius: 18, backgroundColor: 'rgba(0,0,0,0.35)', alignItems: 'center', justifyContent: 'center' },
-  menuBtn:   { position: 'absolute', top: 14, right: 14, width: 36, height: 36, borderRadius: 18, backgroundColor: 'rgba(0,0,0,0.35)', alignItems: 'center', justifyContent: 'center' },
+  backBtn:   { position: 'absolute', top: 10, left: 12, width: 32, height: 32, borderRadius: 16, backgroundColor: 'rgba(0,0,0,0.35)', alignItems: 'center', justifyContent: 'center' },
+  menuBtn:   { position: 'absolute', top: 10, right: 12, width: 32, height: 32, borderRadius: 16, backgroundColor: 'rgba(0,0,0,0.35)', alignItems: 'center', justifyContent: 'center' },
 
-  avatarRow:      { flexDirection: 'row', alignItems: 'center', paddingHorizontal: 16, marginTop: -(AVATAR_SIZE / 2), gap: 12 },
-  avatarWrap:     { position: 'relative', width: AVATAR_SIZE, height: AVATAR_SIZE },
-  levelBadgeAbs:  { position: 'absolute', bottom: -65, left: (AVATAR_SIZE - 100) / 2 },
-  avatar:         { width: AVATAR_SIZE, height: AVATAR_SIZE, borderRadius: AVATAR_SIZE / 2, borderWidth: 3, borderColor: '#FFFFFF', alignItems: 'center', justifyContent: 'center' },
-  avatarInitials: { fontSize: 28, fontWeight: '800', color: '#FFFFFF' },
-  verifiedDot:    { position: 'absolute', bottom: 4, right: 4, width: 20, height: 20, borderRadius: 10, backgroundColor: '#059669', borderWidth: 2, borderColor: '#FFFFFF', alignItems: 'center', justifyContent: 'center' },
+  coverDim:      { backgroundColor: '#000000' },
+  // Overlaps the cover by the avatar's overhang; the white panel starts below
+  // that, so the avatar sits half on the cover and the page slides over it
+  profileBody:   { marginTop: -AVATAR_OVERLAP },
+  profileBodyBg: { position: 'absolute', top: AVATAR_OVERLAP, left: 0, right: 0, bottom: -40, backgroundColor: '#FFFFFF', borderTopLeftRadius: 18, borderTopRightRadius: 18 },
+  avatarRow:      { flexDirection: 'row', alignItems: 'flex-start', paddingHorizontal: 14, gap: 10 },
+  avatarWrap:     { position: 'relative', width: AVATAR_SIZE, height: AVATAR_SIZE, transformOrigin: 'left bottom' },
+  avatar:         { width: AVATAR_SIZE, height: AVATAR_SIZE, borderRadius: AVATAR_SIZE / 2, borderWidth: 2.5, borderColor: '#FFFFFF', alignItems: 'center', justifyContent: 'center' },
+  avatarInitials: { fontSize: 24, fontWeight: '800', color: '#FFFFFF' },
 
-  statsRow:    { flex: 1, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-around', marginTop: AVATAR_SIZE / 2 + 4 },
+  infoCol:     { flex: 1, marginTop: AVATAR_OVERLAP + 6, gap: 6 },
+  username:    { fontSize: 15, color: '#7A0EED', fontWeight: '700' },
+  statsRow:    { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-around' },
   statBox:     { alignItems: 'center', flex: 1 },
-  statValue:   { fontSize: 18, fontWeight: '800', color: '#1C1E22' },
-  statLabel:   { fontSize: 11, color: '#ABADB2', fontWeight: '600', marginTop: 1 },
-  statDivider: { width: 1, height: 28, backgroundColor: '#EBEBEB' },
+  statValue:   { fontSize: 16, fontWeight: '700', color: '#1C1E22' },
+  statLabel:   { fontSize: 12, color: '#8A8C93', fontWeight: '500' },
+  statDivider: { width: 1, height: 22, backgroundColor: '#EBEBEB' },
 
-  nameBlock:   { paddingHorizontal: 18, marginTop: 48, gap: 4 },
-  displayName: { fontSize: 19, fontWeight: '800', color: '#1C1E22' },
-  username:    { fontSize: 13, color: '#7A0EED', fontWeight: '600' },
-  genderBadge: { flexDirection: 'row', alignItems: 'center', gap: 4, alignSelf: 'flex-start', backgroundColor: '#F4EEFF', borderRadius: 20, paddingHorizontal: 9, paddingVertical: 3 },
-  genderBadgeText: { fontSize: 11, fontWeight: '700', color: '#7A0EED' },
-  bio:         { fontSize: 13, color: '#60626A', lineHeight: 19, marginTop: 2 },
+  nameBlock:   { paddingHorizontal: 16, marginTop: 8, gap: 2 },
+  displayName: { fontSize: 18, fontWeight: '800', color: '#1C1E22' },
+  bio:         { fontSize: 14, color: '#3A3C42', lineHeight: 20, marginTop: 2 },
+  contactRow:  { flexDirection: 'row', alignItems: 'center', gap: 5, marginTop: 5 },
+  contactText: { flexShrink: 1, fontSize: 13, fontWeight: '500', color: '#60626A' },
+  addBio:      { flexDirection: 'row', alignItems: 'center', gap: 4, alignSelf: 'flex-start', marginTop: 2 },
+  addBioText:  { fontSize: 13, fontWeight: '600', color: '#7A0EED' },
 
-  actionRow:   { flexDirection: 'row', gap: 10, paddingHorizontal: 18, marginTop: 14 },
-  editBtn:     { flex: 1, height: 38, borderRadius: 20, borderWidth: 1.5, borderColor: '#7A0EED', alignItems: 'center', justifyContent: 'center' },
-  editBtnText: { fontSize: 14, fontWeight: '700', color: '#7A0EED' },
-  shareBtn:    { width: 38, height: 38, borderRadius: 20, borderWidth: 1.5, borderColor: '#7A0EED', alignItems: 'center', justifyContent: 'center', position: 'relative' },
+  actionRow:   { flexDirection: 'row', gap: 8, paddingHorizontal: 16, marginTop: 10 },
+  editBtn:     { flex: 1, height: 34, borderRadius: 17, borderWidth: 1.5, borderColor: '#7A0EED', alignItems: 'center', justifyContent: 'center' },
+  editBtnText: { fontSize: 13.5, fontWeight: '700', color: '#7A0EED' },
+  shareBtn:    { width: 34, height: 34, borderRadius: 17, borderWidth: 1.5, borderColor: '#7A0EED', alignItems: 'center', justifyContent: 'center', position: 'relative' },
   chatBadge: {
     position: 'absolute', top: -4, right: -4,
     minWidth: 18, height: 18, borderRadius: 9, paddingHorizontal: 4,
@@ -542,8 +667,8 @@ const s = StyleSheet.create({
   },
   chatBadgeText: { fontSize: 10, fontWeight: '700', color: '#FFFFFF' },
 
-  tabRow:    { flexDirection: 'row', borderTopWidth: StyleSheet.hairlineWidth, borderTopColor: '#EBEBEB', marginTop: 18 },
-  tab:       { flex: 1, height: 44, alignItems: 'center', justifyContent: 'center' },
+  tabRow:    { flexDirection: 'row', borderTopWidth: StyleSheet.hairlineWidth, borderTopColor: '#EBEBEB', marginTop: 10 },
+  tab:       { flex: 1, height: 40, alignItems: 'center', justifyContent: 'center' },
   tabActive: { borderBottomWidth: 2, borderBottomColor: '#7A0EED' },
 
   emptyGrid:     { alignItems: 'center', justifyContent: 'center', paddingVertical: 48, gap: 10 },
@@ -552,24 +677,24 @@ const s = StyleSheet.create({
 
   // Bottom sheet
   backdrop:    { ...StyleSheet.absoluteFillObject, backgroundColor: 'rgba(0,0,0,0.45)' },
-  sheet:       { position: 'absolute', bottom: 0, left: 0, right: 0, backgroundColor: '#FFFFFF', borderTopLeftRadius: 26, borderTopRightRadius: 26, paddingTop: 8, shadowColor: '#000', shadowOpacity: 0.18, shadowRadius: 20, elevation: 20 },
-  sheetHandle: { width: 40, height: 4, borderRadius: 2, backgroundColor: '#E0DDF5', alignSelf: 'center', marginBottom: 12 },
-  sheetTitle:  { fontSize: 16, fontWeight: '800', color: '#1C1E22', paddingHorizontal: 20, marginBottom: 12 },
+  sheet:       { position: 'absolute', bottom: 0, left: 0, right: 0, backgroundColor: '#FFFFFF', borderTopLeftRadius: 22, borderTopRightRadius: 22, paddingTop: 8, shadowColor: '#000', shadowOpacity: 0.18, shadowRadius: 20, elevation: 20 },
+  sheetHandle: { width: 36, height: 4, borderRadius: 2, backgroundColor: '#E0DDF5', alignSelf: 'center', marginBottom: 10 },
+  sheetTitle:  { fontSize: 16, fontWeight: '800', color: '#1C1E22', paddingHorizontal: 16, marginBottom: 6 },
 
   // Menu items
-  menuItem:     { flexDirection: 'row', alignItems: 'center', gap: 14, paddingHorizontal: 20, paddingVertical: 14 },
-  menuIcon:     { width: 36, height: 36, borderRadius: 12, backgroundColor: '#F4EEFF', alignItems: 'center', justifyContent: 'center' },
-  menuItemText: { flex: 1, fontSize: 15, fontWeight: '600', color: '#1C1E22' },
-  menuDivider:  { height: StyleSheet.hairlineWidth, backgroundColor: '#F0EDF8', marginHorizontal: 20, marginVertical: 4 },
+  menuItem:     { flexDirection: 'row', alignItems: 'center', gap: 12, paddingHorizontal: 16, paddingVertical: 10 },
+  menuItemText: { flex: 1, fontSize: 14, fontWeight: '600', color: '#1C1E22' },
+  menuDivider:  { height: StyleSheet.hairlineWidth, backgroundColor: '#F0EDF8', marginHorizontal: 16, marginVertical: 4 },
 
   // Language items
-  langItem:   { flexDirection: 'row', alignItems: 'center', paddingHorizontal: 20, paddingVertical: 13, borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: '#F5F3FA' },
-  langLabel:  { fontSize: 14, fontWeight: '700', color: '#1C1E22' },
-  langNative: { fontSize: 12, color: '#ABADB2', marginTop: 1 },
+  // Language sheet — the login language screen's background, which its cards are designed on
+  langSheet:       { backgroundColor: LANGUAGE_PICKER_BG },
+  langSheetBody:   { paddingHorizontal: 20 },
+  langSheetFooter: { marginTop: 6 },
 
   // Edit profile fields
   fieldWrap:  { gap: 6 },
-  fieldLabel: { fontSize: 12, fontWeight: '700', color: '#ABADB2', letterSpacing: 0.4, textTransform: 'uppercase' },
+  fieldLabel: { fontSize: 12, fontWeight: '700', color: '#ABADB2', letterSpacing: 0.4, },
   fieldInput: { backgroundColor: '#F7F5FF', borderRadius: 14, paddingHorizontal: 14, paddingVertical: Platform.OS === 'ios' ? 12 : 9, fontSize: 14, color: '#1C1E22', borderWidth: 1, borderColor: '#E8E5F5' },
 
   genderRow:         { flexDirection: 'row', flexWrap: 'wrap', gap: 8 },

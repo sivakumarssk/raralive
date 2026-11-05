@@ -1,7 +1,9 @@
 import { Ionicons } from '@expo/vector-icons';
 import { LinearGradient } from 'expo-linear-gradient';
-import { useRef, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import {
+  ActivityIndicator,
+  Alert,
   Dimensions,
   FlatList,
   Image,
@@ -16,7 +18,7 @@ import {
 } from 'react-native';
 import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
 import { AppScreenHeader } from '@/components/ui/app-screen-header';
-import { BASE_URL } from '@/services/api';
+import { apiPostTags, BASE_URL, type PostTag } from '@/services/api';
 import { authStore } from '@/store/auth-store';
 
 import type { MediaAsset } from './create-screen';
@@ -24,21 +26,18 @@ import type { MediaAsset } from './create-screen';
 const { width: SCREEN_W } = Dimensions.get('window');
 const PREVIEW_SIZE = SCREEN_W - 32;
 
-// Tags shown as suggestions only — user taps to add or types custom
-const TRENDING_TAGS = [
-  '#vibecheck', '#raralive', '#ootd', '#weekend',
-  '#creative', '#lifestyle', '#music', '#mood',
-  '#trending', '#viral', '#fyp', '#explore',
-];
+// Tags come from Admin → Post Tags (Home tabs + their sub tags); users can
+// only pick from these. Same cap as the server.
+const MAX_TAGS = 10;
 
 const CATEGORIES = [
-  { id: 'featured',       label: 'FEATURED',       icon: 'star' as const },
-  { id: 'music',          label: 'MUSIC',           icon: 'musical-note' as const },
-  { id: 'gaming',         label: 'GAMING',          icon: 'game-controller' as const },
-  { id: 'entertainment',  label: 'ENTERTAINMENT',   icon: 'tv' as const },
-  { id: 'art',            label: 'ART',             icon: 'color-palette' as const },
-  { id: 'sports',         label: 'SPORTS',          icon: 'football' as const },
-  { id: 'food',           label: 'FOOD',            icon: 'restaurant' as const },
+  { id: 'featured',       label: 'Featured',       icon: 'star' as const },
+  { id: 'music',          label: 'Music',           icon: 'musical-note' as const },
+  { id: 'gaming',         label: 'Gaming',          icon: 'game-controller' as const },
+  { id: 'entertainment',  label: 'Entertainment',   icon: 'tv' as const },
+  { id: 'art',            label: 'Art',             icon: 'color-palette' as const },
+  { id: 'sports',         label: 'Sports',          icon: 'football' as const },
+  { id: 'food',           label: 'Food',            icon: 'restaurant' as const },
 ];
 
 
@@ -54,9 +53,9 @@ export function PostScreen({ assets, onBack, onPublish }: PostScreenProps) {
   const TAB_BAR_HEIGHT = Platform.OS === 'ios' ? 80 : 56 + bottomInset;
 
   const [caption, setCaption] = useState('');
-  const [tags, setTags] = useState<string[]>([]);
-  const [customTagInput, setCustomTagInput] = useState('');
-  const [showTagInput, setShowTagInput] = useState(false);
+  const [tagGroups, setTagGroups] = useState<PostTag[]>([]);
+  const [tagsLoading, setTagsLoading] = useState(true);
+  const [selectedTagIds, setSelectedTagIds] = useState<string[]>([]);
   const [selectedCategory, setSelectedCategory] = useState('featured');
   const [allowComments, setAllowComments] = useState(true);
   const [previewIndex, setPreviewIndex] = useState(0);
@@ -66,22 +65,19 @@ export function PostScreen({ assets, onBack, onPublish }: PostScreenProps) {
   const MAX_CAPTION = 2200;
   const primary = assets[0];
 
-  const addTag = (tag: string) => {
-    if (!tags.includes(tag)) setTags((prev) => [...prev, tag]);
-  };
+  useEffect(() => {
+    apiPostTags().then(r => { if (r.ok) setTagGroups(r.data); }).finally(() => setTagsLoading(false));
+  }, []);
 
-  const removeTag = (tag: string) => {
-    setTags((prev) => prev.filter((t) => t !== tag));
-  };
-
-  const addCustomTag = () => {
-    let raw = customTagInput.trim().replace(/\s+/g, '').toLowerCase();
-    if (!raw) return;
-    if (!raw.startsWith('#')) raw = '#' + raw;
-    if (raw.length < 2) return;
-    addTag(raw);
-    setCustomTagInput('');
-    setShowTagInput(false);
+  const toggleTag = (id: string) => {
+    setSelectedTagIds(prev => {
+      if (prev.includes(id)) return prev.filter(t => t !== id);
+      if (prev.length >= MAX_TAGS) {
+        Alert.alert('Tag limit', `You can pick up to ${MAX_TAGS} tags.`);
+        return prev;
+      }
+      return [...prev, id];
+    });
   };
 
   const handlePublish = async () => {
@@ -91,7 +87,7 @@ export function PostScreen({ assets, onBack, onPublish }: PostScreenProps) {
       const form = new FormData();
       if (caption.trim()) form.append('caption', caption.trim());
       if (selectedCategory) form.append('category', selectedCategory);
-      form.append('tags', JSON.stringify(tags));
+      form.append('tag_ids', JSON.stringify(selectedTagIds));
       form.append('allow_comments', String(allowComments));
       for (const asset of assets) {
         const filename = asset.uri.split('/').pop() ?? 'media';
@@ -114,9 +110,6 @@ export function PostScreen({ assets, onBack, onPublish }: PostScreenProps) {
     }
   };
 
-  // Trending suggestions not yet added
-  const suggestions = TRENDING_TAGS.filter((t) => !tags.includes(t));
-
   return (
     <SafeAreaView style={styles.safe} edges={['top']}>
 
@@ -133,7 +126,7 @@ export function PostScreen({ assets, onBack, onPublish }: PostScreenProps) {
             <>
               <Image source={{ uri: primary.uri }} style={styles.previewImage} resizeMode="contain" />
               <View style={styles.previewBadge}>
-                <Text style={styles.previewBadgeText}>PREVIEW</Text>
+                <Text style={styles.previewBadgeText}>Preview</Text>
               </View>
               {primary.mediaType === 'video' && (
                 <View style={styles.playOverlay}>
@@ -220,73 +213,46 @@ export function PostScreen({ assets, onBack, onPublish }: PostScreenProps) {
             <Text style={styles.sectionTitle}>Tags</Text>
           </View>
 
-          {/* Added tags row */}
-          {tags.length > 0 && (
-            <View style={styles.tagsWrap}>
-              {tags.map((tag) => (
-                <TouchableOpacity
-                  key={tag}
-                  style={styles.tagAdded}
-                  onPress={() => removeTag(tag)}
-                  activeOpacity={0.8}>
-                  <Text style={styles.tagAddedText}>{tag}</Text>
-                  <Ionicons name="close-circle" size={14} color="#7A0EED" />
-                </TouchableOpacity>
-              ))}
-            </View>
-          )}
-
-          {/* Custom tag input field */}
-          {showTagInput ? (
-            <View style={styles.tagInputRow}>
-              <View style={styles.tagInputBox}>
-                <Text style={styles.tagHash}>#</Text>
-                <TextInput
-                  style={styles.tagInput}
-                  placeholder="your tag"
-                  placeholderTextColor="#C4C5CC"
-                  value={customTagInput}
-                  onChangeText={(v) => setCustomTagInput(v.replace(/\s/g, '').replace(/^#+/, ''))}
-                  autoCapitalize="none"
-                  autoFocus
-                  returnKeyType="done"
-                  onSubmitEditing={addCustomTag}
-                />
-              </View>
-              <TouchableOpacity style={styles.tagConfirmBtn} onPress={addCustomTag} activeOpacity={0.85}>
-                <Ionicons name="checkmark" size={18} color="#FFFFFF" />
-              </TouchableOpacity>
-              <TouchableOpacity
-                onPress={() => { setShowTagInput(false); setCustomTagInput(''); }}
-                hitSlop={10}>
-                <Ionicons name="close" size={20} color="#ABADB2" />
-              </TouchableOpacity>
-            </View>
+          {tagsLoading ? (
+            <ActivityIndicator color="#7A0EED" style={{ marginVertical: 12 }} />
+          ) : tagGroups.length === 0 ? (
+            <Text style={styles.allAddedText}>No tags available yet</Text>
           ) : (
-            <TouchableOpacity style={styles.tagAddBtn} onPress={() => setShowTagInput(true)} activeOpacity={0.8}>
-              <Ionicons name="add-circle-outline" size={16} color="#7A0EED" />
-              <Text style={styles.tagAddBtnText}>Add tag</Text>
-            </TouchableOpacity>
-          )}
-
-          {/* Trending suggestions — always visible, tap to add */}
-          <View style={styles.suggestionsWrap}>
-            <Text style={styles.suggestionsLabel}>Trending</Text>
-            <View style={styles.tagsWrap}>
-              {suggestions.map((tag) => (
-                <TouchableOpacity
-                  key={tag}
-                  style={styles.tagSuggestion}
-                  onPress={() => addTag(tag)}
-                  activeOpacity={0.8}>
-                  <Text style={styles.tagSuggestionText}>{tag}</Text>
-                </TouchableOpacity>
+            <>
+              <Text style={styles.suggestionsLabel}>
+                Pick tags for your post{selectedTagIds.length ? ` · ${selectedTagIds.length} selected` : ''}
+              </Text>
+              {tagGroups.map(group => (
+                <View key={group.id} style={styles.tagGroup}>
+                  {/* The Home tab itself is pickable too */}
+                  <TouchableOpacity
+                    onPress={() => toggleTag(group.id)}
+                    activeOpacity={0.8}
+                    style={[styles.tagGroupHeader, selectedTagIds.includes(group.id) && styles.tagPicked]}>
+                    {selectedTagIds.includes(group.id) && <Ionicons name="checkmark" size={13} color="#FFFFFF" />}
+                    <Text style={[styles.tagGroupHeaderText, selectedTagIds.includes(group.id) && styles.tagPickedText]}>#{group.name}</Text>
+                  </TouchableOpacity>
+                  {!!group.children?.length && (
+                    <View style={styles.tagsWrap}>
+                      {group.children.map(sub => {
+                        const picked = selectedTagIds.includes(sub.id);
+                        return (
+                          <TouchableOpacity
+                            key={sub.id}
+                            style={[styles.tagSuggestion, picked && styles.tagPicked]}
+                            onPress={() => toggleTag(sub.id)}
+                            activeOpacity={0.8}>
+                            {picked && <Ionicons name="checkmark" size={13} color="#FFFFFF" />}
+                            <Text style={[styles.tagSuggestionText, picked && styles.tagPickedText]}>{sub.name}</Text>
+                          </TouchableOpacity>
+                        );
+                      })}
+                    </View>
+                  )}
+                </View>
               ))}
-              {suggestions.length === 0 && (
-                <Text style={styles.allAddedText}>All trending tags added ✓</Text>
-              )}
-            </View>
-          </View>
+            </>
+          )}
         </View>
 
         {/* ── Category ── */}
@@ -434,7 +400,7 @@ const styles = StyleSheet.create({
     paddingHorizontal: 10,
     paddingVertical: 5,
   },
-  previewBadgeText: { fontSize: 11, fontWeight: '800', color: '#FFFFFF', letterSpacing: 1.2 },
+  previewBadgeText: { fontSize: 11, fontWeight: '800', color: '#FFFFFF', letterSpacing: 0.3 },
   playOverlay: { ...StyleSheet.absoluteFillObject, alignItems: 'center', justifyContent: 'center' },
   playCircle: {
     width: 60, height: 60, borderRadius: 30,
@@ -465,55 +431,23 @@ const styles = StyleSheet.create({
   // Tag chip rows
   tagsWrap: { flexDirection: 'row', flexWrap: 'wrap', gap: 8 },
 
-  // Added / selected tags (purple, with × to remove)
-  tagAdded: {
-    height: 34, paddingHorizontal: 12,
-    borderRadius: 999, backgroundColor: '#F3EBFF',
-    borderWidth: 1, borderColor: '#7A0EED',
-    flexDirection: 'row', alignItems: 'center', gap: 5,
-  },
-  tagAddedText: { fontSize: 13, fontWeight: '700', color: '#7A0EED' },
-
-  // Custom input row
-  tagInputRow: { flexDirection: 'row', alignItems: 'center', gap: 8 },
-  tagInputBox: {
-    flex: 1, height: 42, borderRadius: 12,
-    backgroundColor: '#F7F5FF', borderWidth: 1.5, borderColor: '#7A0EED',
-    flexDirection: 'row', alignItems: 'center', paddingHorizontal: 12, gap: 4,
-  },
-  tagHash: { fontSize: 15, fontWeight: '800', color: '#7A0EED' },
-  tagInput: { flex: 1, fontSize: 14, color: '#1C1E22', height: 42 },
-  tagConfirmBtn: {
-    width: 42, height: 42, borderRadius: 12,
-    backgroundColor: '#7A0EED', alignItems: 'center', justifyContent: 'center',
-  },
-
-  // "Add tag" link button
-  tagAddBtn: {
-    flexDirection: 'row', alignItems: 'center', gap: 5,
-    alignSelf: 'flex-start', paddingVertical: 4,
-  },
-  tagAddBtnText: { fontSize: 13, fontWeight: '600', color: '#7A0EED' },
-
-  // Trending suggestions block
-  suggestionsWrap: {
-    backgroundColor: '#FFFFFF',
-    borderRadius: 14,
-    padding: 12,
-    gap: 10,
-    shadowColor: '#4A0099',
-    shadowOpacity: 0.04,
-    shadowRadius: 6,
-    shadowOffset: { width: 0, height: 2 },
-    elevation: 1,
-  },
   suggestionsLabel: { fontSize: 11, fontWeight: '700', color: '#ABADB2', letterSpacing: 0.8 },
   tagSuggestion: {
     height: 32, paddingHorizontal: 13,
     borderRadius: 999, backgroundColor: '#F5F3FA',
-    alignItems: 'center', justifyContent: 'center',
+    flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 4,
     borderWidth: 1, borderColor: '#E8E6F0',
   },
+  // Admin tag picker: one block per Home tab, its sub tags below
+  tagGroup: { gap: 8, marginTop: 4 },
+  tagGroupHeader: {
+    alignSelf: 'flex-start', flexDirection: 'row', alignItems: 'center', gap: 4,
+    height: 30, paddingHorizontal: 12, borderRadius: 8,
+    backgroundColor: '#F3EBFF', borderWidth: 1, borderColor: '#E0D2FF',
+  },
+  tagGroupHeaderText: { fontSize: 13, fontWeight: '800', color: '#7A0EED' },
+  tagPicked: { backgroundColor: '#7A0EED', borderColor: '#7A0EED' },
+  tagPickedText: { color: '#FFFFFF', fontWeight: '700' },
   tagSuggestionText: { fontSize: 13, fontWeight: '500', color: '#6B6E7A' },
   allAddedText: { fontSize: 13, color: '#ABADB2', fontStyle: 'italic' },
 

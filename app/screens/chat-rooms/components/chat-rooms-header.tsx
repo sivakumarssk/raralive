@@ -22,7 +22,7 @@ export function ChatRoomsHeader({ onStatsPress, onLeaderboardPress, onLevelPress
         style={styles.maskedContainer}
         maskElement={
           <View style={styles.maskContent}>
-            <Text style={styles.brandText}>Rara Live</Text>
+            <Text style={styles.brandText}>RaRa Live</Text>
           </View>
         }>
         <LinearGradient
@@ -36,22 +36,22 @@ export function ChatRoomsHeader({ onStatsPress, onLeaderboardPress, onLevelPress
       {/* Right icons */}
       <View style={styles.rightIcons}>
         {/* Coin icon */}
-        <TouchableOpacity onPress={onStatsPress} style={styles.iconButton} activeOpacity={0.75}>
+        <TouchableOpacity onPress={onStatsPress} style={styles.iconButton} activeOpacity={0.75} hitSlop={8}>
           <Image source={COIN_IMG} style={styles.iconImg} resizeMode="contain" />
         </TouchableOpacity>
 
         {/* Leaderboard icon */}
-        <TouchableOpacity onPress={onLeaderboardPress} style={styles.iconButton} activeOpacity={0.75}>
+        <TouchableOpacity onPress={onLeaderboardPress} style={styles.iconButton} activeOpacity={0.75} hitSlop={8}>
           <Image source={LEADERBOARD_IMG} style={styles.iconImg} resizeMode="contain" />
         </TouchableOpacity>
 
         {/* Level icon */}
-        <TouchableOpacity onPress={onLevelPress} style={styles.iconButton} activeOpacity={0.75}>
+        <TouchableOpacity onPress={onLevelPress} style={styles.iconButton} activeOpacity={0.75} hitSlop={8}>
           <Image source={LEVEL_IMG} style={styles.iconImg} resizeMode="contain" />
         </TouchableOpacity>
 
         {/* Chat icon */}
-        <TouchableOpacity onPress={onChatPress} style={styles.iconButton} activeOpacity={0.75}>
+        <TouchableOpacity onPress={onChatPress} style={styles.iconButton} activeOpacity={0.75} hitSlop={8}>
           <Image source={CHAT_IMG} style={styles.iconImg} resizeMode="contain" />
         </TouchableOpacity>
       </View>
@@ -88,7 +88,7 @@ const styles = StyleSheet.create({
   rightIcons: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 10,
+    gap: 14,
   },
   avatarButton: {
     borderRadius: 24,
@@ -135,13 +135,14 @@ const styles = StyleSheet.create({
     fontWeight: '700',
     color: '#A855F7',
   },
+  // No circle behind the icons — just the images on the white header. The
+  // box is as wide as the icon so the gaps between icons are even (14px);
+  // hitSlop keeps the tap target generous.
   iconButton: {
-    width: 36,
+    width: 24,
     height: 36,
-    borderRadius: 18,
     alignItems: 'center',
     justifyContent: 'center',
-    backgroundColor: '#F4F0FF',
   },
   iconImg: {
     width: 22,

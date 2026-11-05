@@ -1,60 +1,119 @@
-import { useParams, useNavigate } from 'react-router-dom';
-import { useAuth } from '../context/AuthContext';
-import raraLogo from '../assets/raralogo.png';
+import { useEffect, useState } from 'react';
+import { Link } from 'react-router-dom';
+import { api } from '../api/client';
+import { usePortalBase } from '../components/PortalLayout';
+import { Badge, Card, Empty, ErrorNote, Loading, PageHeader, Stat, coins, dateOnly, dateTime } from '../components/ui';
+
+type Notification = { kind: 'credit' | 'warning' | 'info'; text: string; at: string };
+type Dashboard = {
+  role: 'AGENCY' | 'POC';
+  agency: { name: string; code: string; owner: string; status: string; services: string[]; onboarded_at: string };
+  balance?: number;
+  low_balance?: boolean;
+  low_balance_threshold?: number;
+  stats: { rooms: number; profiles: number; open_tickets: number; received?: number; used_today?: number; transactions?: number };
+  notifications: Notification[];
+};
+
+const LINKS: { to: string; label: string; hint: string; agencyOnly?: boolean }[] = [
+  { to: 'audio-chat-room', label: 'Audio Chat Room', hint: 'Rooms and gifting' },
+  { to: 'video-live', label: 'Video Live', hint: 'Live activity and gifting' },
+  { to: 'friend-zone', label: 'Friend Zone', hint: 'Profiles and gifting' },
+  { to: 'coin-wallet', label: 'Coin Wallet', hint: 'Balance and ledger', agencyOnly: true },
+  { to: 'reports', label: 'Reports', hint: 'Daily, monthly, Excel' },
+];
+
+const DOT = { credit: 'bg-green-500', warning: 'bg-amber-500', info: 'bg-blue-500' };
 
 export function DashboardPage() {
-  const { code } = useParams<{ code: string }>();
-  const { agency, logout } = useAuth();
-  const navigate = useNavigate();
+  const base = usePortalBase();
+  const [data, setData] = useState<Dashboard | null>(null);
+  const [error, setError] = useState('');
 
-  const handleLogout = () => {
-    logout();
-    navigate(`/agency/${code?.toUpperCase()}`, { replace: true });
-  };
+  useEffect(() => {
+    api.get<Dashboard>('/agency-portal/dashboard').then(r => {
+      if (r.ok) setData(r.data);
+      else setError(r.message);
+    });
+  }, []);
+
+  if (error) return <ErrorNote text={error} />;
+  if (!data) return <Loading />;
+
+  const { agency, stats } = data;
+  const isAgency = data.role === 'AGENCY';
 
   return (
-    <div className="min-h-screen bg-gray-50">
-      {/* Top bar */}
-      <header className="bg-white border-b border-gray-100 shadow-sm px-6 py-4 flex items-center justify-between">
-        <div className="flex items-center gap-3">
-          <img src={raraLogo} alt="Rara Live" className="w-8 h-8 rounded-lg object-contain" />
+    <>
+      <PageHeader title="Dashboard" subtitle={`Welcome, ${agency.name}`} />
+
+      {data.low_balance && (
+        <div className="mb-4">
+          <ErrorNote text={`Low balance: ${coins(data.balance ?? 0)} coins left. Request more from Coin Wallet.`} />
+        </div>
+      )}
+
+      <Card className="mb-4">
+        <dl className="grid grid-cols-2 lg:grid-cols-5 gap-4 text-sm">
+          <Info label="Agency Name" value={agency.name} />
+          <Info label="Agency ID" value={agency.code} />
+          <Info label="Owner Name" value={agency.owner} />
+          <Info label="Onboarding Date" value={dateOnly(agency.onboarded_at)} />
           <div>
-            <p className="font-black text-gray-900 text-base leading-none tracking-tight">
-              {agency?.agencyName || 'Agency'}
-            </p>
-            <p className="text-xs text-purple-500 font-semibold mt-0.5 font-mono">{agency?.agentCode}</p>
+            <dt className="text-xs font-semibold text-gray-500">Status</dt>
+            <dd className="mt-1"><Badge status={agency.status} /></dd>
           </div>
-        </div>
-        <button
-          onClick={handleLogout}
-          className="flex items-center gap-2 text-sm text-gray-500 hover:text-red-500 font-medium transition-colors px-3 py-2 rounded-lg hover:bg-red-50">
-          <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M17 16l4-4m0 0l-4-4m4 4H7m6 4v1a3 3 0 01-3 3H6a3 3 0 01-3-3V7a3 3 0 013-3h4a3 3 0 013 3v1" />
-          </svg>
-          Sign out
-        </button>
-      </header>
+        </dl>
+      </Card>
 
-      {/* Content */}
-      <main className="p-6 max-w-4xl mx-auto">
-        <div className="mb-8">
-          <h1 className="text-2xl font-black text-gray-900 tracking-tight">Dashboard</h1>
-          <p className="text-gray-400 text-sm mt-1">
-            Welcome, <span className="text-purple-600 font-semibold">{agency?.agencyName}</span>
-          </p>
-        </div>
+      <div className="grid grid-cols-2 lg:grid-cols-4 gap-3 mb-4">
+        {isAgency && <Stat label="Coin Wallet" value={coins(data.balance ?? 0)} tone={data.low_balance ? 'amber' : 'purple'} />}
+        {isAgency && <Stat label="Used today" value={coins(stats.used_today ?? 0)} />}
+        <Stat label="Rooms" value={stats.rooms} />
+        <Stat label="Agency profiles" value={stats.profiles} />
+      </div>
 
-        {/* Placeholder */}
-        <div className="bg-white rounded-2xl border border-gray-100 shadow-sm p-12 text-center">
-          <div className="w-16 h-16 rounded-2xl bg-purple-50 flex items-center justify-center mx-auto mb-4">
-            <svg className="w-8 h-8 text-purple-300" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 21V5a2 2 0 00-2-2H7a2 2 0 00-2 2v16m14 0h2m-2 0h-5m-9 0H3m2 0h5M9 7h1m-1 4h1m4-4h1m-1 4h1m-5 10v-5a1 1 0 011-1h2a1 1 0 011 1v5m-4 0h4" />
-            </svg>
+      <div className="grid lg:grid-cols-3 gap-4">
+        <Card title="Quick links" className="lg:col-span-2">
+          <div className="grid sm:grid-cols-2 gap-2">
+            {LINKS.filter(l => isAgency || !l.agencyOnly).map(l => (
+              <Link key={l.to} to={`${base}/${l.to}`} className="rounded-xl border border-gray-100 px-4 py-3 hover:border-purple-300 transition-colors">
+                <p className="font-semibold text-sm text-gray-900">{l.label}</p>
+                <p className="text-xs text-gray-500">{l.hint}</p>
+              </Link>
+            ))}
+            <Link to={`${base}/support`} className="rounded-xl border border-gray-100 px-4 py-3 hover:border-purple-300 transition-colors">
+              <p className="font-semibold text-sm text-gray-900">Help & Support</p>
+              <p className="text-xs text-gray-500">{stats.open_tickets ? `${stats.open_tickets} open` : 'Contact the Official'}</p>
+            </Link>
           </div>
-          <p className="text-base font-bold text-gray-400">Agency Dashboard</p>
-          <p className="text-sm text-gray-300 mt-1">More features coming soon</p>
-        </div>
-      </main>
+        </Card>
+
+        <Card title="Notifications">
+          {data.notifications.length === 0 ? <Empty text="No notifications yet" /> : (
+            <ul className="space-y-3">
+              {data.notifications.map(n => (
+                <li key={`${n.at}-${n.text}`} className="flex gap-2.5">
+                  <span className={`w-2 h-2 rounded-full mt-1.5 shrink-0 ${DOT[n.kind]}`} />
+                  <div className="min-w-0">
+                    <p className="text-sm text-gray-700 break-words">{n.text}</p>
+                    <p className="text-xs text-gray-400">{dateTime(n.at)}</p>
+                  </div>
+                </li>
+              ))}
+            </ul>
+          )}
+        </Card>
+      </div>
+    </>
+  );
+}
+
+function Info({ label, value }: { label: string; value: string }) {
+  return (
+    <div className="min-w-0">
+      <dt className="text-xs font-semibold text-gray-500">{label}</dt>
+      <dd className="font-semibold text-gray-900 mt-1 truncate">{value}</dd>
     </div>
   );
 }

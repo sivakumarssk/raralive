@@ -251,7 +251,8 @@ const TABS: { key: FriendZoneStatus | ''; label: string }[] = [
   { key: 'rejected', label: 'Rejected' },
 ];
 
-export function FriendZonePage() {
+/** `embedded` drops the page title/padding when shown as a tab inside Requests. */
+export function FriendZonePage({ embedded = false, onChanged }: { embedded?: boolean; onChanged?: () => void } = {}) {
   const [applications, setApplications] = useState<Application[]>([]);
   const [total, setTotal] = useState(0);
   const [statusFilter, setStatusFilter] = useState<FriendZoneStatus | ''>('pending');
@@ -270,6 +271,7 @@ export function FriendZonePage() {
   useEffect(() => { fetchApplications(); }, [statusFilter]);
 
   const handleUpdated = (updated: Application) => {
+    onChanged?.();
     setApplications(prev => {
       if (statusFilter && updated.status !== statusFilter) {
         return prev.filter(a => a.id !== updated.id);
@@ -280,12 +282,14 @@ export function FriendZonePage() {
   };
 
   return (
-    <div className="p-6 max-w-6xl mx-auto">
+    <div className={embedded ? '' : 'p-6 max-w-6xl mx-auto'}>
       <ToastContainer />
-      <div className="mb-8">
-        <h1 className="text-2xl font-black text-gray-900 tracking-tight">Friend Zone</h1>
-        <p className="text-gray-400 text-sm mt-1">Review and approve user applications to join Friend Zone</p>
-      </div>
+      {!embedded && (
+        <div className="mb-8">
+          <h1 className="text-2xl font-black text-gray-900 tracking-tight">Friend Zone</h1>
+          <p className="text-gray-400 text-sm mt-1">Review and approve user applications to join Friend Zone</p>
+        </div>
+      )}
 
       <div className="bg-white rounded-2xl border border-gray-100 shadow-sm">
         <div className="px-6 py-4 border-b border-gray-100 flex items-center justify-between">

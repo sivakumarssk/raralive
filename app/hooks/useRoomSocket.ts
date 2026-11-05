@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { getSocketState, socketStore, subscribeSocket, type IncomingStageInvite } from '@/store/socket-store';
+import { getBattleResult, getBattleState, getSocketState, socketStore, subscribeSocket, type IncomingStageInvite } from '@/store/socket-store';
 export type { IncomingStageInvite };
 
 export type SeatSlot = {
@@ -13,6 +13,8 @@ export type SeatSlot = {
 
 export type HostStatus = {
   isOnline: boolean;
+  /** The host left the audio stage but is still in the room. */
+  offStage?: boolean;
   userName: string;
   avatarUrl: string | null;
 };
@@ -60,7 +62,9 @@ export function useRoomSocket(roomId: string) {
     hostStatus: state.hostStatus,
     incomingRequest: state.incomingRequest,
     seatRequestResult: state.seatRequestResult,
+    roomInfo: state.roomInfo,
     sendMessage: (text: string) => socketStore.sendMessage(roomId, text),
+    sendGift: (text: string, coins: number) => socketStore.sendGift(roomId, text, coins),
     requestSeat: (slotIndex: number) => socketStore.requestSeat(roomId, slotIndex),
     acceptSeatRequest: (req: IncomingSeatRequest) => socketStore.acceptSeatRequest(roomId, req),
     rejectSeatRequest: (req: IncomingSeatRequest) => socketStore.rejectSeatRequest(roomId, req),
@@ -71,6 +75,8 @@ export function useRoomSocket(roomId: string) {
     rejectStageInvite: (hostSocketId: string) => socketStore.rejectStageInvite(roomId, hostSocketId),
     clearStageInvite: () => socketStore.clearStageInvite(),
     leaveStage: () => socketStore.leaveStage(roomId),
+    hostLeaveStage: () => socketStore.hostLeaveStage(roomId),
+    hostReturnStage: () => socketStore.hostReturnStage(roomId),
     removeFromStage: (slotIndex: number) => socketStore.removeFromStage(roomId, slotIndex),
     pinComment: (messageId: string) => socketStore.pinComment(roomId, messageId),
     unpinComment: () => socketStore.unpinComment(roomId),
@@ -78,4 +84,20 @@ export function useRoomSocket(roomId: string) {
     reportComment: (messageId: string, messageText: string, reportedUserId?: string, reason?: string) =>
       socketStore.reportComment(roomId, messageId, messageText, reportedUserId, reason),
   };
+}
+
+/** The room's running battle + live gifters/scores, pushed over the room socket. */
+export function useRoomBattle() {
+  const [battle, setBattle] = useState(getBattleState);
+  // getBattleState() keeps the same object until the battle changes, so this
+  // doesn't re-render on every chat message.
+  useEffect(() => subscribeSocket(() => setBattle(getBattleState())), []);
+  return battle;
+}
+
+/** Result of the battle that just ended here (until dismissed), or null. */
+export function useBattleResult() {
+  const [result, setResult] = useState(getBattleResult);
+  useEffect(() => subscribeSocket(() => setResult(getBattleResult())), []);
+  return result;
 }

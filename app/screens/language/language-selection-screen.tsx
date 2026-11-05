@@ -1,43 +1,44 @@
 import { Ionicons } from '@expo/vector-icons';
 import { useState } from 'react';
-import { ScrollView, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
+import { ScrollView, StyleSheet, Text, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Image } from 'expo-image';
 
 import { GradientButton } from '@/components/ui/gradient-button';
 import { ScreenBackground } from '@/components/ui/screen-background';
-
-type LanguageOption = {
-  id: string;
-  label: string;
-  nativeLabel: string;
-};
-
-const LANGUAGE_OPTIONS: LanguageOption[] = [
-  { id: 'en', label: 'English', nativeLabel: 'English' },
-  { id: 'hi', label: 'Hindi', nativeLabel: 'हिंदी' },
-  { id: 'mr', label: 'Marathi', nativeLabel: 'मराठी' },
-  { id: 'te', label: 'Telugu', nativeLabel: 'తెలుగు' },
-  { id: 'ta', label: 'Tamil', nativeLabel: 'தமிழ்' },
-  { id: 'bn', label: 'Bengali', nativeLabel: 'বাংলা' },
-  { id: 'kn', label: 'Kannada', nativeLabel: 'ಕನ್ನಡ' },
-  { id: 'ml', label: 'Malayalam', nativeLabel: 'മലയാളം' },
-];
+import { apiSetLanguage } from '@/services/api';
+import { authStore } from '@/store/auth-store';
+import { LANGUAGE_PICKER_BG, LanguageGrid, LanguagePickerHeading } from './language-grid';
 
 type LanguageSelectionScreenProps = {
   onContinue?: () => void;
 };
 
 export function LanguageSelectionScreen({ onContinue }: LanguageSelectionScreenProps) {
-  const [selectedLanguage, setSelectedLanguage] = useState('');
+  const [selectedLanguage, setSelectedLanguage] = useState(authStore.getLanguage() ?? '');
   const [error, setError] = useState('');
+  const [saving, setSaving] = useState(false);
 
-  const handleContinue = () => {
+  const handleContinue = async () => {
     if (!selectedLanguage) {
       setError('Please choose a language to continue.');
       return;
     }
     setError('');
+
+    // Saved on the account so later logins (on any phone) skip this page.
+    // Guests have no account — the phone remembers it instead.
+    const token = authStore.getToken();
+    if (token) {
+      setSaving(true);
+      const result = await apiSetLanguage(selectedLanguage, token);
+      setSaving(false);
+      if (!result.ok) {
+        setError(result.message);
+        return;
+      }
+    }
+    authStore.setLanguage(selectedLanguage);
     onContinue?.();
   };
 
@@ -51,32 +52,15 @@ export function LanguageSelectionScreen({ onContinue }: LanguageSelectionScreenP
           <Image source={require('@/assets/images/raralogo.png')} style={styles.logo} contentFit="contain" />
         </View>
 
-        <Text style={styles.title}>Choose Your Language</Text>
-        <Text style={styles.subtitle}>Select your preferred language to customize your experience.</Text>
+        <LanguagePickerHeading />
 
-        <View style={styles.grid}>
-          {LANGUAGE_OPTIONS.map((option) => {
-            const selected = option.id === selectedLanguage;
-            return (
-              <TouchableOpacity
-                key={option.id}
-                style={[styles.langCard, selected && styles.langCardSelected]}
-                activeOpacity={0.9}
-                onPress={() => {
-                  setSelectedLanguage(option.id);
-                  if (error) setError('');
-                }}>
-                {selected && (
-                  <View style={styles.checkBadge}>
-                    <Ionicons name="checkmark" size={11} color="#FFFFFF" />
-                  </View>
-                )}
-                <Text style={styles.langTitle}>{option.label}</Text>
-                <Text style={styles.langNative}>{option.nativeLabel}</Text>
-              </TouchableOpacity>
-            );
-          })}
-        </View>
+        <LanguageGrid
+          selected={selectedLanguage}
+          onSelect={(id) => {
+            setSelectedLanguage(id);
+            if (error) setError('');
+          }}
+        />
 
         <View style={styles.communityCard}>
           <View style={styles.communityIconWrap}>
@@ -90,7 +74,12 @@ export function LanguageSelectionScreen({ onContinue }: LanguageSelectionScreenP
 
         <View style={styles.footer}>
           {error ? <Text style={styles.errorText}>{error}</Text> : null}
-          <GradientButton label="Continue" iconName="arrow-forward" onPress={handleContinue} />
+          <GradientButton
+            label={saving ? 'Saving…' : 'Continue'}
+            iconName="arrow-forward"
+            onPress={handleContinue}
+            disabled={saving}
+          />
         </View>
       </ScrollView>
     </SafeAreaView>
@@ -100,7 +89,7 @@ export function LanguageSelectionScreen({ onContinue }: LanguageSelectionScreenP
 const styles = StyleSheet.create({
   safeArea: {
     flex: 1,
-    backgroundColor: '#F5F3FA',
+    backgroundColor: LANGUAGE_PICKER_BG,
   },
   container: {
     flexGrow: 1,
@@ -126,69 +115,6 @@ const styles = StyleSheet.create({
   logo: {
     width: 54,
     height: 54,
-  },
-  title: {
-    marginTop: 18,
-    textAlign: 'center',
-    color: '#1C1E22',
-    fontSize: 48 / 2,
-    lineHeight: 30,
-    fontWeight: '800',
-    letterSpacing: -0.4,
-  },
-  subtitle: {
-    marginTop: 8,
-    textAlign: 'center',
-    color: '#60626A',
-    fontSize: 13,
-    lineHeight: 18,
-    paddingHorizontal: 24,
-  },
-  grid: {
-    marginTop: 16,
-    flexDirection: 'row',
-    flexWrap: 'wrap',
-    justifyContent: 'space-between',
-  },
-  langCard: {
-    width: '48%',
-    minHeight: 84,
-    borderRadius: 16,
-    backgroundColor: 'rgba(255,255,255,0.72)',
-    paddingHorizontal: 14,
-    paddingVertical: 12,
-    marginBottom: 10,
-    justifyContent: 'center',
-    borderWidth: 2,
-    borderColor: 'transparent',
-  },
-  langCardSelected: {
-    borderColor: '#7A0EED',
-    backgroundColor: '#FFFFFF',
-  },
-  checkBadge: {
-    position: 'absolute',
-    top: 8,
-    right: 10,
-    width: 16,
-    height: 16,
-    borderRadius: 999,
-    backgroundColor: '#7A0EED',
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  langTitle: {
-    color: '#2A2C33',
-    fontSize: 16,
-    lineHeight: 20,
-    fontWeight: '700',
-  },
-  langNative: {
-    marginTop: 4,
-    color: '#6B6E79',
-    fontSize: 13,
-    lineHeight: 16,
-    fontWeight: '500',
   },
   communityCard: {
     marginTop: 12,

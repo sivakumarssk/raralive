@@ -7,20 +7,26 @@ const router = express.Router();
 
 // Shared period → SQL date-filter builder for leaderboard-style endpoints.
 // Periods: today | this_week | this_month | this_year
+// Boundaries are midnight IST (UTC+5:30) regardless of the server's timezone —
+// otherwise "Today" on a UTC server starts at 5:30 AM for Indian users.
+const IST_OFFSET_MS = 5.5 * 60 * 60 * 1000;
 function buildDateFilter(period, alias = 'e', column = 'created_at') {
-  const now = new Date();
-  let start = null;
+  // Wall-clock IST date parts, read via the UTC getters of a shifted Date
+  const ist = new Date(Date.now() + IST_OFFSET_MS);
+  const y = ist.getUTCFullYear(), m = ist.getUTCMonth(), d = ist.getUTCDate();
+  let startIst; // IST midnight expressed as a UTC timestamp of the same wall time
   if (period === 'this_week') {
-    const day = now.getDay(); const diff = day === 0 ? -6 : 1 - day;
-    start = new Date(now); start.setDate(now.getDate() + diff); start.setHours(0, 0, 0, 0);
+    const day = ist.getUTCDay(); const diff = day === 0 ? -6 : 1 - day; // weeks start Monday
+    startIst = Date.UTC(y, m, d + diff);
   } else if (period === 'this_month') {
-    start = new Date(now.getFullYear(), now.getMonth(), 1);
+    startIst = Date.UTC(y, m, 1);
   } else if (period === 'this_year') {
-    start = new Date(now.getFullYear(), 0, 1);
+    startIst = Date.UTC(y, 0, 1);
   } else {
     // default: today
-    start = new Date(now); start.setHours(0, 0, 0, 0);
+    startIst = Date.UTC(y, m, d);
   }
+  const start = new Date(startIst - IST_OFFSET_MS);
   return `AND ${alias}.${column} >= '${start.toISOString()}'`;
 }
 
@@ -219,12 +225,14 @@ router.get('/:id/leaderboard', async (req, res, next) => {
       [roomId]
     );
 
-    // Top supporters (recipients — who received gifts in this room)
+    // Top receivers — who each gift was actually sent to. recipient_id is always
+    // the host (the gems go to the host's wallet), so it can't be used here;
+    // target_user_id is the person picked in the gift sheet (older rows fall back).
     const supportersR = await db.query(
       `SELECT u.id, u.full_name, u.username, u.avatar_url,
               COALESCE(SUM(e.coins * e.quantity), 0)::int AS total_coins
        FROM room_gift_events e
-       JOIN users u ON u.id = e.recipient_id
+       JOIN users u ON u.id = COALESCE(e.target_user_id, e.recipient_id)
        WHERE e.room_id = $1 ${dateFilter}
        GROUP BY u.id, u.full_name, u.username, u.avatar_url
        ORDER BY total_coins DESC LIMIT 10`,

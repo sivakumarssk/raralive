@@ -3,6 +3,7 @@ import { Dimensions, FlatList, Image, StyleSheet, Text, View } from 'react-nativ
 
 import { MEDIA_BASE } from '@/services/api';
 import type { CallChatRow } from '@/store/friend-zone-call-chat-store';
+import { avatarSource } from '@/utils/default-avatar';
 
 const COIN_IMG = require('@/assets/tabs/coin.png');
 const { width: SCREEN_W } = Dimensions.get('window');
@@ -22,14 +23,8 @@ type Props = {
   maxHeight: number;
 };
 
-function Avatar({ uri, name }: { uri?: string; name: string }) {
-  return uri ? (
-    <Image source={{ uri }} style={s.avatar} />
-  ) : (
-    <View style={[s.avatar, s.avatarFallback]}>
-      <Text style={s.avatarInitial}>{name[0]?.toUpperCase()}</Text>
-    </View>
-  );
+function Avatar({ uri }: { uri?: string; name: string }) {
+  return <Image source={avatarSource(uri)} style={s.avatar} />;
 }
 
 // Instagram Live style: no bubble box, no background panel — each row is a

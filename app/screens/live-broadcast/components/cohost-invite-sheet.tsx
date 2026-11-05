@@ -16,6 +16,7 @@ import {
 import { BASE_URL, MEDIA_BASE } from '@/services/api';
 import { authStore } from '@/store/auth-store';
 import type { SeatSlot } from '@/hooks/useRoomSocket';
+import { avatarSource } from '@/utils/default-avatar';
 
 type RoomMember = {
   userId: string;
@@ -68,13 +69,7 @@ export function CoHostInviteSheet({ visible, onClose, roomId, seats, maxCohosts,
 
     return (
       <View style={s.row}>
-        {avatarUri ? (
-          <Image source={{ uri: avatarUri }} style={s.avatar} />
-        ) : (
-          <View style={[s.avatar, s.avatarFallback]}>
-            <Text style={s.avatarInitial}>{item.userName[0]?.toUpperCase() ?? '?'}</Text>
-          </View>
-        )}
+        <Image source={avatarSource(avatarUri)} style={s.avatar} />
         <Text style={s.name} numberOfLines={1}>{item.userName}</Text>
 
         {isOnStage ? (

@@ -3,6 +3,7 @@ const db = require('../config/db');
 const jwt = require('jsonwebtoken');
 const agencyModel = require('../models/agency.model');
 const userModel = require('../models/user.model');
+const portalModel = require('../models/agency-portal.model');
 
 function signAgencyToken(agencyId, agentCode) {
   return jwt.sign(
@@ -63,6 +64,7 @@ async function loginAgency(req, res, next) {
     }
 
     const token = signAgencyToken(agency.id, agency.agent_code);
+    await portalModel.audit({ agencyId: agency.id, actorType: 'agency', actorId: agency.id, action: 'login', ip: req.ip });
 
     return res.json({
       success: true,
@@ -117,6 +119,7 @@ async function resetPassword(req, res, next) {
       phone: agency.phone,
       passwordHash,
       fullName: null,
+      usernameSeed: agency.agency_name,
     });
 
     // Return new token (still same session, now not default password)
@@ -144,7 +147,7 @@ async function getPublicAgencyProfile(req, res, next) {
   try {
     const { id } = req.params;
     const r = await db.query(
-      `SELECT a.id, a.agency_name, a.agent_code, a.email, a.phone, a.person_name,
+      `SELECT a.id, a.agency_name, a.agent_code, a.email, a.phone,
               a.status, a.service_access, a.created_at,
               au.id AS app_user_id, au.avatar_url, au.cover_url
        FROM agencies a

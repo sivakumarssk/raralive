@@ -28,7 +28,7 @@ export function MyChatroomCard({ room, onPress }: MyChatroomCardProps) {
             <Image source={{ uri: room.avatarUri }} style={styles.avatar} />
           ) : (
             <View style={styles.avatarFallback}>
-              <Ionicons name="person" size={24} color="#7A0EED" />
+              <Ionicons name="person" size={20} color="#7A0EED" />
             </View>
           )}
           <View style={styles.avatarRing} />
@@ -68,30 +68,30 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     backgroundColor: '#FFFFFF',
     borderRadius: 16,
-    paddingHorizontal: 14,
-    paddingVertical: 12,
+    paddingHorizontal: 12,
+    paddingVertical: 9,
     shadowColor: '#7A0EED',
     shadowOpacity: 0.07,
     shadowRadius: 10,
     shadowOffset: { width: 0, height: 2 },
     elevation: 2,
-    gap: 13,
+    gap: 12,
   },
   avatarContainer: {
     position: 'relative',
-    width: 52,
-    height: 52,
+    width: 44,
+    height: 44,
   },
   avatar: {
-    width: 48,
-    height: 48,
-    borderRadius: 24,
+    width: 40,
+    height: 40,
+    borderRadius: 20,
     margin: 2,
   },
   avatarFallback: {
-    width: 48,
-    height: 48,
-    borderRadius: 24,
+    width: 40,
+    height: 40,
+    borderRadius: 20,
     margin: 2,
     backgroundColor: '#EDE8F7',
     alignItems: 'center',
@@ -100,17 +100,17 @@ const styles = StyleSheet.create({
   avatarRing: {
     position: 'absolute',
     inset: 0,
-    borderRadius: 26,
+    borderRadius: 22,
     borderWidth: 2,
     borderColor: '#7A0EED',
   },
   info: {
     flex: 1,
     minWidth: 0,
-    gap: 3,
+    gap: 2,
   },
   roomName: {
-    fontSize: 15,
+    fontSize: 14,
     fontWeight: '700',
     color: '#1C1E22',
     letterSpacing: -0.1,

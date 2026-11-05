@@ -85,20 +85,9 @@ export default function IdLevelScreen() {
           <View style={[s.circle, s.circleBottomLeft]} />
           <View style={[s.circleSm, s.circleTopLeft]} />
 
-          {/* Level pill + coins */}
-          <View style={s.heroTopRow}>
-            <LinearGradient colors={['#7A0EED', '#B50357']} start={{ x: 0, y: 0 }} end={{ x: 1, y: 0 }} style={s.levelPill}>
-              <Text style={s.levelPillText}>LEVEL {level}</Text>
-            </LinearGradient>
-            <View style={s.heroCoinsBadge}>
-              <Image source={COIN_IMG} style={s.heroCoin} resizeMode="contain" />
-              <Text style={s.heroCoins}>{formatCoins(coinsSpent)} gifted</Text>
-            </View>
-          </View>
-
           {/* Badge */}
           <ExpoImage source={USER_LEVEL_IMAGES[Math.min(level, 100)]} style={s.badgeImg} contentFit="contain" />
-          <Text style={s.heroSub}>Individual Gifting Level</Text>
+          <Text style={s.heroSub}>Individual gifting level</Text>
 
           {/* Progress card */}
           <View style={s.progressCard}>
@@ -210,8 +199,8 @@ const s = StyleSheet.create({
   // Hero — dark, same as performance screen
   hero: {
     alignItems: 'center',
-    paddingTop: 20,
-    paddingBottom: 24,
+    paddingTop: 12,
+    paddingBottom: 14,
     paddingHorizontal: 20,
     position: 'relative',
     overflow: 'hidden',
@@ -222,17 +211,10 @@ const s = StyleSheet.create({
   circleSm: { position: 'absolute', width: 80, height: 80, borderRadius: 40, backgroundColor: 'rgba(168,85,247,0.1)', borderWidth: 1, borderColor: 'rgba(168,85,247,0.1)' },
   circleTopLeft: { top: 20, left: -20 },
 
-  heroTopRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', width: '100%', marginBottom: 10 },
-  levelPill: { borderRadius: 20, paddingHorizontal: 14, paddingVertical: 6 },
-  levelPillText: { fontSize: 12, fontWeight: '900', color: '#FFFFFF', letterSpacing: 1 },
-  heroCoinsBadge: { flexDirection: 'row', alignItems: 'center', gap: 6, backgroundColor: 'rgba(255,255,255,0.1)', borderRadius: 20, paddingHorizontal: 12, paddingVertical: 6, borderWidth: 1, borderColor: 'rgba(255,255,255,0.15)' },
-  heroCoin: { width: 16, height: 16 },
-  heroCoins: { fontSize: 13, fontWeight: '700', color: '#FFFFFF' },
+  badgeImg: { width: W * 0.3, height: W * 0.3, marginBottom: 2 },
+  heroSub: { fontSize: 11, color: 'rgba(255,255,255,0.45)', fontWeight: '600', letterSpacing: 0.2, marginBottom: 10 },
 
-  badgeImg: { width: W * 0.38, height: W * 0.38, marginVertical: 6 },
-  heroSub: { fontSize: 11, color: 'rgba(255,255,255,0.45)', fontWeight: '600', textTransform: 'uppercase', letterSpacing: 1.5, marginBottom: 16 },
-
-  progressCard: { width: '100%', backgroundColor: 'rgba(255,255,255,0.08)', borderRadius: 18, padding: 16, borderWidth: 1, borderColor: 'rgba(255,255,255,0.12)', gap: 10 },
+  progressCard: { width: '100%', backgroundColor: 'rgba(255,255,255,0.08)', borderRadius: 18, padding: 12, borderWidth: 1, borderColor: 'rgba(255,255,255,0.12)', gap: 10 },
   progressCardHeader: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
   progressCardTitle: { fontSize: 13, fontWeight: '600', color: 'rgba(255,255,255,0.7)' },
   progressPercent: { fontSize: 14, fontWeight: '900', color: '#A855F7' },
@@ -267,7 +249,7 @@ const s = StyleSheet.create({
   milestoneIconWrapUnlocked: { backgroundColor: '#EDE8F8' },
   milestoneEmoji: { fontSize: 22 },
   checkBadge: { position: 'absolute', bottom: 0, right: 0, width: 16, height: 16, borderRadius: 8, backgroundColor: '#22C55E', alignItems: 'center', justifyContent: 'center' },
-  milestoneLevelLbl: { fontSize: 10, fontWeight: '700', color: '#ABADB2', textTransform: 'uppercase', letterSpacing: 0.8 },
+  milestoneLevelLbl: { fontSize: 10, fontWeight: '700', color: '#ABADB2', letterSpacing: 0.2 },
   milestoneLevelLblUnlocked: { color: '#7A0EED' },
   milestoneTitle: { fontSize: 13, fontWeight: '800', color: '#1C1E22' },
   milestoneDesc: { fontSize: 11, color: '#7A7A8A', lineHeight: 15 },

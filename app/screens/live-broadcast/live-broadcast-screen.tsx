@@ -37,6 +37,7 @@ import { subscribeChatEvents } from '@/store/chat-socket-store';
 import {
   onBroadcastLikeState, onBroadcastLikesUpdate, onPinnedCommentUpdate,
   onReportCommentResult, onRemovedFromStage, socketStore,
+  onJoinBlocked, onKickedFromRoom, formatRestriction, type RoomRestriction,
 } from '@/store/socket-store';
 
 const COIN_IMG = require('@/assets/tabs/coin.png');
@@ -190,11 +191,29 @@ export function LiveBroadcastScreen({ roomId, channelName }: LiveBroadcastScreen
   }, []);
 
   useEffect(() => {
-    const unsub = onReportCommentResult(ok => {
-      setToast(ok ? 'Comment reported.' : 'Could not report comment.');
+    const unsub = onReportCommentResult((ok, info) => {
+      setToast(ok
+        ? (info.duplicate ? 'You already reported this comment.' : 'Comment reported.')
+        : (info.message || 'Could not report comment.'));
       setTimeout(() => setToast(null), 2000);
     });
     return unsub;
+  }, []);
+
+  // Refused entry or removed (host block / 24h report ban) — explain and leave
+  useEffect(() => {
+    const leave = (message: string, info: RoomRestriction) => {
+      socketStore.leave();
+      Alert.alert(
+        info.kind === 'user_ban' ? 'Access Restricted' : 'Live Unavailable',
+        formatRestriction(message, info.expiresAt),
+        [{ text: 'OK', onPress: () => router.back() }],
+        { cancelable: false },
+      );
+    };
+    const unsubBlocked = onJoinBlocked(leave);
+    const unsubKicked = onKickedFromRoom(leave);
+    return () => { unsubBlocked(); unsubKicked(); };
   }, []);
 
   // Co-host got removed by host — leave and inform them
@@ -473,7 +492,7 @@ export function LiveBroadcastScreen({ roomId, channelName }: LiveBroadcastScreen
         <View style={s.titleRow} pointerEvents="none">
           <View style={s.liveBadge}>
             <View style={s.liveDot} />
-            <Text style={s.liveBadgeText}>LIVE</Text>
+            <Text style={s.liveBadgeText}>Live</Text>
           </View>
           <Text style={s.roomName} numberOfLines={1}>{roomInfo?.room_name ?? 'Live'}</Text>
         </View>

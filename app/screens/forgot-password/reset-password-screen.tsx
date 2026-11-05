@@ -117,7 +117,7 @@ export function ResetPasswordScreen({ resetToken, onBack, onSuccess }: ResetPass
 
               {/* New password */}
               <View style={styles.field}>
-                <Text style={styles.label}>NEW PASSWORD</Text>
+                <Text style={styles.label}>New password</Text>
                 <View style={[styles.inputBox, errors.newPassword ? styles.inputBoxError : null]}>
                   <Ionicons name="lock-closed-outline" size={15} color="#7A0EED" />
                   <TextInput
@@ -142,7 +142,7 @@ export function ResetPasswordScreen({ resetToken, onBack, onSuccess }: ResetPass
 
               {/* Confirm password */}
               <View style={styles.field}>
-                <Text style={styles.label}>CONFIRM PASSWORD</Text>
+                <Text style={styles.label}>Confirm password</Text>
                 <View style={[styles.inputBox, errors.confirmPassword ? styles.inputBoxError : null]}>
                   <Ionicons name="lock-closed-outline" size={15} color="#7A0EED" />
                   <TextInput
@@ -227,7 +227,7 @@ const styles = StyleSheet.create({
     alignItems: 'center', justifyContent: 'center',
   },
   field: { width: '100%', gap: 6 },
-  label: { color: '#4D4F56', fontSize: 11, lineHeight: 14, fontWeight: '700', letterSpacing: 1.0 },
+  label: { color: '#4D4F56', fontSize: 12, lineHeight: 16, fontWeight: '700', letterSpacing: 0.2 },
   inputBox: {
     height: 46, borderRadius: 10, backgroundColor: '#F4F5F8', borderWidth: 1, borderColor: 'transparent',
     flexDirection: 'row', alignItems: 'center', paddingHorizontal: 14, gap: 10,

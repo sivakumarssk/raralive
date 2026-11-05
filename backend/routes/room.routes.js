@@ -6,9 +6,7 @@ const router = express.Router();
 
 router.use(authenticateAdmin);
 
-router.get('/agencies', roomController.listActiveAgencies);
-router.get('/users/search', roomController.searchUsers);
+// Rooms are created by users in the app only — the admin panel lists them.
 router.get('/', roomController.listRooms);
-router.post('/', roomController.createRoom);
 
 module.exports = router;

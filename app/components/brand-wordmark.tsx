@@ -5,7 +5,7 @@ type BrandWordmarkProps = {
   scale?: number;
 };
 
-export function BrandWordmark({ label = 'Rara', scale = 1 }: BrandWordmarkProps) {
+export function BrandWordmark({ label = 'RaRa', scale = 1 }: BrandWordmarkProps) {
   return (
     <View style={[styles.container, { transform: [{ scale }] }]}>
       <Text style={styles.wordmark}>{label}</Text>

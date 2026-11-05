@@ -1,19 +1,59 @@
 const db = require('../config/db');
+const { isUuid } = require('./post-tag.controller');
+
+// Every post response carries its media and its admin tags (`tag_list`:
+// [{ id, name, parent_id }]). `tags` is the legacy free-text column.
+const POST_SELECT = `
+  SELECT p.id, p.caption, p.category, p.tags, p.allow_comments,
+         p.likes_count, p.comments_count, p.created_at,
+         u.id AS user_id, u.full_name, u.username, u.avatar_url,
+         COALESCE((
+           SELECT json_agg(json_build_object('id', pm.id, 'media_url', pm.media_url,
+                    'media_type', pm.media_type, 'sort_order', pm.sort_order) ORDER BY pm.sort_order)
+           FROM post_media pm WHERE pm.post_id = p.id
+         ), '[]'::json) AS media,
+         COALESCE((
+           SELECT json_agg(json_build_object('id', t.id, 'name', t.name, 'parent_id', t.parent_id)
+                    ORDER BY t.parent_id NULLS FIRST, t.sort_order, t.name)
+           FROM post_tag_links l JOIN post_tags t ON t.id = l.tag_id
+           WHERE l.post_id = p.id AND t.is_active
+         ), '[]'::json) AS tag_list
+  FROM posts p
+  JOIN users u ON u.id = p.user_id`;
+
+const MAX_POST_TAGS = 10;
+
+/** Admin tags a post may use: active ones from the given ids (bad ids dropped). */
+async function resolvePostTags(rawIds) {
+  let ids = rawIds;
+  if (typeof ids === 'string') { try { ids = JSON.parse(ids); } catch { ids = []; } }
+  ids = [...new Set((Array.isArray(ids) ? ids : []).filter(isUuid))].slice(0, MAX_POST_TAGS);
+  if (!ids.length) return [];
+  const r = await db.query(
+    `SELECT t.id, t.name FROM post_tags t
+     LEFT JOIN post_tags parent ON parent.id = t.parent_id
+     WHERE t.id = ANY($1::uuid[]) AND t.is_active AND (t.parent_id IS NULL OR parent.is_active)`,
+    [ids]
+  );
+  return r.rows;
+}
 
 /** POST /api/posts — create a post with media */
 async function createPost(req, res, next) {
   try {
     const userId = req.user.id;
-    const { caption, category, tags, allow_comments } = req.body;
+    const { caption, category, tags, tag_ids, allow_comments } = req.body;
     const files = req.files ?? [];
 
     if (!files.length) {
       return res.status(400).json({ success: false, message: 'At least one media file is required.' });
     }
 
-    // Parse tags — sent as JSON string or comma-separated
-    let parsedTags = [];
-    if (tags) {
+    // Tags come from the admin list (tag_ids). Older app builds still send
+    // free-text `tags`; those are kept in the legacy column only.
+    const adminTags = await resolvePostTags(tag_ids);
+    let parsedTags = adminTags.map(t => `#${t.name}`);
+    if (tag_ids === undefined && tags) {
       try { parsedTags = typeof tags === 'string' ? JSON.parse(tags) : tags; }
       catch { parsedTags = String(tags).split(',').map(t => t.trim()).filter(Boolean); }
     }
@@ -29,6 +69,13 @@ async function createPost(req, res, next) {
         [userId, caption || null, category || null, parsedTags, allow_comments !== 'false']
       );
       const post = postResult.rows[0];
+
+      for (const t of adminTags) {
+        await client.query(
+          `INSERT INTO post_tag_links (post_id, tag_id) VALUES ($1, $2) ON CONFLICT DO NOTHING`,
+          [post.id, t.id]
+        );
+      }
 
       // Insert media files
       for (let i = 0; i < files.length; i++) {
@@ -56,50 +103,52 @@ async function createPost(req, res, next) {
 }
 
 async function getPostWithMedia(postId) {
-  const r = await db.query(
-    `SELECT p.id, p.caption, p.category, p.tags, p.allow_comments,
-            p.likes_count, p.comments_count, p.created_at,
-            u.id AS user_id, u.full_name, u.username, u.avatar_url,
-            json_agg(
-              json_build_object('id', pm.id, 'media_url', pm.media_url,
-                'media_type', pm.media_type, 'sort_order', pm.sort_order)
-              ORDER BY pm.sort_order
-            ) AS media
-     FROM posts p
-     JOIN users u ON u.id = p.user_id
-     LEFT JOIN post_media pm ON pm.post_id = p.id
-     WHERE p.id = $1
-     GROUP BY p.id, u.id`,
-    [postId]
-  );
+  const r = await db.query(`${POST_SELECT} WHERE p.id = $1`, [postId]);
   return r.rows[0] || null;
 }
 
-/** GET /api/posts/feed — paginated feed of all posts */
+/**
+ * GET /api/posts/feed?tab=&tag=&limit=&offset=
+ *   tab: 'trending' (default, everything) | 'video' (posts with a video)
+ *        | 'following' (people the signed-in user follows) | <admin tag id>
+ *   tag: optional tag id (a sub-tag chip) to narrow any tab
+ * A main tag matches posts tagged with it or with any of its sub tags.
+ */
 async function getFeed(req, res, next) {
   try {
-    const limit = Math.min(parseInt(req.query.limit ?? '20', 10), 50);
-    const offset = parseInt(req.query.offset ?? '0', 10);
+    const limit = Math.min(parseInt(req.query.limit ?? '20', 10) || 20, 50);
+    const offset = parseInt(req.query.offset ?? '0', 10) || 0;
+    const tab = String(req.query.tab ?? 'trending');
+    const tag = req.query.tag;
+
+    const conds = []; const vals = [];
+    const tagMatch = (param) => `EXISTS (
+      SELECT 1 FROM post_tag_links l JOIN post_tags t ON t.id = l.tag_id
+      WHERE l.post_id = p.id AND (t.id = ${param} OR t.parent_id = ${param}))`;
+
+    if (tab === 'video') {
+      conds.push(`EXISTS (SELECT 1 FROM post_media pm WHERE pm.post_id = p.id AND pm.media_type = 'video')`);
+    } else if (tab === 'following') {
+      if (!req.user?.id) return res.json({ success: true, data: [], total: 0 });
+      vals.push(req.user.id);
+      conds.push(`p.user_id IN (SELECT following_id FROM user_follows WHERE follower_id = $${vals.length})`);
+    } else if (isUuid(tab)) {
+      vals.push(tab);
+      conds.push(tagMatch(`$${vals.length}`));
+    }
+    if (isUuid(tag)) {
+      vals.push(tag);
+      conds.push(tagMatch(`$${vals.length}`));
+    }
+    const where = conds.length ? `WHERE ${conds.join(' AND ')}` : '';
 
     const r = await db.query(
-      `SELECT p.id, p.caption, p.category, p.tags, p.allow_comments,
-              p.likes_count, p.comments_count, p.created_at,
-              u.id AS user_id, u.full_name, u.username, u.avatar_url,
-              json_agg(
-                json_build_object('id', pm.id, 'media_url', pm.media_url,
-                  'media_type', pm.media_type, 'sort_order', pm.sort_order)
-                ORDER BY pm.sort_order
-              ) AS media
-       FROM posts p
-       JOIN users u ON u.id = p.user_id
-       LEFT JOIN post_media pm ON pm.post_id = p.id
-       GROUP BY p.id, u.id
+      `${POST_SELECT} ${where}
        ORDER BY p.created_at DESC
-       LIMIT $1 OFFSET $2`,
-      [limit, offset]
+       LIMIT $${vals.length + 1} OFFSET $${vals.length + 2}`,
+      [...vals, limit, offset]
     );
-
-    const total = await db.query('SELECT COUNT(*) FROM posts');
+    const total = await db.query(`SELECT COUNT(*) FROM posts p ${where}`, vals);
     return res.json({
       success: true,
       data: r.rows,
@@ -111,23 +160,7 @@ async function getFeed(req, res, next) {
 /** GET /api/posts/my — current user's posts */
 async function getMyPosts(req, res, next) {
   try {
-    const r = await db.query(
-      `SELECT p.id, p.caption, p.category, p.tags, p.allow_comments,
-              p.likes_count, p.comments_count, p.created_at,
-              u.id AS user_id, u.full_name, u.username, u.avatar_url,
-              json_agg(
-                json_build_object('id', pm.id, 'media_url', pm.media_url,
-                  'media_type', pm.media_type, 'sort_order', pm.sort_order)
-                ORDER BY pm.sort_order
-              ) AS media
-       FROM posts p
-       JOIN users u ON u.id = p.user_id
-       LEFT JOIN post_media pm ON pm.post_id = p.id
-       WHERE p.user_id = $1
-       GROUP BY p.id, u.id
-       ORDER BY p.created_at DESC`,
-      [req.user.id]
-    );
+    const r = await db.query(`${POST_SELECT} WHERE p.user_id = $1 ORDER BY p.created_at DESC`, [req.user.id]);
     return res.json({ success: true, data: r.rows });
   } catch (err) { next(err); }
 }
@@ -217,23 +250,7 @@ async function getComments(req, res, next) {
 /** GET /api/posts/user/:userId — public posts of any user */
 async function getUserPosts(req, res, next) {
   try {
-    const r = await db.query(
-      `SELECT p.id, p.caption, p.category, p.tags, p.allow_comments,
-              p.likes_count, p.comments_count, p.created_at,
-              u.id AS user_id, u.full_name, u.username, u.avatar_url,
-              json_agg(
-                json_build_object('id', pm.id, 'media_url', pm.media_url,
-                  'media_type', pm.media_type, 'sort_order', pm.sort_order)
-                ORDER BY pm.sort_order
-              ) AS media
-       FROM posts p
-       JOIN users u ON u.id = p.user_id
-       LEFT JOIN post_media pm ON pm.post_id = p.id
-       WHERE p.user_id = $1
-       GROUP BY p.id, u.id
-       ORDER BY p.created_at DESC`,
-      [req.params.userId]
-    );
+    const r = await db.query(`${POST_SELECT} WHERE p.user_id = $1 ORDER BY p.created_at DESC`, [req.params.userId]);
     return res.json({ success: true, data: r.rows });
   } catch (err) { next(err); }
 }

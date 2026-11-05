@@ -2,6 +2,7 @@ import { Ionicons } from '@expo/vector-icons';
 import { Image as ExpoImage } from 'expo-image';
 import { LinearGradient } from 'expo-linear-gradient';
 import * as MediaLibrary from 'expo-media-library';
+import { captureRef } from 'react-native-view-shot';
 import { useEffect, useRef } from 'react';
 import {
   Alert,
@@ -90,12 +91,11 @@ export function RoomLevelUp({ visible, level, roomName, roomAvatarUrl, onDone }:
 
   const handleDownload = async () => {
     try {
-      const { status } = await MediaLibrary.requestPermissionsAsync();
+      const { status } = await MediaLibrary.requestPermissionsAsync(true);
       if (status !== 'granted') {
         Alert.alert('Permission needed', 'Allow access to save the image to your gallery.');
         return;
       }
-      const { captureRef } = await import('react-native-view-shot');
       const uri = await captureRef(cardRef, { format: 'png', quality: 1 });
       await MediaLibrary.saveToLibraryAsync(uri);
       Alert.alert('Saved!', 'Level card saved to your gallery.');
@@ -126,10 +126,10 @@ export function RoomLevelUp({ visible, level, roomName, roomAvatarUrl, onDone }:
 
               <View style={s.brandRow}>
                 <Image source={RARA_LOGO} style={s.brandLogo} resizeMode="contain" />
-                <Text style={s.brandName}>Rara Live</Text>
+                <Text style={s.brandName}>RaRa Live</Text>
               </View>
 
-              <Text style={s.levelUpLabel}>🎉 LEVEL UP!</Text>
+              <Text style={s.levelUpLabel}>🎉 Level up!</Text>
 
               <View style={s.badgeWrap}>
                 <ExpoImage source={levelAsset} style={s.levelImg} contentFit="contain" />
@@ -199,7 +199,7 @@ const s = StyleSheet.create({
     alignItems: 'center',
     paddingTop: 20,
     paddingBottom: 28,
-    paddingHorizontal: 20,
+    paddingHorizontal: 16,
     overflow: 'hidden',
   },
   decCircle1: {
@@ -240,7 +240,7 @@ const s = StyleSheet.create({
     textShadowRadius: 3,
   },
   levelUpLabel: {
-    fontSize: 22,
+    fontSize: 20,
     fontWeight: '900',
     color: '#FFFFFF',
     letterSpacing: 2,
@@ -265,7 +265,7 @@ const s = StyleSheet.create({
     height: CARD_W * 0.37,
   },
   levelNum: {
-    fontSize: 18,
+    fontSize: 16,
     fontWeight: '900',
     color: '#FFFFFF',
     letterSpacing: 0.5,
@@ -322,7 +322,7 @@ const s = StyleSheet.create({
     gap: 8,
     width: CARD_W,
     marginTop: 12,
-    paddingVertical: 13,
+    paddingVertical: 11,
     borderRadius: 16,
     backgroundColor: 'rgba(255,255,255,0.18)',
     borderWidth: 1.5,

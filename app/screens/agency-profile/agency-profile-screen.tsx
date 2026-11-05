@@ -21,7 +21,6 @@ type AgencyProfile = {
   agent_code: string;
   email: string;
   phone: string;
-  person_name: string;
   status: 'active' | 'suspended' | 'pending';
   service_access?: string[];
   created_at: string;
@@ -174,7 +173,6 @@ export function AgencyProfileScreen({ agencyId }: { agencyId: string }) {
               <InfoRow icon="id-card-outline" label="Agency Code" value={agency.agent_code} />
               <InfoRow icon="mail-outline" label="Email" value={agency.email} small />
               <InfoRow icon="call-outline" label="Phone Number" value={formatPhone(agency.phone)} />
-              <InfoRow icon="person-outline" label="Manager Name" value={agency.person_name} />
               <InfoRow icon="shield-checkmark-outline" label="Service Access" badges={services} />
               <InfoRow icon="calendar-outline" label="Joined Date" value={formatJoined(agency.created_at)} />
               <InfoRow
@@ -218,7 +216,7 @@ export function AgencyProfileScreen({ agencyId }: { agencyId: string }) {
             ) : (
               <>
                 <Text style={s.logoText}>{initials(agency.agency_name)}</Text>
-                <Text style={s.logoSub} numberOfLines={1}>{agency.agency_name.toUpperCase()}</Text>
+                <Text style={s.logoSub} numberOfLines={1}>{agency.agency_name}</Text>
               </>
             )}
           </View>

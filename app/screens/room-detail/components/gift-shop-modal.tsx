@@ -17,13 +17,46 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { BASE_URL, MEDIA_BASE } from '@/services/api';
 import type { SeatSlot } from '@/hooks/useRoomSocket';
 import { useUserLevel } from '@/components/UserLevel';
-import { formatCoins, getLevelThreshold, getNextLevelThreshold } from '@/utils/userLevel';
+import { authStore } from '@/store/auth-store';
+import { onWalletUpdate } from '@/store/socket-store';
+import { getLevelThreshold, getNextLevelThreshold } from '@/utils/userLevel';
+import { RC } from '../room-ui';
+import { avatarSource } from '@/utils/default-avatar';
 
 const COIN_IMG = require('@/assets/tabs/coin.png');
 
 const { height: SCREEN_H, width: SCREEN_W } = Dimensions.get('window');
 const SHEET_HEIGHT = SCREEN_H * 0.52;
 const ITEM_W = (SCREEN_W - 2) / 4;
+
+/** 1000 → "1,000" — the exact amount, not a rounded 1.0K */
+function groupDigits(n: number): string {
+  return String(Math.max(0, Math.round(n))).replace(/\B(?=(\d{3})+(?!\d))/g, ',');
+}
+
+/**
+ * The user's wallet coins: loaded when the Gift Box opens, then kept current
+ * by the room socket's wallet_update (sent after every gift).
+ */
+function useWalletCoins(visible: boolean): number | null {
+  const [coins, setCoins] = useState<number | null>(null);
+  useEffect(() => {
+    if (!visible) return;
+    const token = authStore.getToken();
+    if (!token) return;
+    let cancelled = false;
+    fetch(`${BASE_URL}/wallet/me`, { headers: { Authorization: `Bearer ${token}` } })
+      .then(r => r.json())
+      .then(j => { if (!cancelled && j.success) setCoins(Number(j.data?.coins) || 0); })
+      .catch(() => {});
+    return () => { cancelled = true; };
+  }, [visible]);
+  useEffect(() => {
+    const unsub = onWalletUpdate(c => setCoins(c));
+    return () => { unsub(); };
+  }, []);
+  return coins;
+}
 
 type ShopGift = {
   id: string;
@@ -61,7 +94,8 @@ export function GiftShopModal({
 }: Props) {
   const insets = useSafeAreaInsets();
   const translateY = useRef(new Animated.Value(SHEET_HEIGHT)).current;
-  const { coinsSpent, level } = useUserLevel();
+  const { level, coinsSpent } = useUserLevel();
+  const walletCoins = useWalletCoins(visible);
 
   const [categories, setCategories] = useState<Category[]>([]);
   const [activeCatId, setActiveCatId] = useState<string | null>(null);
@@ -145,15 +179,15 @@ export function GiftShopModal({
 
   const activeGifts = categories.find(c => c.id === activeCatId)?.gifts ?? [];
 
-  // THRESHOLDS is cumulative lifetime coins spent — each level's real range
-  // is [currentThreshold, nextThreshold], e.g. level 2 is 250 → 650, level 3
-  // is 650 → 1,200. The bar's corner labels show that actual range, not a
-  // range re-based to 0.
-  const currentThreshold = getLevelThreshold(level);
+  // THRESHOLDS is cumulative lifetime coins gifted, so the coins it takes to
+  // go from this level to the next is the gap between the two thresholds —
+  // e.g. level 2 is 250 → 650, so Level 2 → Level 3 needs 400 coins.
   const nextThreshold = getNextLevelThreshold(level);
-  const coinsNeeded = Math.max(1, (nextThreshold ?? currentThreshold + 1) - currentThreshold);
-  const coinsIntoLevel = Math.max(0, coinsSpent - currentThreshold);
-  const levelProgress = Math.min(coinsIntoLevel / coinsNeeded, 1);
+  const coinsForNextLevel = nextThreshold != null ? Math.max(0, nextThreshold - getLevelThreshold(level)) : null;
+  // How far into this level the user's gifting is (bar only — no counts)
+  const levelProgress = coinsForNextLevel
+    ? Math.min(Math.max((coinsSpent - getLevelThreshold(level)) / coinsForNextLevel, 0), 1)
+    : 1;
 
   return (
     <Modal visible={visible} transparent animationType="none" onRequestClose={close} onShow={open}>
@@ -166,41 +200,41 @@ export function GiftShopModal({
           <View style={s.handle} />
         </View>
 
-        {/* ID Level bar — shows the logged-in user's own level progress */}
-        <View style={s.pointsBar}>
-          {/* Row 1: coin icon + "Progress to Level N" · percentage pill */}
-          <View style={s.pointsTopRow}>
-            <View style={s.pointsTitleRow}>
-              <Image source={COIN_IMG} style={s.pointsTitleCoin} resizeMode="contain" />
-              <Text style={s.pointsTitleText}>
-                {nextThreshold != null ? `Progress to Level ${level + 1}` : 'Max Level'}
+        {/* ID Level (current → next, coins required) and wallet balance */}
+        <View style={s.levelBox}>
+          <View style={s.infoRow}>
+            <View style={s.levelPath}>
+              <Text style={s.levelText}>Level {level}</Text>
+              {coinsForNextLevel != null && (
+                <>
+                  <Ionicons name="arrow-forward" size={13} color="rgba(255,255,255,0.55)" />
+                  <Text style={s.levelText}>Level {level + 1}</Text>
+                </>
+              )}
+            </View>
+            {coinsForNextLevel != null ? (
+              <View style={s.infoValue}>
+                <Image source={COIN_IMG} style={s.infoCoin} resizeMode="contain" />
+                <Text style={s.infoNumber} numberOfLines={1}>{groupDigits(coinsForNextLevel)}</Text>
+                <Text style={s.infoLabel} numberOfLines={1}>coins required</Text>
+              </View>
+            ) : (
+              <Text style={s.infoLabel}>Max level reached</Text>
+            )}
+          </View>
+
+          {/* Progress towards the next level */}
+          <View style={s.levelTrack}>
+            <View style={[s.levelFill, { width: `${Math.round(levelProgress * 100)}%` }]} />
+          </View>
+
+          <View style={[s.infoRow, s.walletRow]}>
+            <Text style={s.infoLabel}>Wallet coins</Text>
+            <View style={s.infoValue}>
+              <Image source={COIN_IMG} style={s.infoCoin} resizeMode="contain" />
+              <Text style={s.infoNumber} numberOfLines={1}>
+                {walletCoins != null ? groupDigits(walletCoins) : '—'}
               </Text>
-            </View>
-            <View style={s.pointsPercentPill}>
-              <Text style={s.pointsPercent}>{Math.round(levelProgress * 100)}%</Text>
-            </View>
-          </View>
-
-          {/* Row 2: gradient progress bar */}
-          <View style={s.pointsTrack}>
-            <View style={[s.pointsFill, { width: `${Math.round(levelProgress * 100)}%` }]} />
-          </View>
-
-          {/* Row 3: this level's actual start threshold · the user's current
-              cumulative coins · this level's end threshold — e.g. level 2
-              reads 250 / current / 650, not re-based to 0 */}
-          <View style={s.pointsStatsRow}>
-            <View style={s.pointsStat}>
-              <Image source={COIN_IMG} style={s.pointsStatCoin} resizeMode="contain" />
-              <Text style={s.pointsStatText}>{formatCoins(currentThreshold)}</Text>
-            </View>
-            <View style={s.pointsStat}>
-              <Image source={COIN_IMG} style={s.pointsStatCoin} resizeMode="contain" />
-              <Text style={s.pointsStatText}>{formatCoins(coinsSpent)}</Text>
-            </View>
-            <View style={s.pointsStat}>
-              <Image source={COIN_IMG} style={s.pointsStatCoin} resizeMode="contain" />
-              <Text style={s.pointsStatText}>{formatCoins(nextThreshold ?? currentThreshold)}</Text>
             </View>
           </View>
         </View>
@@ -293,12 +327,9 @@ export function GiftShopModal({
                       prev.includes(t.userId) ? prev.filter(id => id !== t.userId) : [...prev, t.userId]
                     );
                   }}>
-                  {uri
-                    ? <Image source={{ uri }} style={s.dropdownAvatar} />
-                    : <View style={[s.dropdownAvatar, s.dropdownAvatarFallback]}><Text style={s.dropdownInitial}>{t.name[0]}</Text></View>
-                  }
+                  <Image source={avatarSource(uri)} style={s.dropdownAvatar} />
                   <Text style={[s.dropdownName, isSelected && s.dropdownNameSelected]}>{t.name}</Text>
-                  {t.isHost && <View style={s.hostChip}><Text style={s.hostChipText}>HOST</Text></View>}
+                  {t.isHost && <View style={s.hostChip}><Text style={s.hostChipText}>Host</Text></View>}
                   {isSelected && <Ionicons name="checkmark" size={16} color="#7A0EED" style={{ marginLeft: 'auto' }} />}
                 </TouchableOpacity>
               );
@@ -335,32 +366,22 @@ const s = StyleSheet.create({
   handleArea: { alignItems: 'center', paddingTop: 8, paddingBottom: 6 },
   handle: { width: 36, height: 4, borderRadius: 2, backgroundColor: 'rgba(255,255,255,0.25)' },
 
-  pointsBar: {
+  // ID Level + wallet: two aligned rows — label/levels left, coin amount right
+  levelBox: {
     backgroundColor: '#1E2022',
-    paddingHorizontal: 14, paddingVertical: 10, gap: 8,
+    paddingHorizontal: 14, paddingVertical: 10,
   },
-
-  // Row 1: coin + "Progress to Level N" on the left, percentage pill on the right
-  pointsTopRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
-  pointsTitleRow: { flexDirection: 'row', alignItems: 'center', gap: 6 },
-  pointsTitleCoin: { width: 16, height: 16 },
-  pointsTitleText: { fontSize: 13, fontWeight: '700', color: '#FFFFFF' },
-  pointsPercentPill: {
-    backgroundColor: 'rgba(168,85,247,0.15)', borderRadius: 20,
-    paddingHorizontal: 10, paddingVertical: 3,
-  },
-  pointsPercent: { fontSize: 11, fontWeight: '900', color: '#A855F7' },
-
-  // Row 2: gradient progress bar
-  pointsTrack: { height: 6, backgroundColor: 'rgba(255,255,255,0.15)', borderRadius: 3, overflow: 'hidden' },
-  pointsFill: { height: '100%', backgroundColor: '#A855F7', borderRadius: 3 },
-
-  // Row 3: level start / current progress / level end — start and end pin to
-  // the bar's actual corners (space-between), current sits in the middle.
-  pointsStatsRow: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' },
-  pointsStat: { flexDirection: 'row', alignItems: 'center', gap: 4 },
-  pointsStatCoin: { width: 14, height: 14 },
-  pointsStatText: { fontSize: 13, fontWeight: '700', color: '#FFFFFF' },
+  infoRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 10, minHeight: 20 },
+  // Small gap between the ID Level row and the wallet line
+  levelTrack: { height: 6, marginTop: 8, backgroundColor: 'rgba(255,255,255,0.15)', borderRadius: 3, overflow: 'hidden' },
+  levelFill: { height: '100%', backgroundColor: '#A855F7', borderRadius: 3 },
+  walletRow: { marginTop: 8 },
+  levelPath: { flexDirection: 'row', alignItems: 'center', gap: 6, flexShrink: 0 },
+  levelText: { fontSize: 13, fontWeight: '700', color: '#FFFFFF' },
+  infoValue: { flexDirection: 'row', alignItems: 'center', gap: 5, flexShrink: 1, justifyContent: 'flex-end' },
+  infoCoin: { width: 15, height: 15 },
+  infoNumber: { fontSize: 13, fontWeight: '800', color: RC.numberOnDark },
+  infoLabel: { fontSize: 12, fontWeight: '500', color: 'rgba(255,255,255,0.6)', flexShrink: 1 },
 
   tabsScroll: { flexShrink: 0, maxHeight: 40 },
   tabsContent: { paddingHorizontal: 12, gap: 4 },
@@ -378,10 +399,10 @@ const s = StyleSheet.create({
   giftCellSelected: { borderColor: '#A855F7', backgroundColor: 'rgba(168,85,247,0.15)', borderRadius: 10 },
   giftImgWrap: { width: 48, height: 48, borderRadius: 24, alignItems: 'center', justifyContent: 'center', overflow: 'hidden' },
   giftImg: { width: 42, height: 42 },
-  giftEmoji: { fontSize: 28 },
+  giftEmoji: { fontSize: 22 },
   giftPriceRow: { flexDirection: 'row', alignItems: 'center', gap: 2 },
   giftCoin: { width: 11, height: 11 },
-  giftPrice: { fontSize: 11, fontWeight: '700', color: '#E8944A' },
+  giftPrice: { fontSize: 11, fontWeight: '700', color: RC.numberOnDark },
 
   bottomBar: {
     flexDirection: 'row', alignItems: 'center',
@@ -398,7 +419,7 @@ const s = StyleSheet.create({
     backgroundColor: '#26282B', borderRadius: 8, paddingHorizontal: 14, paddingVertical: 12,
     minWidth: 72, justifyContent: 'center',
   },
-  qtyText: { fontSize: 13, fontWeight: '700', color: '#FFFFFF' },
+  qtyText: { fontSize: 13, fontWeight: '700', color: RC.numberOnDark },
   sendBtn: { width: 44, height: 44, borderRadius: 10, backgroundColor: '#7A0EED', alignItems: 'center', justifyContent: 'center' },
   sendBtnDisabled: { backgroundColor: 'rgba(255,255,255,0.15)' },
 
@@ -421,7 +442,7 @@ const s = StyleSheet.create({
   dropdownName: { fontSize: 13, fontWeight: '600', color: '#FFFFFF', flex: 1 },
   dropdownNameSelected: { color: '#A855F7' },
   hostChip: { backgroundColor: '#7A0EED', borderRadius: 6, paddingHorizontal: 6, paddingVertical: 2 },
-  hostChipText: { fontSize: 8, fontWeight: '800', color: '#fff', letterSpacing: 0.3 },
+  hostChipText: { fontSize: 10, fontWeight: '800', color: '#fff', letterSpacing: 0.3 },
 
   // Qty dropdown
   qtyDropdown: {
@@ -433,6 +454,6 @@ const s = StyleSheet.create({
   qtyList: { paddingHorizontal: 8, paddingVertical: 10, gap: 6 },
   qtyItem: { width: 44, height: 44, borderRadius: 10, backgroundColor: '#33353A', alignItems: 'center', justifyContent: 'center' },
   qtyItemSelected: { backgroundColor: '#7A0EED' },
-  qtyItemText: { fontSize: 13, fontWeight: '700', color: '#FFFFFF' },
-  qtyItemTextSelected: { color: '#FFFFFF' },
+  qtyItemText: { fontSize: 13, fontWeight: '700', color: RC.numberOnDark },
+  qtyItemTextSelected: { color: RC.numberOnDark },
 });

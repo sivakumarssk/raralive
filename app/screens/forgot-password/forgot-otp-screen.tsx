@@ -16,7 +16,7 @@ import { GradientButton } from '@/components/ui/gradient-button';
 import { ScreenBackground } from '@/components/ui/screen-background';
 import { apiForgotPassword, apiVerifyResetOtp } from '@/services/api';
 
-const DEV_BYPASS = '1234';
+const OTP_LENGTH = 4;
 const RESEND_SECONDS = 59;
 
 type ForgotOtpScreenProps = {
@@ -45,7 +45,15 @@ export function ForgotOtpScreen({ phone, onBack, onVerified }: ForgotOtpScreenPr
   }, [resendTimer]);
 
   const handleDigitChange = (index: number, value: string) => {
-    const digit = value.replace(/\D/g, '').slice(-1);
+    const digits = value.replace(/\D/g, '');
+    // Whole code pasted / autofilled from the SMS into one box
+    if (digits.length === OTP_LENGTH) {
+      setOtp(digits.split(''));
+      if (error) setError('');
+      inputRefs.current[OTP_LENGTH - 1]?.focus();
+      return;
+    }
+    const digit = digits.slice(-1);
     setOtp((prev) => {
       const next = [...prev];
       next[index] = digit;
@@ -66,9 +74,9 @@ export function ForgotOtpScreen({ phone, onBack, onVerified }: ForgotOtpScreenPr
     }
   };
 
-  const handleVerify = async (codeOverride?: string) => {
-    const code = codeOverride ?? otp.join('');
-    if (code.length !== 4) {
+  const handleVerify = async () => {
+    const code = otp.join('');
+    if (code.length !== OTP_LENGTH) {
       setError('Enter the 4-digit verification code.');
       return;
     }
@@ -93,7 +101,11 @@ export function ForgotOtpScreen({ phone, onBack, onVerified }: ForgotOtpScreenPr
     setOtp(['', '', '', '']);
     setError('');
     inputRefs.current[0]?.focus();
-    await apiForgotPassword(phone);
+    const result = await apiForgotPassword(phone);
+    if (!result.ok) {
+      setError(result.message);
+      setResendTimer(0);
+    }
   };
 
   const resendLabel = resendTimer > 0
@@ -130,7 +142,9 @@ export function ForgotOtpScreen({ phone, onBack, onVerified }: ForgotOtpScreenPr
                   error ? styles.codeBoxError : null,
                 ]}
                 keyboardType="number-pad"
-                maxLength={1}
+                maxLength={OTP_LENGTH}
+                textContentType={slot === 0 ? 'oneTimeCode' : 'none'}
+                autoComplete={slot === 0 ? 'sms-otp' : 'off'}
                 value={otp[slot]}
                 onChangeText={(value) => handleDigitChange(slot, value)}
                 onKeyPress={({ nativeEvent }) => handleKeyPress(slot, nativeEvent.key)}
@@ -161,18 +175,6 @@ export function ForgotOtpScreen({ phone, onBack, onVerified }: ForgotOtpScreenPr
             onPress={() => handleVerify()}
             disabled={loading}
           />
-
-          {__DEV__ && (
-            <TouchableOpacity
-              onPress={() => {
-                setOtp(['1', '2', '3', '4']);
-                handleVerify(DEV_BYPASS);
-              }}
-              style={styles.devBypass}
-              activeOpacity={0.7}>
-              <Text style={styles.devBypassText}>DEV: Use 1234</Text>
-            </TouchableOpacity>
-          )}
         </View>
       </ScrollView>
     </SafeAreaView>
@@ -209,9 +211,4 @@ const styles = StyleSheet.create({
   resend: { marginTop: 20, fontSize: 13, lineHeight: 18, fontWeight: '700', color: '#ABADB2' },
   resendActive: { color: '#7A0EED' },
   ctaButton: { width: '92%', marginTop: 32, alignSelf: 'center' },
-  devBypass: {
-    marginTop: 16, paddingHorizontal: 20, paddingVertical: 8,
-    borderRadius: 8, backgroundColor: '#FFF3CD', borderWidth: 1, borderColor: '#FFD54F',
-  },
-  devBypassText: { fontSize: 12, fontWeight: '600', color: '#E65100' },
 });

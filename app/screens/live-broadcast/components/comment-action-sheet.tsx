@@ -8,6 +8,7 @@ import {
   TouchableWithoutFeedback,
   View,
 } from 'react-native';
+import { avatarSource } from '@/utils/default-avatar';
 
 export type CommentActionTarget = {
   messageId: string;
@@ -62,13 +63,7 @@ export function CommentActionSheet({
         <View style={s.handle} />
 
         <View style={s.header}>
-          {target.avatarUri ? (
-            <Image source={{ uri: target.avatarUri }} style={s.avatar} />
-          ) : (
-            <View style={[s.avatar, s.avatarFallback]}>
-              <Text style={s.avatarInitial}>{target.userName[0]?.toUpperCase() ?? '?'}</Text>
-            </View>
-          )}
+          <Image source={avatarSource(target.avatarUri)} style={s.avatar} />
           <View style={s.headerText}>
             <Text style={s.userName} numberOfLines={1}>{target.userName}</Text>
             <Text style={s.commentText} numberOfLines={2}>{target.text}</Text>

@@ -9,19 +9,23 @@ const router = express.Router();
 // same logic as rooms.routes.js's buildDateFilter, kept local here rather
 // than cross-importing between route files for one small pure function.
 // Periods: today | this_week | this_month | this_year
+// Boundaries are midnight IST (UTC+5:30) regardless of the server's timezone.
+const IST_OFFSET_MS = 5.5 * 60 * 60 * 1000;
 function buildDateFilter(period, alias = 'e', column = 'created_at') {
-  const now = new Date();
-  let start = null;
+  const ist = new Date(Date.now() + IST_OFFSET_MS);
+  const y = ist.getUTCFullYear(), m = ist.getUTCMonth(), d = ist.getUTCDate();
+  let startIst;
   if (period === 'this_week') {
-    const day = now.getDay(); const diff = day === 0 ? -6 : 1 - day;
-    start = new Date(now); start.setDate(now.getDate() + diff); start.setHours(0, 0, 0, 0);
+    const day = ist.getUTCDay(); const diff = day === 0 ? -6 : 1 - day; // weeks start Monday
+    startIst = Date.UTC(y, m, d + diff);
   } else if (period === 'this_month') {
-    start = new Date(now.getFullYear(), now.getMonth(), 1);
+    startIst = Date.UTC(y, m, 1);
   } else if (period === 'this_year') {
-    start = new Date(now.getFullYear(), 0, 1);
+    startIst = Date.UTC(y, 0, 1);
   } else {
-    start = new Date(now); start.setHours(0, 0, 0, 0);
+    startIst = Date.UTC(y, m, d);
   }
+  const start = new Date(startIst - IST_OFFSET_MS);
   return `AND ${alias}.${column} >= '${start.toISOString()}'`;
 }
 
@@ -72,19 +76,24 @@ router.get('/top-earners', async (req, res, next) => {
     const limit = Math.min(parseInt(req.query.limit, 10) || 10, 50);
     const callDateFilter = buildDateFilter(period, 'c', 'created_at');
     const giftDateFilter = buildDateFilter(period, 'g', 'created_at');
+    // Gems = coins × the admin's Friend Zone gem value (this month). If it isn't
+    // configured yet the ranking falls back to coins — the order is the same.
+    const { loadConfigVersions, configFor, monthKey } = require('../utils/earning-slabs');
+    const fzCfg = configFor(await loadConfigVersions(), 'friendzone', monthKey(new Date()));
+    const gemsPerCoin = fzCfg?.gemsPerCoin ?? 1;
 
     const r = await db.query(
       `SELECT u.id, u.full_name, u.username, u.avatar_url,
               (COALESCE(call_gems.total, 0) + COALESCE(gift_gems.total, 0))::int AS total_coins
        FROM users u
        LEFT JOIN (
-         SELECT c.callee_id AS user_id, SUM(c.gems_earned)::int AS total
+         SELECT c.callee_id AS user_id, ROUND(SUM(c.coins_charged) * $2)::int AS total
          FROM friend_zone_calls c
-         WHERE c.gems_earned > 0 ${callDateFilter}
+         WHERE c.coins_charged > 0 ${callDateFilter}
          GROUP BY c.callee_id
        ) call_gems ON call_gems.user_id = u.id
        LEFT JOIN (
-         SELECT g.recipient_id AS user_id, SUM(g.coins * g.quantity * 5)::int AS total
+         SELECT g.recipient_id AS user_id, ROUND(SUM(g.coins * g.quantity) * $2)::int AS total
          FROM call_gift_events g
          WHERE 1=1 ${giftDateFilter}
          GROUP BY g.recipient_id
@@ -92,7 +101,7 @@ router.get('/top-earners', async (req, res, next) => {
        WHERE COALESCE(call_gems.total, 0) + COALESCE(gift_gems.total, 0) > 0
        ORDER BY total_coins DESC
        LIMIT $1`,
-      [limit]
+      [limit, gemsPerCoin]
     );
 
     return res.json({ success: true, data: r.rows });
@@ -132,7 +141,6 @@ router.get('/top-callers', async (req, res, next) => {
 // Express would match "calls"/"gifts" as the :id param and shadow these
 // routes entirely.
 router.get('/admin/calls', authenticateAdmin, ctrl.listCalls);
-router.get('/admin/gifts', authenticateAdmin, ctrl.listCallGifts);
 router.get('/admin', authenticateAdmin, ctrl.listApplications);
 router.get('/admin/:id', authenticateAdmin, ctrl.getApplication);
 router.patch('/admin/:id/status', authenticateAdmin, ctrl.updateStatus);

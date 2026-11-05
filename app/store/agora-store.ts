@@ -8,6 +8,7 @@ import {
 import { BASE_URL } from '@/services/api';
 import { authStore } from '@/store/auth-store';
 import { socketStore } from '@/store/socket-store';
+import { speakingStore } from '@/store/speaking-store';
 
 const AGORA_APP_ID = '95876516c6294152abaffa43ec4bb40d';
 
@@ -26,7 +27,7 @@ async function requestMicPermission(): Promise<boolean> {
       PermissionsAndroid.PERMISSIONS.RECORD_AUDIO,
       {
         title: 'Microphone Permission',
-        message: 'RaraLive needs microphone access for voice chat.',
+        message: 'RaRa Live needs microphone access for voice chat.',
         buttonPositive: 'Allow',
       }
     );
@@ -113,8 +114,41 @@ export function getAgoraState() {
   return { ...state };
 }
 
+// ── Own speaking level → stage voice waves ───────────────────────────────────
+// Agora reports the local mic volume (uid 0) every ~200ms. It's shown on your
+// own seat straight away and sent to the room, throttled: on a real change,
+// plus a heartbeat while talking so listeners don't fade you out mid-sentence.
+let lastSentLevel = 0;
+let lastSentAt = 0;
+
+function reportOwnLevel(level: number) {
+  const userId = state.userId;
+  if (!userId) return;
+  speakingStore.setLevel(userId, level);
+  const now = Date.now();
+  const changed = Math.abs(level - lastSentLevel) >= 0.08 || (level === 0 && lastSentLevel > 0);
+  const heartbeat = level > 0 && now - lastSentAt > 700;
+  if ((changed && now - lastSentAt > 120) || heartbeat) {
+    socketStore.emitSpeakingLevel(level);
+    lastSentLevel = level;
+    lastSentAt = now;
+  }
+}
+
+/** Agora volume (0–255) → 0–1, with a noise floor so background hiss reads as silent. */
+function volumeToLevel(volume: number, vad: number | undefined): number {
+  if (vad === 0 && volume < 40) return 0;
+  return Math.max(0, Math.min(1, (volume - 10) / 110));
+}
+
 function releaseEngine() {
   if (!state.engine) return;
+  // Stopped talking (left the seat / muted) — clear the waves for everyone
+  if (state.userId) {
+    speakingStore.setLevel(state.userId, 0);
+    if (lastSentLevel > 0) socketStore.emitSpeakingLevel(0);
+    lastSentLevel = 0;
+  }
   const channelId = state.channelId;
   const userId = state.userId;
   const joinedAt = state.joinedAt;
@@ -173,6 +207,8 @@ export const agoraStore = {
       engine.setClientRole(ClientRoleType.ClientRoleBroadcaster);
       engine.enableAudio();
       engine.setDefaultAudioRouteToSpeakerphone(true);
+      // Mic level for the stage voice waves: every 200ms, smoothed, with voice detection
+      engine.enableAudioVolumeIndication(200, 3, true);
 
       engine.registerEventHandler({
         onJoinChannelSuccess: (_conn: any, elapsed: number) => {
@@ -187,6 +223,10 @@ export const agoraStore = {
           console.log(`[Agora] LEFT | channel=${channelId} user=${userId} duration=${stats?.totalDuration ?? '?'}s time=${new Date(now).toISOString()}`);
           state.joined = false;
           notify();
+        },
+        onAudioVolumeIndication: (_conn: any, speakers: { uid: number; volume: number; vad?: number }[]) => {
+          const me = speakers?.find(sp => sp.uid === 0);
+          if (me) reportOwnLevel(volumeToLevel(me.volume, me.vad));
         },
         onUserJoined: (_conn: any, remoteUid: number) => {
           console.log(`[Agora] REMOTE JOINED | channel=${channelId} remoteUid=${remoteUid}`);

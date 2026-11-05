@@ -2,6 +2,8 @@ import { Ionicons } from '@expo/vector-icons';
 import { useState } from 'react';
 import { StyleSheet, TextInput, TouchableOpacity, View } from 'react-native';
 
+import { SendButton } from '@/components/SendButton';
+
 import { VoiceRecorderButton } from './voice-recorder-button';
 
 type MessageInputBarProps = {
@@ -61,9 +63,7 @@ export function MessageInputBar({ onSendText, onAttach, onSticker, onRecorded, o
       )}
 
       {hasText ? (
-        <TouchableOpacity onPress={handleSend} style={styles.sendBtn} activeOpacity={0.85}>
-          <Ionicons name="send" size={18} color="#FFFFFF" />
-        </TouchableOpacity>
+        <SendButton onPress={handleSend} size={38} />
       ) : (
         <VoiceRecorderButton onRecorded={handleRecorded} onRecordingChange={setIsRecording} />
       )}
@@ -85,8 +85,4 @@ const styles = StyleSheet.create({
   },
   input: { flex: 1, fontSize: 14, color: '#1C1E22', maxHeight: 100 },
   stickerBtn: { paddingBottom: 2 },
-  sendBtn: {
-    width: 38, height: 38, borderRadius: 19,
-    backgroundColor: '#7A0EED', alignItems: 'center', justifyContent: 'center',
-  },
 });

@@ -26,17 +26,25 @@ export default function PrivacyPolicy() {
       <ul>
         <li><strong>Account details:</strong> mobile phone number, password (stored only in encrypted/hashed form) and, optionally, email address.</li>
         <li><strong>Profile details:</strong> display name, username, gender, date of birth, preferred language, profile photo and cover photo.</li>
-        <li><strong>Content you create:</strong> room names and descriptions, chat messages, comments, posts and images you upload.</li>
-        <li><strong>Reports and support requests:</strong> information you send when you report a user or contact us.</li>
-        <li><strong>Hosts and agencies:</strong> if you apply to earn as a host or run an agency, we collect the details needed to pay you, such as account holder name, bank name, account number and IFSC.</li>
+        <li><strong>Posts and comments:</strong> photos, videos, captions and comments you publish, and posts you like.</li>
+        <li><strong>Private messages:</strong> text, photos, videos, voice messages and files you send in one-to-one chats.</li>
+        <li><strong>Rooms:</strong> room name, description, cover image and the city, state and district you add to a room.</li>
+        <li><strong>Friend Zone application:</strong> if you apply to be listed for paid calls, your full name, gender, date of birth, city, "About me" text, languages and photo.</li>
+        <li><strong>Reports and support requests:</strong> information you send when you report a user or contact us by email or WhatsApp.</li>
+        <li>
+          <strong>Agencies and hosts who receive payouts:</strong> to verify identity and pay earnings, we collect the
+          account holder name, bank name, account number and IFSC, Aadhaar number, PAN, and copies of the Aadhaar card,
+          PAN card and bank proof. These are used only for verification, payouts and legal/tax compliance, are never
+          shown to other users, and are accessible only to authorised staff.
+        </li>
       </ul>
 
       <h3>2.2 Information collected when you use the Service</h3>
       <ul>
         <li><strong>Live audio and video:</strong> when you join a mic seat, go live or make a call, your microphone audio and (if you turn it on) camera video are transmitted in real time to other participants.</li>
-        <li><strong>Activity data:</strong> rooms you join, users you follow, gifts sent and received, coin and gem balances, levels, tasks and transaction history.</li>
-        <li><strong>Approximate location (optional):</strong> only if you grant location permission when creating a room, we use your device location to fill in your city. We store the city name, not your precise coordinates.</li>
-        <li><strong>Device and technical data:</strong> device model, operating system, app version, IP address, crash logs and push-notification token.</li>
+        <li><strong>Activity data:</strong> rooms you join, users you follow, gifts sent and received, calls made (with duration), PK battle results, coin and gem balances, levels, tasks and transaction history.</li>
+        <li><strong>Location (optional):</strong> only if you grant location permission when creating a room, we read your device location once to fill in the room's city, state and district. We store those place names, not your GPS coordinates, and we do not track your location in the background.</li>
+        <li><strong>Technical data:</strong> IP address, request logs, device type and app version, used to run, secure and troubleshoot the Service.</li>
       </ul>
 
       <h3>2.3 Device permissions</h3>
@@ -46,12 +54,12 @@ export default function PrivacyPolicy() {
             <tr><th>Permission</th><th>Why we ask</th></tr>
           </thead>
           <tbody>
-            <tr><td>Microphone</td><td>Speak in voice rooms, go live and make calls.</td></tr>
-            <tr><td>Camera</td><td>Video live streams, video calls and taking profile photos.</td></tr>
-            <tr><td>Photos / media</td><td>Choose a profile photo, cover photo or images to share.</td></tr>
-            <tr><td>Location (optional)</td><td>Show your city on rooms you create.</td></tr>
-            <tr><td>Notifications</td><td>Tell you about messages, followers and live events.</td></tr>
-            <tr><td>Bluetooth</td><td>Route room audio to your Bluetooth headset.</td></tr>
+            <tr><td>Microphone</td><td>Speak in voice rooms, go live, make calls and record voice messages.</td></tr>
+            <tr><td>Camera</td><td>Video live streams and calls, and taking photos for your profile, posts and chats.</td></tr>
+            <tr><td>Photos and videos</td><td>Choose media for your profile, posts and chats, and save images to your gallery when you ask.</td></tr>
+            <tr><td>Location (optional)</td><td>Auto-fill the city, state and district of a room you create.</td></tr>
+            <tr><td>Notifications</td><td>Alert you about messages, calls and activity.</td></tr>
+            <tr><td>Bluetooth</td><td>Play room and call audio through your Bluetooth headset.</td></tr>
           </tbody>
         </table>
       </div>
@@ -61,7 +69,8 @@ export default function PrivacyPolicy() {
       <ul>
         <li>To create and secure your account, including verifying your phone number by OTP.</li>
         <li>To provide voice rooms, live streams, calls, chat, gifts, leaderboards and other features.</li>
-        <li>To process coin purchases, gift transactions and host/agency earnings.</li>
+        <li>To process coin purchases, gift transactions, and host and agency earnings and withdrawals.</li>
+        <li>To verify the identity of agencies and hosts who receive payouts, and to meet tax obligations.</li>
         <li>To keep the community safe: review reports, detect fraud and abuse, and enforce our <Link to="/terms">Terms of Service</Link>.</li>
         <li>To send service notifications and respond to support requests.</li>
         <li>To fix bugs, measure performance and improve the Service.</li>
@@ -71,16 +80,19 @@ export default function PrivacyPolicy() {
 
       <h2>4. What other users can see</h2>
       <p>
-        Your display name, username, profile and cover photos, level, gender, follower counts and public activity (such
-        as rooms you host and gifts you send in public rooms) are visible to other users. Anything you say or show in a
-        room or live stream is seen and heard by the people in it.
+        Your display name, username, profile and cover photos, bio, level, gender, follower counts, posts, comments and
+        public activity (such as rooms you host and gifts you send in rooms) are visible to other users. If you are
+        listed in Friend Zone, your Friend Zone profile is visible to other users. Anything you say or show in a room,
+        live stream or call is seen and heard by the people in it. Private messages are visible to you and the person you
+        send them to.
       </p>
 
       <h2>5. How we share information</h2>
       <p>We share personal data only with:</p>
       <ul>
-        <li><strong>Service providers</strong> who process data on our behalf, including our cloud hosting provider, Agora (real-time audio and video delivery), SMS/OTP providers and push-notification services (Expo / Firebase Cloud Messaging).</li>
-        <li><strong>Google Play</strong>, which processes coin purchases. We never receive your card or UPI details.</li>
+        <li><strong>Service providers</strong> who process data on our behalf: our cloud hosting provider, Agora (Agora.io, which delivers real-time audio and video for rooms, live streams and calls) and SMS providers that deliver verification codes.</li>
+        <li><strong>WhatsApp (Meta)</strong>, only if you choose to contact us through WhatsApp, for example about buying coins or withdrawing earnings. The app opens WhatsApp with a pre-filled message containing your username and the amount. WhatsApp's own privacy policy applies to that conversation.</li>
+        <li><strong>Payment and banking partners</strong>, to complete payments and payouts. We do not store your card or UPI PIN details.</li>
         <li><strong>Agencies</strong> you choose to join as a host, which can see your host performance and earnings.</li>
         <li><strong>Law enforcement or regulators</strong> when required by law, or to protect the safety of our users or the public.</li>
         <li><strong>A successor entity</strong> if our business is merged or sold, subject to this policy.</li>
@@ -90,7 +102,7 @@ export default function PrivacyPolicy() {
       <ul>
         <li>Account and profile data is kept while your account is active.</li>
         <li>When you delete your account, we delete or anonymise your personal data within 30 days, except where we must keep it longer.</li>
-        <li>Transaction and payout records are kept for up to 8 years to meet Indian tax and accounting law.</li>
+        <li>Transaction and payout records, and the KYC details of agencies and hosts who received payouts, are kept for up to 8 years to meet Indian tax and accounting law.</li>
         <li>Records linked to safety reports or legal matters may be kept for as long as needed to resolve them.</li>
       </ul>
 

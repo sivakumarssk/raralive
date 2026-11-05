@@ -1,4 +1,5 @@
-require('dotenv').config();
+// Always the .env next to this file, whatever folder the server is started from.
+require('dotenv').config({ path: require('path').join(__dirname, '.env') });
 
 const http = require('http');
 const path = require('path');
@@ -50,6 +51,9 @@ async function startServer() {
 
   httpServer.listen(PORT, () => {
     console.log(`Server listening on http://localhost:${PORT}`);
+    console.log(process.env.MSG91_AUTH_KEY && process.env.MSG91_OTP_TEMPLATE_ID
+      ? 'MSG91 OTP: configured'
+      : 'MSG91 OTP: NOT configured (OTPs are logged, not sent)');
   });
 }
 

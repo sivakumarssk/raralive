@@ -1,345 +1,268 @@
 import { Ionicons } from '@expo/vector-icons';
 import { LinearGradient } from 'expo-linear-gradient';
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import {
+  ActivityIndicator,
   Animated,
-  Dimensions,
-  FlatList,
   Modal,
-  PanResponder,
+  ScrollView,
   StyleSheet,
   Text,
   TouchableOpacity,
   View,
 } from 'react-native';
-import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { BASE_URL } from '@/services/api';
 import { authStore } from '@/store/auth-store';
+import { formatInr, formatN } from '@/screens/wallet/earnings-shared';
+import { RS, RT } from '../room-ui';
 
-const { height: SCREEN_H } = Dimensions.get('window');
-const SHEET_HEIGHT = SCREEN_H * 0.52;
-const WINDOW_SIZE = 20; // visible tiers at a time
+// Gift Progress: the user's Audio Chat monthly earning slabs (same data as the
+// wallet's Audio Chat Rooms screen). Gems from chat-room gifts count towards
+// the slabs and reset at month end.
 
-// ── Gem tier algorithm ────────────────────────────────────────────────────────
-// Each tier: { gems, payout (₹), badge?, hostPct }
-type Tier = {
-  gems: number;
-  payout: number;
-  badge?: 'MOST POPULAR' | 'BEST VALUE';
-  hostPct: number;
+type Slab = { name: string; gems: number; payout: number; bonus: number; reached: boolean };
+
+export type GiftSlabProgress = {
+  month_gems: number;
+  current_slab: string | null;
+  next_slab: { name: string; gems: number } | null;
+  slabs: Slab[];
 };
 
-const ALL_TIERS: Tier[] = [
-  // Host 50%
-  { gems: 12_500,     payout: 168,       hostPct: 50 },
-  { gems: 20_000,     payout: 270,       hostPct: 50 },
-  { gems: 40_000,     payout: 540,       hostPct: 50 },
-  { gems: 80_000,     payout: 1_080,     hostPct: 50 },
-  { gems: 105_000,    payout: 1_418,     hostPct: 50 },
-  { gems: 185_000,    payout: 2_497,     hostPct: 50 },
-  { gems: 255_000,    payout: 3_442,     hostPct: 50 },
-  { gems: 355_000,    payout: 4_792,     hostPct: 50 },
-  { gems: 510_000,    payout: 7_650,     hostPct: 50 },
-  { gems: 735_000,    payout: 11_025,    hostPct: 50 },
-  { gems: 1_025_000,  payout: 15_375,    hostPct: 50 },
-  { gems: 1_380_000,  payout: 20_700,    hostPct: 50 },
-  { gems: 1_860_000,  payout: 27_900,    hostPct: 50 },
-  { gems: 2_415_000,  payout: 36_225,    hostPct: 50 },
-  { gems: 2_895_000,  payout: 43_425,    hostPct: 50 },
-  { gems: 3_325_000,  payout: 49_875,    hostPct: 50 },
-  { gems: 3_820_000,  payout: 57_300,    hostPct: 50 },
-  { gems: 4_200_000,  payout: 63_000,    hostPct: 50 },
-  { gems: 4_620_000,  payout: 69_300,    hostPct: 50 },
-  // Host 55%
-  { gems: 5_016_000,  payout: 83_820,    hostPct: 55 },
-  { gems: 5_585_000,  payout: 92_152,    hostPct: 55 },
-  { gems: 6_140_000,  payout: 101_310,   hostPct: 55 },
-  { gems: 6_750_000,  payout: 111_375,   hostPct: 55 },
-  { gems: 7_425_000,  payout: 122_512,   hostPct: 55 },
-  { gems: 8_165_000,  payout: 134_722,   hostPct: 55 },
-  { gems: 8_980_000,  payout: 148_170,   hostPct: 55 },
-  { gems: 9_875_000,  payout: 162_937,   hostPct: 55 },
-  { gems: 10_860_000, payout: 179_190,   hostPct: 55 },
-  { gems: 11_945_000, payout: 197_092,   hostPct: 55 },
-  { gems: 13_135_000, payout: 216_727,   hostPct: 55 },
-  { gems: 14_445_000, payout: 238_342,   hostPct: 55 },
-  { gems: 15_165_000, payout: 250_222,   hostPct: 55 },
-  { gems: 15_920_000, payout: 262_680,   hostPct: 55 },
-  { gems: 16_715_000, payout: 275_797,   hostPct: 55 },
-  { gems: 17_380_000, payout: 286_770,   hostPct: 55 },
-  { gems: 18_075_000, payout: 298_237,   hostPct: 55 },
-  { gems: 18_795_000, payout: 310_117,   hostPct: 55 },
-  { gems: 19_545_000, payout: 322_492,   hostPct: 55 },
-  { gems: 20_130_000, payout: 332_145,   hostPct: 55 },
-  { gems: 20_730_000, payout: 342_045,   hostPct: 55 },
-  { gems: 21_555_000, payout: 355_657,   hostPct: 55 },
-  { gems: 22_415_000, payout: 369_847,   hostPct: 55 },
-  { gems: 23_310_000, payout: 384_615,   hostPct: 55 },
-  { gems: 24_475_000, payout: 403_837,   hostPct: 55 },
-  { gems: 25_695_000, payout: 423_967,   hostPct: 55 },
-  { gems: 26_945_000, payout: 444_593,   hostPct: 55 },
-  { gems: 28_945_000, payout: 477_593,   hostPct: 55 },
-  { gems: 30_945_000, payout: 510_592,   hostPct: 55 },
-  { gems: 32_945_000, payout: 543_592,   hostPct: 55 },
-  { gems: 34_945_000, payout: 576_592,   hostPct: 55 },
-  { gems: 37_445_000, payout: 617_842,   hostPct: 55 },
-  { gems: 39_945_000, payout: 659_092,   hostPct: 55 },
-  { gems: 42_445_000, payout: 700_342,   hostPct: 55 },
-  { gems: 45_445_000, payout: 749_842,   hostPct: 55 },
-  { gems: 48_445_000, payout: 799_342,   hostPct: 55 },
-  { gems: 51_445_000, payout: 848_842,   hostPct: 55 },
-  { gems: 54_945_000, payout: 906_592,   hostPct: 55 },
-  { gems: 58_445_000, payout: 964_342,   hostPct: 55 },
-  { gems: 61_945_000, payout: 1_022_092, hostPct: 55 },
-  { gems: 65_945_000, payout: 1_088_092, hostPct: 55 },
-];
+/** Fetches the chat-room slab summary; `reload` re-fetches (e.g. on modal open). */
+export function useGiftSlabProgress() {
+  const [data, setData] = useState<GiftSlabProgress | null>(null);
 
-function formatN(n: number) {
-  if (n >= 10_000_000) return `${(n / 10_000_000).toFixed(1)}Cr`;
-  if (n >= 100_000)    return `${(n / 100_000).toFixed(2)}L`;
-  if (n >= 1_000)      return `${(n / 1_000).toFixed(0)}K`;
-  return n.toLocaleString();
-}
-
-function formatPayout(n: number) {
-  if (n >= 100_000) return `₹${(n / 100_000).toFixed(2)}L`;
-  if (n >= 1_000)   return `₹${(n / 1_000).toFixed(1)}K`;
-  return `₹${n.toLocaleString()}`;
-}
-
-// ── Tier Row ──────────────────────────────────────────────────────────────────
-
-function TierRow({ tier, isCurrent, isCompleted }: { tier: Tier; isCurrent: boolean; isCompleted: boolean }) {
-  const perGem = (tier.payout / tier.gems);
-  const perGemStr = perGem < 0.01 ? perGem.toFixed(4) : perGem.toFixed(3);
-
-  return (
-    <View style={[tr.row, isCurrent && tr.rowCurrent, isCompleted && tr.rowDone]}>
-      {/* Left: diamond icon + gems */}
-      <View style={[tr.iconWrap, { backgroundColor: isCompleted ? '#E8F5E9' : isCurrent ? '#EDE8F7' : '#F5F3FA' }]}>
-        <Ionicons name="diamond" size={22} color={isCompleted ? '#43A047' : isCurrent ? '#7A0EED' : '#B0A8CC'} />
-      </View>
-
-      <View style={tr.mid}>
-        <Text style={[tr.gems, isCurrent && tr.gemsCurrent, isCompleted && tr.gemsDone]}>
-          {formatN(tier.gems)}
-        </Text>
-        <Text style={tr.label}>Gems · Host {tier.hostPct}%</Text>
-        <Text style={tr.perGem}>₹{perGemStr} / Gem</Text>
-      </View>
-
-      <View style={tr.right}>
-        {isCompleted ? (
-          <View style={tr.doneChip}>
-            <Ionicons name="checkmark" size={11} color="#fff" />
-            <Text style={tr.doneText}>Done</Text>
-          </View>
-        ) : isCurrent ? (
-          <LinearGradient colors={['#7A0EED', '#B50357']} start={{ x: 0, y: 0 }} end={{ x: 1, y: 0 }} style={tr.payoutBtn}>
-            <Text style={tr.payoutBtnText}>{formatPayout(tier.payout)}</Text>
-          </LinearGradient>
-        ) : (
-          <View style={tr.payoutChip}>
-            <Text style={tr.payoutChipText}>{formatPayout(tier.payout)}</Text>
-          </View>
-        )}
-      </View>
-    </View>
-  );
-}
-
-// ── Main Modal ────────────────────────────────────────────────────────────────
-
-type Props = { visible: boolean; onClose: () => void };
-
-export function CoinBoxModal({ visible, onClose }: Props) {
-  const insets = useSafeAreaInsets();
-  const translateY = useRef(new Animated.Value(SHEET_HEIGHT)).current;
-  const [gemBalance, setGemBalance] = useState(0);
-  const listRef = useRef<FlatList>(null);
-
-  useEffect(() => {
-    if (!visible) return;
+  const reload = useCallback(() => {
     const token = authStore.getToken();
     if (!token) return;
-    fetch(`${BASE_URL}/tasks/gems`, { headers: { Authorization: `Bearer ${token}` } })
+    fetch(`${BASE_URL}/tasks/earnings/chatroom?summary=1`, { headers: { Authorization: `Bearer ${token}` } })
       .then(r => r.json())
-      .then(j => { if (j.success) setGemBalance(j.data.gems ?? 0); })
+      .then(j => { if (j.success) setData(j.data); })
       .catch(() => {});
-  }, [visible]);
+  }, []);
 
-  // Which tier index has the user currently reached (highest completed)
-  const currentTierIdx = useMemo(() => {
-    let idx = -1;
-    for (let i = 0; i < ALL_TIERS.length; i++) {
-      if (gemBalance >= ALL_TIERS[i].gems) idx = i;
-      else break;
-    }
-    return idx;
-  }, [gemBalance]);
+  useEffect(() => { reload(); }, [reload]);
 
-  // Show 20 tiers starting from the last completed one (or 0 if none)
-  const windowStart = Math.max(0, currentTierIdx);
-  const visibleTiers = ALL_TIERS.slice(windowStart, windowStart + WINDOW_SIZE);
+  return { data, reload };
+}
 
-  const panResponder = useRef(
-    PanResponder.create({
-      onMoveShouldSetPanResponder: (_, g) => g.dy > 5,
-      onPanResponderMove: (_, g) => { if (g.dy > 0) translateY.setValue(g.dy); },
-      onPanResponderRelease: (_, g) => {
-        if (g.dy > 100) close();
-        else Animated.spring(translateY, { toValue: 0, useNativeDriver: true }).start();
-      },
-    })
-  ).current;
+/** 0–100: progress towards the next slab target (100 when all slabs are done). */
+export function slabProgressPct(data: GiftSlabProgress | null): number {
+  if (!data) return 0;
+  if (!data.next_slab) return 100;
+  return Math.min(100, (data.month_gems / data.next_slab.gems) * 100);
+}
+
+type Props = {
+  visible: boolean;
+  onClose: () => void;
+  data: GiftSlabProgress | null;
+};
+
+export function CoinBoxModal({ visible, onClose, data }: Props) {
+  const scale = useRef(new Animated.Value(0.9)).current;
+  const opacity = useRef(new Animated.Value(0)).current;
 
   function open() {
-    translateY.setValue(SHEET_HEIGHT);
-    Animated.spring(translateY, { toValue: 0, useNativeDriver: true, tension: 65, friction: 11 }).start();
+    scale.setValue(0.9); opacity.setValue(0);
+    Animated.parallel([
+      Animated.spring(scale, { toValue: 1, useNativeDriver: true, tension: 80, friction: 9 }),
+      Animated.timing(opacity, { toValue: 1, duration: 160, useNativeDriver: true }),
+    ]).start();
   }
 
   function close() {
-    Animated.timing(translateY, { toValue: SHEET_HEIGHT, duration: 220, useNativeDriver: true }).start(onClose);
+    Animated.timing(opacity, { toValue: 0, duration: 140, useNativeDriver: true }).start(onClose);
   }
 
+  const slabs = data?.slabs ?? [];
+  const reachedCount = slabs.filter(sl => sl.reached).length;
+  const nextIdx = slabs.findIndex(sl => !sl.reached);   // -1 when every slab is done
+  const next = nextIdx >= 0 ? slabs[nextIdx] : null;
+  const gems = data?.month_gems ?? 0;
+  const pct = slabProgressPct(data);
+
   return (
-    <Modal visible={visible} transparent animationType="none" onRequestClose={close} onShow={open}>
-      <TouchableOpacity style={s.backdrop} activeOpacity={1} onPress={close} />
+    <Modal visible={visible} transparent animationType="none" statusBarTranslucent onRequestClose={close} onShow={open}>
+      <Animated.View style={[s.backdrop, { opacity }]}>
+        <TouchableOpacity style={StyleSheet.absoluteFill} activeOpacity={1} onPress={close} />
 
-      <Animated.View style={[s.sheet, { height: SHEET_HEIGHT, paddingBottom: insets.bottom + 8, transform: [{ translateY }] }]}>
-        {/* Drag handle */}
-        <View {...panResponder.panHandlers} style={s.handleArea}>
-          <View style={s.handle} />
-        </View>
-
-        {/* Header */}
-        <View style={s.header}>
-          <Ionicons name="diamond" size={20} color="#7A0EED" />
-          <Text style={s.title}>Getting Gems</Text>
-          <View style={s.gemBadge}>
-            <Ionicons name="diamond" size={13} color="#7A0EED" />
-            <Text style={s.gemBadgeText}>{formatN(gemBalance)}</Text>
+        <Animated.View style={[s.card, { transform: [{ scale }] }]}>
+          {/* Header */}
+          <View style={s.header}>
+            <View style={s.headerText}>
+              <Text style={s.title}>Gift Progress</Text>
+              <Text style={s.subtitle}>Your gift slab progress · This month</Text>
+            </View>
+            <TouchableOpacity onPress={close} hitSlop={10} style={s.closeBtn}>
+              <Ionicons name="close" size={16} color="#60626A" />
+            </TouchableOpacity>
           </View>
-        </View>
 
-        {/* Column labels */}
-        <View style={s.colRow}>
-          <Text style={s.colGems}>Gems Threshold</Text>
-          <Text style={s.colPayout}>Host Payment</Text>
-        </View>
+          {!data ? (
+            <ActivityIndicator color="#7A0EED" style={{ marginVertical: 40 }} />
+          ) : slabs.length === 0 ? (
+            <View style={s.unset}>
+              <Text style={s.unsetEmoji}>🎁</Text>
+              <Text style={s.unsetText}>Gift slabs aren't set up yet. Check back soon.</Text>
+            </View>
+          ) : (
+            <ScrollView showsVerticalScrollIndicator={false} bounces={false}>
+              {/* Current slab + progress */}
+              <View style={s.progressCard}>
+                <View style={s.currentRow}>
+                  <LinearGradient colors={['#9B4DFF', '#7A0EED']} style={s.badge}>
+                    <Text style={s.badgeNum}>{reachedCount}</Text>
+                  </LinearGradient>
+                  <View style={{ flex: 1 }}>
+                    <Text style={s.badgeLabel}>Current slab</Text>
+                    <Text style={s.progressAmount}>
+                      {formatN(gems)}
+                      <Text style={s.progressTarget}> / {formatN(next?.gems ?? gems)} gems</Text>
+                    </Text>
+                  </View>
+                  <Text style={s.pct}>{Math.floor(pct)}%</Text>
+                </View>
+                <View style={s.track}>
+                  <LinearGradient
+                    colors={['#7A0EED', '#B57BFF']}
+                    start={{ x: 0, y: 0 }} end={{ x: 1, y: 0 }}
+                    style={[s.fill, { width: `${pct}%` }]}
+                  />
+                </View>
+              </View>
 
-        <FlatList
-          ref={listRef}
-          data={visibleTiers}
-          keyExtractor={(_, i) => String(windowStart + i)}
-          renderItem={({ item, index }) => {
-            const absIdx = windowStart + index;
-            return (
-              <TierRow
-                tier={item}
-                isCurrent={absIdx === currentTierIdx + 1} // next tier to reach
-                isCompleted={absIdx <= currentTierIdx}
-              />
-            );
-          }}
-          contentContainerStyle={s.list}
-          showsVerticalScrollIndicator={false}
-          ItemSeparatorComponent={() => <View style={s.sep} />}
-        />
+              {/* Next target / remaining */}
+              <View style={s.statsRow}>
+                <View style={s.statTile}>
+                  <Text style={s.statLabel}>Next slab target</Text>
+                  <Text style={[s.statValue, { color: '#7A0EED' }]}>
+                    {next ? formatN(next.gems) : 'Completed'}
+                  </Text>
+                </View>
+                <View style={s.statTile}>
+                  <Text style={s.statLabel}>Remaining gems</Text>
+                  <Text style={[s.statValue, { color: '#F5457A' }]}>
+                    {next ? formatN(next.gems - gems) : '0'}
+                  </Text>
+                </View>
+              </View>
 
-        {/* Footer note */}
-        <View style={s.footer}>
-          <Ionicons name="information-circle-outline" size={14} color="#ABADB2" />
-          <Text style={s.footerText}>Gems are earned when you receive gifts in chat rooms</Text>
-        </View>
+              {/* Slab rewards */}
+              <Text style={s.sectionTitle}>Slab Rewards</Text>
+              <View style={s.table}>
+                {slabs.map((sl, i) => {
+                  const isNext = i === nextIdx;
+                  const isTop = i === slabs.length - 1;
+                  return (
+                    <View key={sl.name} style={[s.row, i < slabs.length - 1 && s.rowBorder, isNext && s.rowNext]}>
+                      <Text style={[s.rowName, isNext && s.rowTextNext]}>Slab {i + 1}</Text>
+                      <Text style={[s.rowGems, isNext && s.rowTextNext]}>{formatN(sl.gems)} gems</Text>
+                      <View style={s.rowCheck}>
+                        {sl.reached && <Ionicons name="checkmark-circle" size={16} color="#22B45A" />}
+                      </View>
+                      <View style={s.rowReward}>
+                        {isTop && <Text style={s.crown}>👑</Text>}
+                        <Text style={[s.rewardText, sl.reached && s.rewardTextDone]}>
+                          {formatInr(sl.payout + sl.bonus).replace(' ', '')}
+                        </Text>
+                      </View>
+                    </View>
+                  );
+                })}
+              </View>
+
+              {/* Next reward */}
+              <View style={s.banner}>
+                <Text style={s.bannerEmoji}>🎁</Text>
+                <View style={{ flex: 1 }}>
+                  {next ? (
+                    <>
+                      <Text style={s.bannerText}>Complete the next slab to earn</Text>
+                      <Text style={s.bannerHighlight}>
+                        {formatInr(next.payout + next.bonus).replace(' ', '')} in your wallet
+                      </Text>
+                    </>
+                  ) : (
+                    <>
+                      <Text style={s.bannerText}>All slabs completed!</Text>
+                      <Text style={s.bannerHighlight}>Slabs reset at month end</Text>
+                    </>
+                  )}
+                </View>
+              </View>
+            </ScrollView>
+          )}
+        </Animated.View>
       </Animated.View>
     </Modal>
   );
 }
 
-// ── Tier row styles ───────────────────────────────────────────────────────────
+const s = StyleSheet.create({
+  unset: { alignItems: 'center', gap: 6, paddingVertical: 28 },
+  unsetEmoji: { fontSize: 28 },
+  unsetText: { fontSize: RT.body, color: '#60626A', textAlign: 'center' },
+  backdrop: {
+    flex: 1, backgroundColor: 'rgba(0,0,0,0.45)',
+    alignItems: 'center', justifyContent: 'center', paddingHorizontal: 20,
+  },
+  card: {
+    width: '100%', maxWidth: 380, maxHeight: '82%',
+    backgroundColor: '#FFFFFF', borderRadius: RS.cardRadius, padding: RS.pad,
+    elevation: 12,
+  },
 
-const tr = StyleSheet.create({
-  row: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    paddingHorizontal: 16,
-    paddingVertical: 10,
-    gap: 12,
-    backgroundColor: '#FAFAFA',
-    borderRadius: 14,
-    marginHorizontal: 12,
-  },
-  rowCurrent: {
-    backgroundColor: '#F2EAFF',
-    borderWidth: 1.5,
-    borderColor: '#7A0EED',
-  },
-  rowDone: {
-    backgroundColor: '#F1FBF2',
-  },
-  iconWrap: {
-    width: 40, height: 40, borderRadius: 12,
+  header: { flexDirection: 'row', alignItems: 'flex-start', gap: 10, marginBottom: 12 },
+  headerText: { flex: 1 },
+  title: { fontSize: RT.title, fontWeight: '700', color: '#1C1E22' },
+  subtitle: { fontSize: RT.secondary, color: '#8A8C93', marginTop: 2 },
+  closeBtn: {
+    width: RS.close, height: RS.close, borderRadius: RS.close / 2, backgroundColor: '#F4F3F8',
     alignItems: 'center', justifyContent: 'center',
   },
-  mid: { flex: 1, gap: 1 },
-  gems: { fontSize: 15, fontWeight: '800', color: '#1C1E22' },
-  gemsCurrent: { color: '#7A0EED' },
-  gemsDone: { color: '#43A047' },
-  label: { fontSize: 10, color: '#ABADB2', fontWeight: '500' },
-  perGem: { fontSize: 10, color: '#B0A8CC', fontWeight: '500' },
-  right: { alignItems: 'flex-end' },
-  payoutBtn: {
-    borderRadius: 20, paddingHorizontal: 12, paddingVertical: 6,
-  },
-  payoutBtnText: { fontSize: 13, fontWeight: '800', color: '#fff' },
-  payoutChip: {
-    backgroundColor: '#F0EDF8',
-    borderRadius: 20, paddingHorizontal: 12, paddingVertical: 6,
-  },
-  payoutChipText: { fontSize: 13, fontWeight: '700', color: '#60626A' },
-  doneChip: {
-    flexDirection: 'row', alignItems: 'center', gap: 3,
-    backgroundColor: '#43A047',
-    borderRadius: 20, paddingHorizontal: 10, paddingVertical: 5,
-  },
-  doneText: { fontSize: 11, fontWeight: '700', color: '#fff' },
-});
 
-// ── Sheet styles ──────────────────────────────────────────────────────────────
+  progressCard: { backgroundColor: '#F7F3FF', borderRadius: 14, padding: 12, gap: 10 },
+  currentRow: { flexDirection: 'row', alignItems: 'center', gap: 12 },
+  badge: { width: 40, height: 40, borderRadius: 20, alignItems: 'center', justifyContent: 'center' },
+  badgeNum: { fontSize: 18, fontWeight: '800', color: '#FFFFFF' },
+  badgeLabel: { fontSize: RT.secondary, color: '#8A8C93' },
+  progressAmount: { fontSize: 18, fontWeight: '800', color: '#1C1E22', marginTop: 1 },
+  progressTarget: { fontSize: RT.secondary + 1, fontWeight: '500', color: '#8A8C93' },
+  pct: { fontSize: RT.body, fontWeight: '800', color: '#7A0EED' },
+  track: { height: 8, borderRadius: 4, backgroundColor: '#E8E0FA', overflow: 'hidden' },
+  fill: { height: '100%', borderRadius: 4 },
 
-const s = StyleSheet.create({
-  backdrop: { ...StyleSheet.absoluteFillObject, backgroundColor: 'rgba(0,0,0,0.45)' },
-  sheet: {
-    position: 'absolute', bottom: 0, left: 0, right: 0,
-    backgroundColor: '#FFFFFF',
-    borderTopLeftRadius: 24, borderTopRightRadius: 24,
+  statsRow: { flexDirection: 'row', gap: 10, marginTop: 10 },
+  statTile: {
+    flex: 1, gap: 2, borderRadius: 12, paddingVertical: 10, paddingHorizontal: 12,
+    borderWidth: 1, borderColor: '#EEEBF6', backgroundColor: '#FFFFFF',
   },
-  handleArea: { alignItems: 'center', paddingTop: 10, paddingBottom: 4 },
-  handle: { width: 40, height: 4, borderRadius: 2, backgroundColor: '#DDDAE8' },
-  header: {
-    flexDirection: 'row', alignItems: 'center', gap: 8,
-    paddingHorizontal: 16, paddingBottom: 10,
+  statLabel: { fontSize: RT.secondary, color: '#8A8C93' },
+  statValue: { fontSize: 16, fontWeight: '800' },
+
+  sectionTitle: { fontSize: RT.section, fontWeight: '700', color: '#1C1E22', marginTop: 16, marginBottom: 8 },
+  table: { borderRadius: 12, borderWidth: 1, borderColor: '#EEEBF6', overflow: 'hidden' },
+  row: { flexDirection: 'row', alignItems: 'center', paddingHorizontal: 12, paddingVertical: 10 },
+  rowBorder: { borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: '#EEEBF6' },
+  // Next slab to reach: light purple with a purple edge
+  rowNext: { backgroundColor: '#F4EEFF', borderLeftWidth: 3, borderLeftColor: '#7A0EED', paddingLeft: 9 },
+  rowName: { width: 56, fontSize: 13, fontWeight: '600', color: '#3A3C42' },
+  rowGems: { flex: 1, fontSize: 13, color: '#60626A' },
+  rowTextNext: { color: '#5A0BB0', fontWeight: '700' },
+  rowCheck: { width: 22, alignItems: 'center' },
+  rowReward: { flexDirection: 'row', alignItems: 'center', justifyContent: 'flex-end', gap: 4, minWidth: 84 },
+  crown: { fontSize: 13 },
+  rewardText: { fontSize: 13, fontWeight: '800', color: '#E8944A' },
+  rewardTextDone: { color: '#22B45A' },
+
+  banner: {
+    flexDirection: 'row', alignItems: 'center', gap: 10, marginTop: 14,
+    borderRadius: 12, borderWidth: 1, borderColor: '#FFE3C2', backgroundColor: '#FFF7EC',
+    paddingHorizontal: 12, paddingVertical: 10,
   },
-  title: { flex: 1, fontSize: 16, fontWeight: '800', color: '#1C1E22' },
-  gemBadge: {
-    flexDirection: 'row', alignItems: 'center', gap: 4,
-    backgroundColor: '#F2EAFF', borderRadius: 20,
-    paddingHorizontal: 10, paddingVertical: 4,
-  },
-  gemBadgeText: { fontSize: 13, fontWeight: '800', color: '#7A0EED' },
-  colRow: {
-    flexDirection: 'row', justifyContent: 'space-between',
-    paddingHorizontal: 28, paddingBottom: 6,
-  },
-  colGems: { fontSize: 10, fontWeight: '700', color: '#ABADB2', textTransform: 'uppercase', letterSpacing: 0.5 },
-  colPayout: { fontSize: 10, fontWeight: '700', color: '#ABADB2', textTransform: 'uppercase', letterSpacing: 0.5 },
-  list: { paddingBottom: 8, gap: 6 },
-  sep: { height: 0 },
-  footer: {
-    flexDirection: 'row', alignItems: 'center', gap: 6,
-    paddingHorizontal: 16, paddingTop: 8, paddingBottom: 4,
-    borderTopWidth: StyleSheet.hairlineWidth, borderTopColor: '#F0EDF8',
-  },
-  footerText: { fontSize: 11, color: '#ABADB2', flex: 1, lineHeight: 16 },
+  bannerEmoji: { fontSize: 22 },
+  bannerText: { fontSize: RT.secondary, color: '#60626A' },
+  bannerHighlight: { fontSize: RT.body, fontWeight: '800', color: '#E8944A', marginTop: 2 },
 });

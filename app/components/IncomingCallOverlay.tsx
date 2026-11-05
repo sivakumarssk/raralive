@@ -11,6 +11,7 @@ import {
   getFriendZoneCallSessionState,
   subscribeFriendZoneCallSession,
 } from '@/store/friend-zone-call-session-store';
+import { avatarSource } from '@/utils/default-avatar';
 
 export function IncomingCallOverlay() {
   const insets = useSafeAreaInsets();
@@ -48,18 +49,12 @@ export function IncomingCallOverlay() {
 
         <View style={[styles.header, { paddingTop: insets.top + 20 }]}>
           <Text style={styles.callTypeLabel}>
-            Incoming {session.callType === 'video' ? 'Video' : 'Audio'} Call
+            Incoming {session.callType === 'video' ? 'video' : 'audio'} call
           </Text>
 
           {!showLocalVideo && (
             <View style={styles.avatarWrap}>
-              {avatarUri ? (
-                <Image source={{ uri: avatarUri }} style={styles.avatar} />
-              ) : (
-                <View style={[styles.avatar, styles.avatarFallback]}>
-                  <Text style={styles.avatarInitial}>{name[0]?.toUpperCase()}</Text>
-                </View>
-              )}
+              <Image source={avatarSource(avatarUri)} style={styles.avatar} />
             </View>
           )}
 
@@ -111,7 +106,7 @@ const styles = StyleSheet.create({
     fontWeight: '700',
     color: 'rgba(255,255,255,0.85)',
     letterSpacing: 0.4,
-    textTransform: 'uppercase',
+    
     textShadowColor: 'rgba(0,0,0,0.5)',
     textShadowRadius: 6,
     textShadowOffset: { width: 0, height: 1 },

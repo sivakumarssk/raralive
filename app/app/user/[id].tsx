@@ -1,29 +1,39 @@
 import { Ionicons } from '@expo/vector-icons';
 import { LinearGradient } from 'expo-linear-gradient';
+import { useIsFocused } from '@react-navigation/native';
 import { useLocalSearchParams, useRouter } from 'expo-router';
+import { StatusBar } from 'expo-status-bar';
 import { useEffect, useState } from 'react';
 import {
   ActivityIndicator,
+  Alert,
+  Animated,
   Dimensions,
   FlatList,
   Image,
   Platform,
-  ScrollView,
   StyleSheet,
   Text,
   TouchableOpacity,
   View,
 } from 'react-native';
-import { SafeAreaView } from 'react-native-safe-area-context';
+import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { BASE_URL, MEDIA_BASE } from '@/services/api';
 import { authStore } from '@/store/auth-store';
+import { ImageViewer } from '@/components/ImageViewer';
 import { UserLevelBadge } from '@/components/UserLevel';
+import { useProfileScroll } from '@/hooks/use-profile-scroll';
 import { getUserLevel } from '@/utils/userLevel';
+import { REPORT_GUIDANCE, ReportReasonModal, USER_REPORT_REASONS } from '@/screens/room-detail/components/report-reason-modal';
+import { avatarSource } from '@/utils/default-avatar';
 
 const SCREEN_W  = Dimensions.get('window').width;
-const COVER_H   = 200;
-const AVATAR_SZ = 84;
+// Scaled to screen width so proportions stay the same on every device
+const COVER_H   = Math.round(SCREEN_W * 0.42);
+const AVATAR_SZ = Math.round(SCREEN_W * 0.22);
+// How much of the avatar overlaps the cover
+const AVATAR_OVERLAP = Math.round(AVATAR_SZ * 0.3);
 const GRID_SIZE = (SCREEN_W - 4) / 3;
 
 type Profile = {
@@ -63,6 +73,10 @@ function Stat({ value, label }: { value: number; label: string }) {
 export default function UserProfilePage() {
   const router = useRouter();
   const { id }  = useLocalSearchParams<{ id: string }>();
+  const insets  = useSafeAreaInsets();
+  const [viewing, setViewing] = useState<'avatar' | 'cover' | null>(null);
+  const scroll = useProfileScroll(COVER_H);
+  const isFocused = useIsFocused();
 
   const [profile,   setProfile]   = useState<Profile | null>(null);
   const [posts,     setPosts]     = useState<Post[]>([]);
@@ -70,11 +84,12 @@ export default function UserProfilePage() {
   const [following, setFollowing] = useState(false);
   const [fLoading,  setFLoading]  = useState(false);
   const [error,     setError]     = useState('');
+  const [reportVisible, setReportVisible] = useState(false);
 
   const token         = authStore.getToken();
   const currentUserId = authStore.getUserId();
   const isOwnProfile  = !!currentUserId && currentUserId === id;
-  const authHeaders   = token ? { Authorization: `Bearer ${token}` } : {};
+  const authHeaders: Record<string, string> = token ? { Authorization: `Bearer ${token}` } : {};
 
   useEffect(() => {
     if (!id) { setError('No user ID'); setLoading(false); return; }
@@ -135,6 +150,22 @@ export default function UserProfilePage() {
     }
   };
 
+  // Resolves to null on success, else an error message for the report popup
+  const handleSubmitReport = async (reason: string): Promise<string | null> => {
+    if (!token) return 'Please log in again.';
+    try {
+      const res  = await fetch(`${BASE_URL}/auth/users/${id}/report`, {
+        method: 'POST',
+        headers: { ...authHeaders, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ reason }),
+      });
+      const json = await res.json().catch(() => ({}));
+      return res.ok && json.success !== false ? null : (json.message || 'Could not send. Please try again.');
+    } catch {
+      return 'Network error. Please try again.';
+    }
+  };
+
   if (loading) {
     return (
       <View style={s.root}>
@@ -174,62 +205,72 @@ export default function UserProfilePage() {
   const avatarUri   = resolveUrl(profile.avatar_url);
   const coverUri    = resolveUrl(profile.cover_url);
   const displayName = profile.full_name || profile.username || 'User';
-  const initials    = displayName.split(' ').map((w: string) => w[0]).join('').toUpperCase().slice(0, 2);
   const genderLabel = profile.gender
     ? profile.gender.charAt(0).toUpperCase() + profile.gender.slice(1)
     : null;
 
   return (
     <View style={s.root}>
-      <ScrollView
+      {/* White status bar icons over the cover — only while this screen is focused */}
+      {isFocused && <StatusBar style="light" />}
+      <Animated.ScrollView
         showsVerticalScrollIndicator={false}
-        contentContainerStyle={{ paddingBottom: 60 }}
+        contentContainerStyle={{ paddingBottom: 60, minHeight: scroll.contentMinHeight }}
         stickyHeaderIndices={[]}
+        onScroll={scroll.onScroll}
+        scrollEventThrottle={16}
       >
-        {/* Cover */}
-        <View style={s.coverWrap}>
-          {coverUri
-            ? <Image source={{ uri: coverUri }} style={s.cover} resizeMode="cover" />
-            : <LinearGradient
-                colors={['#4B00E8', '#7A04E5', '#B40CF0', '#FF2A76']}
-                start={{ x: 0, y: 0 }} end={{ x: 1, y: 1 }}
-                style={s.cover}
-              />}
+        {/* Cover — extends up behind the status bar, same as own profile; tap to view it */}
+        <Animated.View style={[s.coverWrap, { height: COVER_H + insets.top }, scroll.coverStyle]}>
+          <TouchableOpacity
+            style={StyleSheet.absoluteFill}
+            activeOpacity={0.9}
+            disabled={!coverUri}
+            onPress={() => setViewing('cover')}
+            accessibilityLabel="View cover photo">
+            {coverUri
+              ? <Image source={{ uri: coverUri }} style={StyleSheet.absoluteFill} resizeMode="cover" />
+              : <LinearGradient
+                  colors={['#4B00E8', '#7A04E5', '#B40CF0', '#FF2A76']}
+                  start={{ x: 0, y: 0 }} end={{ x: 1, y: 1 }}
+                  style={StyleSheet.absoluteFill}
+                />}
+          </TouchableOpacity>
+          <Animated.View pointerEvents="none" style={[StyleSheet.absoluteFill, s.coverDim, scroll.coverDimStyle]} />
+        </Animated.View>
 
-          {/* Back button over cover */}
-          <SafeAreaView style={StyleSheet.absoluteFill} edges={['top']} pointerEvents="box-none">
-            <TouchableOpacity style={s.backBtnCover} onPress={() => router.back()} activeOpacity={0.8}>
-              <Ionicons name="chevron-back" size={22} color="#FFF" />
-            </TouchableOpacity>
-          </SafeAreaView>
-        </View>
+        {/* Everything below the cover slides up over it on scroll */}
+        <View style={s.profileBody}>
+        <View style={s.profileBodyBg} />
 
         {/* Avatar + stats row */}
         <View style={s.avatarRow}>
-          <View style={s.avatarWrap}>
-            {avatarUri
-              ? <Image source={{ uri: avatarUri }} style={s.avatar} />
-              : <LinearGradient colors={['#7A0EED', '#B50357']} style={s.avatar}>
-                  <Text style={s.avatarInit}>{initials}</Text>
-                </LinearGradient>}
-            {/* Level badge floating at bottom-centre of avatar — same placement as own profile */}
-            <View style={s.levelBadgeAbs}>
-              <UserLevelBadge size="xl" level={getUserLevel(profile.coins_gifted)} />
+          <Animated.View style={[s.avatarWrap, scroll.avatarStyle]}>
+            <TouchableOpacity
+              activeOpacity={0.9}
+              disabled={!avatarUri}
+              onPress={() => setViewing('avatar')}
+              accessibilityLabel="View profile photo">
+              <Image source={avatarSource(avatarUri, profile.gender)} style={s.avatar} />
+            </TouchableOpacity>
+          </Animated.View>
+          {/* @username on top, stats below — beside the avatar */}
+          <View style={s.infoCol}>
+            {!!profile.username && <Text style={s.username} numberOfLines={1}>@{profile.username}</Text>}
+            <View style={s.statsRow}>
+              <Stat value={profile.followers_count} label="Followers" />
+              <View style={s.statDiv} />
+              <Stat value={profile.following_count} label="Following" />
+              <View style={s.statDiv} />
+              <Stat value={profile.posts_count}     label="Posts" />
             </View>
-          </View>
-          <View style={s.statsRow}>
-            <Stat value={profile.followers_count} label="Followers" />
-            <View style={s.statDiv} />
-            <Stat value={profile.following_count} label="Following" />
-            <View style={s.statDiv} />
-            <Stat value={profile.posts_count}     label="Posts" />
           </View>
         </View>
 
-        {/* Name / username / gender / bio */}
+        {/* Name / gender / bio */}
         <View style={s.nameBlock}>
           <Text style={s.displayName}>{displayName}</Text>
-          {!!profile.username && <Text style={s.username}>@{profile.username}</Text>}
+          {!!profile.bio && <Text style={s.bio}>{profile.bio}</Text>}
           {genderLabel && (
             <View style={s.genderBadge}>
               <Ionicons
@@ -243,7 +284,11 @@ export default function UserProfilePage() {
               <Text style={s.genderTxt}>{genderLabel}</Text>
             </View>
           )}
-          {!!profile.bio && <Text style={s.bio}>{profile.bio}</Text>}
+        </View>
+
+        {/* Level badge — above the action buttons, same as own profile */}
+        <View style={s.chipRow}>
+          <UserLevelBadge size="pill" level={getUserLevel(profile.coins_gifted)} />
         </View>
 
         {/* Action buttons */}
@@ -274,13 +319,20 @@ export default function UserProfilePage() {
                   const json = await res.json();
                   if (json.success && json.data?.id) {
                     router.push(`/chat/${json.data.id}` as any);
+                  } else {
+                    Alert.alert('Could not open chat', json.message || 'Something went wrong.');
                   }
-                } catch {}
+                } catch {
+                  Alert.alert('Could not open chat', 'Network error. Check your connection.');
+                }
               }}>
-              <Ionicons name="chatbubble-ellipses-outline" size={18} color="#7A0EED" />
+              <Ionicons name="chatbubble-ellipses-outline" size={17} color="#7A0EED" />
             </TouchableOpacity>
             <TouchableOpacity style={s.iconBtn} activeOpacity={0.85}>
-              <Ionicons name="share-social-outline" size={18} color="#7A0EED" />
+              <Ionicons name="share-social-outline" size={17} color="#7A0EED" />
+            </TouchableOpacity>
+            <TouchableOpacity style={[s.iconBtn, s.reportBtn]} activeOpacity={0.85} onPress={() => setReportVisible(true)}>
+              <Ionicons name="flag-outline" size={16} color="#E14C57" />
             </TouchableOpacity>
           </View>
         )}
@@ -324,7 +376,30 @@ export default function UserProfilePage() {
               />
             )}
         </View>
-      </ScrollView>
+        </View>
+      </Animated.ScrollView>
+
+      {/* Pinned, so back stays reachable while the page scrolls */}
+      <TouchableOpacity style={[s.backBtnCover, { top: insets.top + 8 }]} onPress={() => router.back()} activeOpacity={0.8}>
+        <Ionicons name="chevron-back" size={22} color="#FFF" />
+      </TouchableOpacity>
+
+      <ImageViewer
+        uri={viewing === 'cover' ? coverUri ?? null : viewing === 'avatar' ? avatarUri ?? null : null}
+        title={viewing === 'cover' ? 'Cover photo' : 'Profile photo'}
+        subtitle={displayName}
+        onClose={() => setViewing(null)}
+      />
+
+      <ReportReasonModal
+        visible={reportVisible}
+        title="Report User"
+        subtitle={`Why are you reporting ${displayName}?`}
+        notice={REPORT_GUIDANCE}
+        reasons={USER_REPORT_REASONS}
+        onClose={() => setReportVisible(false)}
+        onSubmit={handleSubmitReport}
+      />
     </View>
   );
 }
@@ -347,56 +422,65 @@ const s = StyleSheet.create({
 
   // cover
   coverWrap: { width: SCREEN_W, height: COVER_H },
-  cover:     { width: SCREEN_W, height: COVER_H },
   backBtnCover: {
-    margin: 14,
-    width: 36, height: 36, borderRadius: 18,
+    position: 'absolute', top: 10, left: 12,
+    width: 32, height: 32, borderRadius: 16,
     backgroundColor: 'rgba(0,0,0,0.35)',
     alignItems: 'center', justifyContent: 'center',
   },
 
   // avatar + stats
-  avatarRow: {
-    flexDirection: 'row', alignItems: 'center',
-    paddingHorizontal: 16, marginTop: -(AVATAR_SZ / 2), gap: 12,
+  coverDim: { backgroundColor: '#000' },
+  // Overlaps the cover by the avatar's overhang; the white panel starts below
+  // that, so the avatar sits half on the cover and the page slides over it
+  profileBody: { marginTop: -AVATAR_OVERLAP },
+  profileBodyBg: {
+    position: 'absolute', top: AVATAR_OVERLAP, left: 0, right: 0, bottom: -60,
+    backgroundColor: '#FFF', borderTopLeftRadius: 18, borderTopRightRadius: 18,
   },
-  avatarWrap: { position: 'relative', width: AVATAR_SZ, height: AVATAR_SZ },
+  avatarRow: {
+    flexDirection: 'row', alignItems: 'flex-start',
+    paddingHorizontal: 14, gap: 10,
+  },
+  avatarWrap: { position: 'relative', width: AVATAR_SZ, height: AVATAR_SZ, transformOrigin: 'left bottom' },
   avatar: {
     width: AVATAR_SZ, height: AVATAR_SZ,
     borderRadius: AVATAR_SZ / 2,
-    borderWidth: 3, borderColor: '#FFF',
+    borderWidth: 2.5, borderColor: '#FFF',
     alignItems: 'center', justifyContent: 'center',
   },
-  avatarInit: { fontSize: 28, fontWeight: '800', color: '#FFF' },
-  statsRow:   { flex: 1, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-around', marginTop: AVATAR_SZ / 2 + 4 },
+  avatarInit: { fontSize: 24, fontWeight: '800', color: '#FFF' },
+  infoCol:    { flex: 1, marginTop: AVATAR_OVERLAP + 6, gap: 6 },
+  username:   { fontSize: 15, color: '#7A0EED', fontWeight: '700' },
+  statsRow:   { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-around' },
   statBox:    { alignItems: 'center', flex: 1 },
-  statVal:    { fontSize: 18, fontWeight: '800', color: '#1C1E22' },
-  statLbl:    { fontSize: 11, color: '#ABADB2', fontWeight: '600', marginTop: 1 },
-  statDiv:    { width: 1, height: 28, backgroundColor: '#EBEBEB' },
+  statVal:    { fontSize: 16, fontWeight: '700', color: '#1C1E22' },
+  statLbl:    { fontSize: 12, color: '#8A8C93', fontWeight: '500' },
+  statDiv:    { width: 1, height: 22, backgroundColor: '#EBEBEB' },
 
   // name block
-  nameBlock:   { paddingHorizontal: 18, marginTop: 48, gap: 4 },
-  levelBadgeAbs: { position: 'absolute', bottom: -65, left: (AVATAR_SZ - 100) / 2 },
-  displayName: { fontSize: 19, fontWeight: '800', color: '#1C1E22' },
-  username:    { fontSize: 13, color: '#7A0EED', fontWeight: '600' },
+  nameBlock:   { paddingHorizontal: 16, marginTop: 8, gap: 2 },
+  chipRow:     { flexDirection: 'row', flexWrap: 'wrap', gap: 8, paddingHorizontal: 16, marginTop: 8 },
+  displayName: { fontSize: 18, fontWeight: '800', color: '#1C1E22' },
   genderBadge: {
-    flexDirection: 'row', alignItems: 'center', gap: 4,
+    flexDirection: 'row', alignItems: 'center', gap: 3,
     alignSelf: 'flex-start', backgroundColor: '#F4EEFF',
-    borderRadius: 20, paddingHorizontal: 9, paddingVertical: 3,
+    borderRadius: 20, paddingHorizontal: 8, paddingVertical: 2, marginTop: 3,
   },
   genderTxt:   { fontSize: 11, fontWeight: '700', color: '#7A0EED' },
-  bio:         { fontSize: 13, color: '#60626A', lineHeight: 19, marginTop: 2 },
+  bio:         { fontSize: 14, color: '#3A3C42', lineHeight: 20, marginTop: 2 },
 
   // actions
-  actionRow:    { flexDirection: 'row', gap: 10, paddingHorizontal: 18, marginTop: 14 },
-  followBtn:    { flex: 1, height: 38, borderRadius: 20, backgroundColor: '#7A0EED', alignItems: 'center', justifyContent: 'center' },
+  actionRow:    { flexDirection: 'row', gap: 8, paddingHorizontal: 16, marginTop: 10 },
+  followBtn:    { flex: 1, height: 34, borderRadius: 17, backgroundColor: '#7A0EED', alignItems: 'center', justifyContent: 'center' },
   followingBtn: { backgroundColor: '#FFF', borderWidth: 1.5, borderColor: '#7A0EED' },
-  followTxt:    { fontSize: 14, fontWeight: '700', color: '#FFF' },
+  followTxt:    { fontSize: 13.5, fontWeight: '700', color: '#FFF' },
   followingTxt: { color: '#7A0EED' },
-  iconBtn:      { width: 38, height: 38, borderRadius: 20, borderWidth: 1.5, borderColor: '#7A0EED', alignItems: 'center', justifyContent: 'center' },
+  iconBtn:      { width: 34, height: 34, borderRadius: 17, borderWidth: 1.5, borderColor: '#7A0EED', alignItems: 'center', justifyContent: 'center' },
+  reportBtn:    { borderColor: '#E14C57' },
 
   // grid
-  gridWrap:        { marginTop: 18, borderTopWidth: StyleSheet.hairlineWidth, borderTopColor: '#EBEBEB' },
+  gridWrap:        { marginTop: 10, borderTopWidth: StyleSheet.hairlineWidth, borderTopColor: '#EBEBEB' },
   gridItem:        { width: GRID_SIZE, height: GRID_SIZE, backgroundColor: '#EDE8FF' },
   gridImg:         { width: GRID_SIZE, height: GRID_SIZE },
   gridPlaceholder: { width: GRID_SIZE, height: GRID_SIZE, alignItems: 'center', justifyContent: 'center' },

@@ -8,7 +8,6 @@ import {
   Alert,
   BackHandler,
   Image,
-  ImageBackground,
   Keyboard,
   Modal,
   Platform,
@@ -20,19 +19,24 @@ import {
   useWindowDimensions,
   View,
 } from 'react-native';
-import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import { ModalBottomSheet, ModalSafeArea } from '@/components/ModalBottomSheet';
 import { useAgoraVoice } from '@/hooks/useAgoraVoice';
 import { agoraStore, getAgoraState } from '@/store/agora-store';
-import { socketStore, onGiftError, onLiveGift, getMyCoinsGifted, onLevelUp, onTaskCompleted, onRewardApplied, onBattleInvite, onBattleInviteAccepted, onBattleInviteDeclined, onBattleInviteCancelled, onBattleStarted, onJoinBlocked, onKickedFromRoom, onForcedMute, onReopenBattle, subscribeSocket, getSocketState, type BattleInvitePayload } from '@/store/socket-store';
-import { type IncomingSeatRequest, type IncomingStageInvite, useRoomSocket } from '@/hooks/useRoomSocket';
+import { socketStore, onGiftError, onLiveGift, onUserJoined, onPinnedCommentUpdate, onReportCommentResult, getMyCoinsGifted, onLevelUp, onTaskCompleted, onRewardApplied, onBattleInvite, onBattleInviteAccepted, onBattleInviteDeclined, onBattleInviteCancelled, onJoinBlocked, onKickedFromRoom, formatRestriction, onForcedMute, onReopenBattle, subscribeSocket, getSocketState, getBattleState, getBattleEndsAt, getCachedRoomInfo, primeRoomInfo, type BattleInvitePayload } from '@/store/socket-store';
+import { type IncomingSeatRequest, type IncomingStageInvite, useBattleResult, useRoomBattle, useRoomSocket } from '@/hooks/useRoomSocket';
 import { BASE_URL, MEDIA_BASE, resolveImageUrl } from '@/services/api';
 import { authStore } from '@/store/auth-store';
 import { getUserLevel } from '@/utils/userLevel';
 import { roomStore } from '@/store/room-store';
-import { ChatFeed } from './components/chat-feed';
+import { ChatFeed, messagePreviewText } from './components/chat-feed';
+import { WelcomeToast } from './components/welcome-toast';
+import { MessageActionSheet, type MessageActionTarget } from './components/message-action-sheet';
+import { PinnedMessageBar } from './components/pinned-message-bar';
+import { CHILD_SAFETY_REASON, REPORT_GUIDANCE, ReportReasonModal } from './components/report-reason-modal';
 import { ChatInputBar } from './components/chat-input-bar';
 import { BattleModal } from './components/battle-modal';
-import { CoinBoxModal } from './components/coinbox-modal';
+import { CoinBoxModal, slabProgressPct, useGiftSlabProgress } from './components/coinbox-modal';
 import { DailyTaskModal } from './components/daily-task-modal';
 import { GiftShopModal } from './components/gift-shop-modal';
 import { GiftFullscreenAnim } from './components/gift-fullscreen-anim';
@@ -40,11 +44,13 @@ import { GiftBar, GiftPickerBar, type GiftTarget } from './components/gift-tray'
 import { GiftFlyAnimation, type GiftFlyHandle, type SlotPosition } from './components/gift-fly-animation';
 import { BANNER_GIFT_CENTER, BANNER_ROW_STEP, GiftComboBanners, type GiftBannersHandle } from './components/gift-combo-banner';
 import { BattleBanner } from './components/battle-banner';
+import { BattleOverlay } from './components/battle-result';
 import { RoomHeader } from './components/room-header';
-import { RoomStage, type HostInfo, type BattleStageInfo } from './components/room-stage';
+import { RoomStage, STAGE_GRADIENT, type HostInfo, type BattleStageInfo } from './components/room-stage';
 import { RoomLevelUp, prefetchUpcomingGroupBadges } from './components/room-level-up';
 import { UserProfileSheet, type UserProfileSheetTarget } from './components/user-profile-sheet';
 import { type ChatMessage, type GiftItem } from './room-detail.data';
+import { avatarSource } from '@/utils/default-avatar';
 
 const FLOATING_ACTIONS = [
   { key: 'dailytask', src: require('@/assets/tabs/chatroom/dailyTask.png') },
@@ -65,6 +71,10 @@ type RoomInfo = {
   current_level: number;
   total_coins_received: number;
   visibility?: 'public' | 'private';
+  /** The room's stage background, held for 24h (server-side, same for everyone) */
+  stage_bg_url?: string | null;
+  /** When the next stage background takes over */
+  stage_bg_expires_at?: string | null;
 };
 
 type RoomDetailScreenProps = {
@@ -72,6 +82,28 @@ type RoomDetailScreenProps = {
   onBack?: () => void;
   openBattle?: boolean;
 };
+
+/**
+ * Calls fn at `at` (ms). Re-armed in ≤30s steps — RN warns about (and Android
+ * may not honour) single long timers. Returns a cancel function.
+ */
+function runAt(at: number, fn: () => void): () => void {
+  let timer: ReturnType<typeof setTimeout> | null = null;
+  const check = () => {
+    const left = at - Date.now();
+    if (left <= 0) { timer = null; fn(); return; }
+    timer = setTimeout(check, Math.min(left, 30_000));
+  };
+  check();
+  return () => { if (timer) clearTimeout(timer); };
+}
+
+function formatBattleTime(endsAtMs: number | null): string {
+  const secsLeft = endsAtMs ? Math.max(0, Math.floor((endsAtMs - Date.now()) / 1000)) : 0;
+  const m = Math.floor(secsLeft / 60);
+  const s = secsLeft % 60;
+  return `${String(m).padStart(2, '0')}:${String(s).padStart(2, '0')}`;
+}
 
 function resolveAvatar(url: string | null | undefined): string | undefined {
   if (!url) return undefined;
@@ -98,14 +130,18 @@ export function RoomDetailScreen({ roomId = '', onBack, openBattle }: RoomDetail
   const battleOverlayBottom = battleBannerBridgeTop - battleBannerCardHeight - battleOverlayExtraDrop;
   const [showDailyTask, setShowDailyTask] = useState(false);
   const [showCoinBox, setShowCoinBox] = useState(false);
+  const { data: giftSlab, reload: reloadGiftSlab } = useGiftSlabProgress();
   const [showBattle, setShowBattle] = useState(!!openBattle);
+  // Measured height of GiftBar + ChatInputBar — the floating icons sit just
+  // above it, since that height varies with screen size / font scale.
+  const [bottomBarHeight, setBottomBarHeight] = useState(0);
   const [showNoBattle, setShowNoBattle] = useState(false);
   const [showGiftShop, setShowGiftShop] = useState(false);
   const [giftShopTarget, setGiftShopTarget] = useState<{ userId: string; userName: string } | null>(null);
   const [profileSheetTarget, setProfileSheetTarget] = useState<UserProfileSheetTarget | null>(null);
   const [keyboardVisible, setKeyboardVisible] = useState(false);
   const [keyboardHeight, setKeyboardHeight] = useState(0);
-  const [roomInfo, setRoomInfo] = useState<RoomInfo | null>(null);
+  const [roomInfo, setRoomInfo] = useState<RoomInfo | null>(() => getCachedRoomInfo(roomId) as RoomInfo | null);
 
   useEffect(() => {
     if (roomInfo?.current_level != null) prefetchUpcomingGroupBadges(roomInfo.current_level);
@@ -147,6 +183,19 @@ export function RoomDetailScreen({ roomId = '', onBack, openBattle }: RoomDetail
   // Active reward visuals for this room's host (background + frame, 24h TTL)
   const [rewardBgUrl, setRewardBgUrl] = useState<string | null>(null);
   const [rewardFrameUrl, setRewardFrameUrl] = useState<string | null>(null);
+  const [rewardExpiresAt, setRewardExpiresAt] = useState<number | null>(null);
+
+  // The reward lasts 24h from completion. Clearing it brings back the room's
+  // own stage background — the same one as before, not a new pick.
+  useEffect(() => {
+    if (!rewardExpiresAt) return;
+    return runAt(rewardExpiresAt, () => {
+      setRewardBgUrl(null);
+      setRewardFrameUrl(null);
+      setRewardExpiresAt(null);
+    });
+  }, [rewardExpiresAt]);
+
   // Increments to trigger DailyTaskModal task list refresh
   const [taskRefreshKey, setTaskRefreshKey] = useState(0);
 
@@ -167,11 +216,12 @@ export function RoomDetailScreen({ roomId = '', onBack, openBattle }: RoomDetail
 
   // Real-time reward visuals — applied immediately when host completes task or claims reward
   useEffect(() => {
-    const unsub = onRewardApplied(({ reward_bg_url, reward_frame_url, completed_by, task_title }) => {
+    const unsub = onRewardApplied(({ reward_bg_url, reward_frame_url, completed_by, task_title, expires_at }) => {
       const bg = reward_bg_url ? `${MEDIA_BASE}/${reward_bg_url.replace(/^\//, '')}` : null;
       const frame = reward_frame_url ? `${MEDIA_BASE}/${reward_frame_url.replace(/^\//, '')}` : null;
       setRewardBgUrl(bg);
       setRewardFrameUrl(frame);
+      setRewardExpiresAt(expires_at ? new Date(expires_at).getTime() : null);
       // Refresh task list so lock updates
       setTaskRefreshKey(k => k + 1);
       if (completed_by) {
@@ -228,94 +278,44 @@ export function RoomDetailScreen({ roomId = '', onBack, openBattle }: RoomDetail
     return () => { unsubA(); unsubD(); };
   }, []);
 
-  // Fetch active battle for this room by checking notifications for an active invite
-  // Uses /battle/notifications to find inviteId for this room, then /battle/invite/:id for details
+  // Battle VS bar — driven by the room socket (battle_state on join,
+  // battle_started when one begins), so it shows the instant the battle starts.
   useEffect(() => {
     if (!roomId) return;
-    let cancelled = false;
+    let lastInviteId: string | null | undefined;
+    const apply = () => {
+      const { battle } = getBattleState();
+      const inviteId = battle?.id ?? null;
+      if (inviteId === lastInviteId) return;
+      lastInviteId = inviteId;
+      if (!battle) {
+        battleEndsAtRef.current = null;
+        setBattleStageInfo(null);
+        setCoinsByUserId(new Map());
+        setGiftersByUserId(new Map());
+        return;
+      }
 
-    const fetchBattle = async () => {
-      const token = authStore.getToken();
-      if (!token) return;
-      try {
-        // Step 1: get recent battle notifications to find active invite for this room
-        const nr = await fetch(`${BASE_URL}/battle/notifications`, {
-          headers: { Authorization: `Bearer ${token}` },
-        });
-        const nj = await nr.json();
-        if (cancelled || !nj.success) return;
-
-        // Find the most recent notification for this room
-        const notifs: Array<{ type: string; data: Record<string, string> | null }> = nj.data ?? [];
-        // Find any battle notification with an invite_id — we'll check status via invite detail
-        const match = notifs.find(n =>
-          (n.type === 'battle_invite' || n.type === 'battle_accepted' || n.type === 'battle_started') &&
-          n.data?.invite_id
-        );
-        if (!match?.data?.invite_id) {
-          if (!cancelled) { battleEndsAtRef.current = null; setBattleStageInfo(null); }
-          return;
-        }
-
-        // Step 2: get full invite details
-        const ir = await fetch(`${BASE_URL}/battle/invite/${match.data.invite_id}`, {
-          headers: { Authorization: `Bearer ${token}` },
-        });
-        const ij = await ir.json();
-        if (cancelled || !ij.success || !ij.data) return;
-
-        const d = ij.data;
-        // Only show VS bar when battle is active AND involves this room
-        if (d.status !== 'active') {
-          if (!cancelled) { battleEndsAtRef.current = null; setBattleStageInfo(null); }
-          return;
-        }
-        if (d.from_room_id !== roomId && d.to_room_id !== roomId) {
-          if (!cancelled) { battleEndsAtRef.current = null; setBattleStageInfo(null); }
-          return;
-        }
-
-        const isFrom    = d.from_room_id === roomId;
-        const ownName   = isFrom ? d.from_room_name   : d.to_room_name;
-        const ownImg    = isFrom ? d.from_room_image_url : d.to_room_image_url;
-        const rivalName = isFrom ? d.to_room_name     : d.from_room_name;
-        const rivalImg  = isFrom ? d.to_room_image_url : d.from_room_image_url;
-
-        // Compute end time from started_at + duration_minutes (both saved in backend)
-        const startedAt = d.started_at ? new Date(d.started_at).getTime() : null;
-        const durMs     = (d.duration_minutes ?? 0) * 60_000;
-        const endsAtMs  = startedAt ? startedAt + durMs : null;
-
-        // If end time is already in the past, skip — unseen-result API handles navigation
-        if (endsAtMs && endsAtMs <= Date.now()) {
-          if (!cancelled) { battleEndsAtRef.current = null; setBattleStageInfo(null); }
-          return;
-        }
-
-        if (!cancelled) {
-          battleEndsAtRef.current = endsAtMs;
-          setBattleStageInfo({
-            inviteId: match.data.invite_id,
-            ownRoomName: ownName ?? '', ownRoomImageUrl: ownImg ?? null,
-            rivalRoomName: rivalName ?? '', rivalRoomImageUrl: rivalImg ?? null,
-            timeDisplay: '00:00',
-            isFinished: false,
-            fromRoomId: d.from_room_id,
-            toRoomId: d.to_room_id,
-            fromHostUserId: d.from_user_id,
-            toHostUserId: d.to_user_id,
-            mode: d.mode,
-          });
-        }
-      } catch { if (!cancelled) setBattleStageInfo(null); }
+      const isFrom = battle.from_room_id === roomId;
+      const endsAtMs = getBattleEndsAt(battle);
+      battleEndsAtRef.current = endsAtMs;
+      setBattleStageInfo({
+        inviteId: battle.id,
+        ownRoomName: (isFrom ? battle.from_room_name : battle.to_room_name) ?? '',
+        ownRoomImageUrl: (isFrom ? battle.from_room_image_url : battle.to_room_image_url) ?? null,
+        rivalRoomName: (isFrom ? battle.to_room_name : battle.from_room_name) ?? '',
+        rivalRoomImageUrl: (isFrom ? battle.to_room_image_url : battle.from_room_image_url) ?? null,
+        timeDisplay: formatBattleTime(endsAtMs),
+        isFinished: false,
+        fromRoomId: battle.from_room_id,
+        toRoomId: battle.to_room_id,
+        fromHostUserId: battle.from_user_id,
+        toHostUserId: battle.to_user_id,
+        mode: battle.mode,
+      });
     };
-
-    fetchBattle();
-    const pollId = setInterval(fetchBattle, 15_000);
-    // Trigger immediately when a battle is accepted or started
-    const unsubAccepted = onBattleInviteAccepted(() => fetchBattle());
-    const unsubStarted = onBattleStarted(() => fetchBattle());
-    return () => { cancelled = true; clearInterval(pollId); unsubAccepted(); unsubStarted(); };
+    apply();
+    return subscribeSocket(apply);
   }, [roomId]);
 
   // Live countdown tick — runs off battleEndsAtRef so timer never resets on re-render
@@ -332,11 +332,9 @@ export function RoomDetailScreen({ roomId = '', onBack, openBattle }: RoomDetail
         seenGiftIds.current.clear();
         return;
       }
-      const m = Math.floor(secsLeft / 60);
-      const s = secsLeft % 60;
       setBattleStageInfo(prev => prev ? {
         ...prev,
-        timeDisplay: `${String(m).padStart(2, '0')}:${String(s).padStart(2, '0')}`,
+        timeDisplay: formatBattleTime(endsAtMs),
         isFinished: false,
       } : prev);
     };
@@ -450,6 +448,12 @@ export function RoomDetailScreen({ roomId = '', onBack, openBattle }: RoomDetail
     if (next) playNextGift(next);
   }, [playNextGift]);
 
+  // "Welcome <name>" toast, bottom-left, for 3s each time someone enters
+  const [welcome, setWelcome] = useState<{ key: string; name: string; user: ChatMessage['user'] } | null>(null);
+  useEffect(() => onUserJoined(msg => {
+    if (msg.user?.name) setWelcome({ key: msg.id, name: msg.user.name, user: msg.user });
+  }), []);
+
   // My own gifts are played instantly on tap (see playMyGift) — skip the server
   // echo of them so they don't animate twice. Everyone else's come from here.
   useEffect(() => {
@@ -520,15 +524,20 @@ export function RoomDetailScreen({ roomId = '', onBack, openBattle }: RoomDetail
   }, []);
 
   useEffect(() => {
-    const unsub1 = onJoinBlocked(() => {
-      Alert.alert('Blocked', 'You are blocked from this room.', [
-        { text: 'OK', onPress: () => { agoraStore.leave(); socketStore.leave(); roomStore.clear(); onBack?.(); } },
-      ]);
+    // Entry refused / removed: blocked by the host, or a 24h report ban on
+    // this ID or room (the server's exact message, plus when access returns)
+    const leaveRoom = () => { agoraStore.leave(); socketStore.leave(); roomStore.clear(); onBack?.(); };
+    const titleFor = (kind?: string, fallback = 'Blocked') =>
+      kind === 'user_ban' ? 'Access Restricted' : kind === 'room_ban' ? 'Chat Room Unavailable' : fallback;
+    const unsub1 = onJoinBlocked((message, info) => {
+      Alert.alert(titleFor(info.kind), formatRestriction(message || 'You are blocked from this room.', info.expiresAt), [
+        { text: 'OK', onPress: leaveRoom },
+      ], { cancelable: false });
     });
-    const unsub2 = onKickedFromRoom(() => {
-      Alert.alert('Removed', 'You have been blocked and removed from this room.', [
-        { text: 'OK', onPress: () => { agoraStore.leave(); socketStore.leave(); roomStore.clear(); onBack?.(); } },
-      ]);
+    const unsub2 = onKickedFromRoom((message, info) => {
+      Alert.alert(titleFor(info.kind, 'Removed'), formatRestriction(message || 'You have been removed from this room.', info.expiresAt), [
+        { text: 'OK', onPress: leaveRoom },
+      ], { cancelable: false });
     });
     const unsub3 = onReopenBattle(() => {
       setShowBattle(true);
@@ -546,21 +555,115 @@ export function RoomDetailScreen({ roomId = '', onBack, openBattle }: RoomDetail
     messages, onlineCount,
     seats, hostStatus,
     incomingRequest, seatRequestResult,
-    sendMessage, requestSeat,
+    sendMessage, sendGift, requestSeat,
     acceptSeatRequest, rejectSeatRequest,
-    clearSeatRequestResult, inviteToStage, removeFromStage, leaveStage,
+    clearSeatRequestResult, inviteToStage, removeFromStage, leaveStage, hostLeaveStage, hostReturnStage,
     incomingStageInvite, acceptStageInvite, rejectStageInvite, clearStageInvite,
+    pinComment, unpinComment, deleteComment, reportComment,
+    roomInfo: socketRoomInfo,
   } = useRoomSocket(roomId);
+
+  // Room header data pushed with join_room — usually beats the HTTP fetch below
+  useEffect(() => {
+    if (socketRoomInfo) setRoomInfo(socketRoomInfo as unknown as RoomInfo);
+  }, [socketRoomInfo]);
 
   const currentUserId = authStore.getUserId() ?? '';
   const isHost = roomInfo ? roomInfo.host_user_id === currentUserId : false;
+
+  // ── Host message actions: Pin (to top) / Delete / Block / Report ──
+  const [pinnedMessageId, setPinnedMessageId] = useState<string | null>(null);
+  const [msgTarget, setMsgTarget] = useState<MessageActionTarget | null>(null);
+  const [reportTarget, setReportTarget] = useState<MessageActionTarget | null>(null);
+  useEffect(() => onPinnedCommentUpdate(id => setPinnedMessageId(id)), []);
+  const pinnedMessage = pinnedMessageId ? messages.find(m => m.id === pinnedMessageId) ?? null : null;
+  // y offset of each chat message inside the feed — lets the pinned bar jump to it
+  const messageY = useRef(new Map<string, number>());
+  const scrollToPinned = () => {
+    if (!pinnedMessageId) return;
+    const y = messageY.current.get(pinnedMessageId);
+    if (y != null) scrollRef.current?.scrollTo({ y: Math.max(0, y - 8), animated: true });
+  };
+
+  const showRoomToast = (text: string) => {
+    setSeatToast(text);
+    setTimeout(() => setSeatToast(null), 2000);
+  };
+
+  const handleMessagePress = (msg: ChatMessage) => {
+    if (!msg.user || !msg.id) return;
+    const isOwn = !!msg.user.id && msg.user.id === currentUserId;
+    // Non-hosts only get "Report" — nothing to offer on their own message
+    if (!isHost && isOwn) return;
+    setMsgTarget({
+      messageId: msg.id,
+      userId: msg.user.id,
+      userName: msg.user.name,
+      avatarUri: msg.user.avatarUri,
+      text: messagePreviewText(msg),
+      isPinned: msg.id === pinnedMessageId,
+      isOwn,
+    });
+  };
+
+  const handleMessageAction = async (action: 'pin' | 'delete' | 'block' | 'report', t: MessageActionTarget) => {
+    switch (action) {
+      case 'pin':
+        if (t.isPinned) unpinComment(); else pinComment(t.messageId);
+        showRoomToast(t.isPinned ? 'Message unpinned' : 'Message pinned');
+        break;
+      case 'delete':
+        deleteComment(t.messageId);
+        showRoomToast('Message deleted');
+        break;
+      case 'report':
+        setReportTarget(t);
+        break;
+      case 'block': {
+        if (!t.userId) return;
+        const token = authStore.getToken();
+        try {
+          const res = await fetch(`${BASE_URL}/rooms/${roomId}/block`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json', ...(token ? { Authorization: `Bearer ${token}` } : {}) },
+            body: JSON.stringify({ userId: t.userId }),
+          });
+          const json = await res.json();
+          showRoomToast(json.success ? `${t.userName} blocked` : (json.message || 'Could not block user'));
+        } catch {
+          showRoomToast('Could not block user');
+        }
+        break;
+      }
+    }
+  };
+
+  // Report goes over the socket; resolve when the server confirms (or time out)
+  const submitMessageReport = (reason: string) => new Promise<string | null>(resolve => {
+    if (!reportTarget) { resolve('Something went wrong.'); return; }
+    let done = false;
+    const unsub = onReportCommentResult((ok, info) => {
+      if (done) return;
+      done = true; unsub(); clearTimeout(timer);
+      if (ok && info.duplicate) resolve('You have already reported this message.');
+      else resolve(ok ? null : (info.message || 'Could not send. Please try again.'));
+    });
+    const timer = setTimeout(() => {
+      if (done) return;
+      done = true; unsub();
+      resolve('No response. Please try again.');
+    }, 8000);
+    reportComment(reportTarget.messageId, reportTarget.text, reportTarget.userId, reason);
+  });
   isHostRef.current = isHost;
   // Which slot (1–7) does the current user occupy? null if not on stage
   const mySlotIndex = seats.find(s => s.slotIndex !== 0 && s.userId === currentUserId)?.slotIndex ?? null;
   const iAmOnStage = mySlotIndex !== null;
 
-  // Agora voice — join channel only when on stage (or host)
-  const isOnStage = iAmOnStage || isHost;
+  // Agora voice — join channel only when on stage (or host, unless they've
+  // left the stage; they stay in the room and its chat)
+  const hostOffStage = isHost && !!hostStatus.offStage;
+  const isOnStage = iAmOnStage || (isHost && !hostOffStage);
   const { isMuted, toggleMute } = useAgoraVoice(roomId, currentUserId, isOnStage);
 
   // Host info comes from socket host_status (real-time) + roomInfo for initial avatar
@@ -582,13 +685,33 @@ export function RoomDetailScreen({ roomId = '', onBack, openBattle }: RoomDetail
       headers: token ? { Authorization: `Bearer ${token}` } : {},
     })
       .then(r => r.json())
-      .then(json => { if (json.success) setRoomInfo(json.data); })
+      .then(json => {
+        if (!json.success) return;
+        primeRoomInfo(json.data);
+        setRoomInfo(json.data);
+      })
       .catch(() => {});
   }, [roomId]);
 
+  // Admin-uploaded stage background behind the status bar, header and seats.
+  // The server holds one per room for 24h (same for every viewer), so it stays
+  // the same on reopen / minimise / navigating back; it arrives with the room
+  // info (cached from the last visit, so it shows straight away).
+  const stageBgUrl = roomInfo?.stage_bg_url ? resolveAvatar(roomInfo.stage_bg_url) ?? null : null;
+  const stageBgExpiresAt = roomInfo?.stage_bg_expires_at ? new Date(roomInfo.stage_bg_expires_at).getTime() : null;
+  // Its 24h ran out while the room is open → the server gives the next one
   useEffect(() => {
+    if (!stageBgExpiresAt) return;
+    return runAt(stageBgExpiresAt + 1000, fetchRoomInfo);
+  }, [stageBgExpiresAt, fetchRoomInfo]);
+
+  // "Refresh Room" (header ⋮ menu): room info + live seats / host status / chat
+  const handleRefreshRoom = () => {
     fetchRoomInfo();
-  }, [fetchRoomInfo]);
+    socketStore.refreshRoom(roomId);
+    setSeatToast('Room refreshed');
+    setTimeout(() => setSeatToast(null), 2000);
+  };
 
   // Re-fetch whenever this screen regains focus — picks up a chatroom name
   // change made on the Edit Chatroom Name screen (no other way to get that
@@ -615,6 +738,7 @@ export function RoomDetailScreen({ roomId = '', onBack, openBattle }: RoomDetail
           console.log('[ROOM] applying persisted reward bg=', bgUrl, 'frame=', frameUrl);
           setRewardBgUrl(bgUrl);
           setRewardFrameUrl(frameUrl);
+          setRewardExpiresAt(json.data.expires_at ? new Date(json.data.expires_at).getTime() : null);
         } else {
           console.log('[ROOM] no active reward found');
         }
@@ -666,8 +790,8 @@ export function RoomDetailScreen({ roomId = '', onBack, openBattle }: RoomDetail
 
   const handleBattlePress = () => {
     if (battleStageInfo?.inviteId) {
-      // Battle ongoing — battle banner (tap it) shows live status and gifters
-      return;
+      // Battle ongoing — both profiles + Cancel Battle
+      setShowBattleStatus(true);
     } else if (isHost) {
       // Host, no battle — open invite modal
       setShowBattle(true);
@@ -676,6 +800,46 @@ export function RoomDetailScreen({ roomId = '', onBack, openBattle }: RoomDetail
       setShowNoBattle(true);
     }
   };
+
+  // ── Running battle: status sheet (Battle icon) + result after it ends ──
+  const liveBattle = useRoomBattle();
+  const battleResult = useBattleResult();
+  const [showBattleStatus, setShowBattleStatus] = useState(false);
+  const [cancellingBattle, setCancellingBattle] = useState(false);
+
+  const handleCancelBattle = async () => {
+    setCancellingBattle(true);
+    // Closes the battle and shows the result at once; the server confirms it
+    const res = await socketStore.cancelBattle();
+    setCancellingBattle(false);
+    setShowBattleStatus(false);
+    if (!res.ok) showRoomToast(res.message ?? 'Could not cancel the battle.');
+  };
+
+  const battleStatus = (() => {
+    const b = liveBattle.battle;
+    if (!showBattleStatus || !b) return null;
+    const ownIsFrom = b.from_room_id === roomId;
+    const scores = liveBattle.scores;
+    const sideScore = (from: boolean) => (scores ? (from ? scores.left : scores.right) : 0);
+    return {
+      own: {
+        name: ownIsFrom ? b.from_room_name : b.to_room_name,
+        imageUrl: ownIsFrom ? b.from_room_image_url : b.to_room_image_url,
+        score: sideScore(ownIsFrom),
+      },
+      rival: {
+        name: ownIsFrom ? b.to_room_name : b.from_room_name,
+        imageUrl: ownIsFrom ? b.to_room_image_url : b.from_room_image_url,
+        score: sideScore(!ownIsFrom),
+      },
+      timeDisplay: battleStageInfo?.timeDisplay,
+      // Either host in the battle can end it
+      canCancel: currentUserId === b.from_user_id || currentUserId === b.to_user_id,
+      cancelling: cancellingBattle,
+      onCancel: handleCancelBattle,
+    };
+  })();
 
   // Build gift targets: host first (only if online), then on-stage seats
   const giftTargets: GiftTarget[] = [
@@ -722,10 +886,12 @@ export function RoomDetailScreen({ roomId = '', onBack, openBattle }: RoomDetail
       const target = giftTargets.find(t => t.userId === targetId);
       // Encode all data the socket needs for wallet debit + gift event
       // recipientid = host (for wallet/gems), giftfor = actual target (for stage display)
-      sendMessage(
+      // sendGift adds it to the battle score immediately (confirmed by the server)
+      sendGift(
         `__gift__🎁__to__${target?.name ?? 'someone'}__img__${pendingGift.image_url ?? ''}__bg__${pendingGift.bg_color}` +
         `__giftid__${pendingGift.id}__coins__${pendingGift.coins}__qty__${qty}` +
-        `__senderid__${currentUserId}__recipientid__${hostUserId}__giftfor__${targetId}`
+        `__senderid__${currentUserId}__recipientid__${hostUserId}__giftfor__${targetId}`,
+        pendingGift.coins * qty,
       );
       playMyGift(pendingGift, qty, targetId, target?.name ?? 'someone');
     });
@@ -739,7 +905,7 @@ export function RoomDetailScreen({ roomId = '', onBack, openBattle }: RoomDetail
     const name = roomInfo?.room_name ?? 'Chat Room';
     if (!code) return;
     Share.share({
-      message: `Join me in "${name}" on Rara Live!\n\nRoom Code: ${code}\n\nOpen Rara Live → Live tab → Join by Code → enter ${code}`,
+      message: `Join me in "${name}" on RaRa Live!\n\nRoom Code: ${code}\n\nOpen RaRa Live → Live tab → Join by Code → enter ${code}`,
     });
   };
 
@@ -747,6 +913,20 @@ export function RoomDetailScreen({ roomId = '', onBack, openBattle }: RoomDetail
     userId: string, userName: string, avatarUrl: string | null, isRoomHost: boolean, slotIndex?: number
   ) => {
     setProfileSheetTarget({ userId, userName, avatarUrl, isRoomHost, slotIndex });
+  };
+
+  // Profile popup for someone in chat or the welcome toast — same popup as
+  // tapping an avatar on the stage.
+  const openUserProfile = (userId: string, user?: ChatMessage['user']) => {
+    if (!userId) return;
+    const seat = seats.find(s => s.userId === userId);
+    handleAvatarPress(
+      userId,
+      user?.name ?? 'User',
+      user?.avatarUri || null,
+      userId === roomInfo?.host_user_id,
+      seat?.slotIndex,
+    );
   };
 
   const handleSendGiftFromProfile = (userId: string, userName: string) => {
@@ -782,6 +962,11 @@ export function RoomDetailScreen({ roomId = '', onBack, openBattle }: RoomDetail
     router.push(`/room/${opponentRoomId}` as any);
   };
 
+  // This room is on screen now — no minimized-room JOIN bubble on top of it
+  // (also covers opening another room while one was minimized: its socket
+  // replaces the minimized one).
+  useEffect(() => { roomStore.clear(); }, [roomId]);
+
   const handleMinimize = () => {
     setShowExitModal(false);
     // Keep Agora running — audio continues in background
@@ -793,15 +978,31 @@ export function RoomDetailScreen({ roomId = '', onBack, openBattle }: RoomDetail
     onBack?.();
   };
 
+  // Exit leaves the room socket only once this screen has unmounted (after the
+  // back transition) — leaving straight away emptied the chat, seats and
+  // battle while the screen was still sliding out, which read as a flicker.
+  const leaveOnUnmountRef = useRef(false);
+  useEffect(() => () => {
+    if (leaveOnUnmountRef.current && getSocketState().roomId === roomId) socketStore.leave();
+  }, [roomId]);
+
   const handleExit = () => {
     setShowExitModal(false);
     agoraStore.leave();
-    socketStore.leave();
     roomStore.clear();
+    leaveOnUnmountRef.current = true;
     onBack?.();
   };
 
-  const screenContent = (
+  // The full-screen reward background (daily task) takes priority over it
+  // stage_bg_url is undefined until the server has answered (null = no images
+  // uploaded). Only then may the default stage show — while waiting, or while
+  // the image downloads, a dark backing shows so it never flashes.
+  const stagePending = roomInfo?.stage_bg_url === undefined;
+  const hasTopBg = !rewardBgUrl && (!!stageBgUrl || stagePending);
+
+  // Header + seat stage, drawn over the stage background when there is one
+  const topSection = (
     <>
       <RoomHeader
         name={roomInfo?.room_name ?? 'Loading...'}
@@ -814,14 +1015,15 @@ export function RoomDetailScreen({ roomId = '', onBack, openBattle }: RoomDetail
         totalCoins={roomInfo?.total_coins_received ?? 0}
         hostName={roomInfo?.host_name || roomInfo?.host_username}
         visibility={roomInfo?.visibility}
-        hasRoomBg={!!rewardBgUrl}
+        hasRoomBg={!!rewardBgUrl || hasTopBg}
+        transparentBg={!rewardBgUrl}
         onBack={handleBackPress}
         onShare={handleShare}
         onMore={() => {}}
         isHost={isHost}
         seats={seats}
         onInviteToStage={(userId, slotIndex) => inviteToStage(userId, slotIndex)}
-        onRefreshRoom={fetchRoomInfo}
+        onRefreshRoom={handleRefreshRoom}
       />
 
       <View style={styles.stageWrap}>
@@ -839,7 +1041,8 @@ export function RoomDetailScreen({ roomId = '', onBack, openBattle }: RoomDetail
           onSlotLayout={(userId, x, y) => { slotPositions.current.set(userId, { x, y }); }}
           battleInfo={battleStageInfo}
           coinsByUserId={coinsByUserId}
-          hasRoomBg={!!rewardBgUrl}
+          hasRoomBg={!!rewardBgUrl || hasTopBg}
+          transparentBg={!rewardBgUrl}
           rewardFrameUrl={rewardFrameUrl}
           onAvatarPress={handleAvatarPress}
         />
@@ -856,12 +1059,44 @@ export function RoomDetailScreen({ roomId = '', onBack, openBattle }: RoomDetail
           />
         </View>
       </View>
+    </>
+  );
+
+  const screenContent = (
+    <>
+      {/* Same wrapper whichever background is showing — the stage image and
+          reward background load after the room opens, and swapping the
+          wrapper type then remounted the header + stage (a visible flash). */}
+      <View style={{ paddingTop: insets.top }}>
+        {!rewardBgUrl && !hasTopBg && (
+          // Default stage — only when the admin has uploaded no images. Its
+          // gradient runs up behind header + status bar
+          <LinearGradient colors={STAGE_GRADIENT} start={{ x: 0, y: 0 }} end={{ x: 1, y: 1 }} style={StyleSheet.absoluteFill} />
+        )}
+        {hasTopBg && (
+          <>
+            <View style={[StyleSheet.absoluteFill, styles.topBgBacking]} />
+            {!!stageBgUrl && <ExpoImage source={{ uri: stageBgUrl }} style={StyleSheet.absoluteFill} contentFit="cover" transition={200} />}
+            <View style={styles.topBgShade} pointerEvents="none" />
+          </>
+        )}
+        {topSection}
+      </View>
 
       {/* Chat area — scroll only, no floating icons here */}
       <View
         ref={chatAreaRef}
         onLayout={() => chatAreaRef.current?.measureInWindow((x, y) => { chatAreaPos.current = { x, y }; })}
         style={[styles.chatArea, rewardBgUrl && { backgroundColor: 'transparent' }]}>
+        {pinnedMessage && (
+          <PinnedMessageBar
+            message={pinnedMessage}
+            canUnpin={isHost}
+            onPress={scrollToPinned}
+            onUnpin={() => { unpinComment(); showRoomToast('Message unpinned'); }}
+          />
+        )}
+
         <ScrollView
           ref={scrollRef}
           style={styles.flex}
@@ -871,23 +1106,30 @@ export function RoomDetailScreen({ roomId = '', onBack, openBattle }: RoomDetail
           <ChatFeed
             messages={messages}
             hasRoomBg={!!rewardBgUrl}
-            // Same profile popup as tapping an avatar on the stage
-            onAvatarPress={(userId, user) => {
-              if (!userId) return;
-              const seat = seats.find(s => s.userId === userId);
-              handleAvatarPress(
-                userId,
-                user?.name ?? 'User',
-                user?.avatarUri || null,
-                userId === roomInfo?.host_user_id,
-                seat?.slotIndex,
-              );
-            }}
+            // Keep messages clear of the floating icon column (right: 8 + 44 wide + gap)
+            rightInset={FLOATING_COL_INSET}
+            pinnedMessageId={pinnedMessageId}
+            // Tap a message → host: Pin / Delete / Block / Report; others: Report
+            onCommentPress={handleMessagePress}
+            tapToAct
+            onMessageLayout={(id, y) => { messageY.current.set(id, y); }}
+            onAvatarPress={openUserProfile}
           />
         </ScrollView>
 
         {/* Live gift combo banners — float over the top of the chat, just under the stage */}
         <GiftComboBanners ref={giftBannersRef} myUserId={currentUserId} onSlotFree={handleGiftSlotFree} />
+
+        {welcome && (
+          <WelcomeToast
+            key={welcome.key}
+            name={welcome.name}
+            hostAvatarUri={hostInfo.avatarUri}
+            hostName={hostInfo.name}
+            onPress={welcome.user?.id ? () => openUserProfile(welcome.user!.id!, welcome.user) : undefined}
+            onDone={() => setWelcome(w => (w?.key === welcome.key ? null : w))}
+          />
+        )}
 
         {/* Toast inside chat area */}
         {seatToast && (
@@ -903,7 +1145,9 @@ export function RoomDetailScreen({ roomId = '', onBack, openBattle }: RoomDetail
           double-compensates and leaves a keyboard-height gap. iOS doesn't
           resize the root view for the keyboard (no KeyboardAvoidingView on
           this screen), so it still needs the manual push there. */}
-      <View style={{ marginBottom: Platform.OS === 'ios' ? keyboardHeight : 0 }}>
+      <View
+        style={{ marginBottom: Platform.OS === 'ios' ? keyboardHeight : 0 }}
+        onLayout={e => { if (!keyboardVisible) setBottomBarHeight(e.nativeEvent.layout.height); }}>
         {!keyboardVisible && (
           <GiftBar onGiftPress={handleGiftPress} hasRoomBg={!!rewardBgUrl} />
         )}
@@ -912,7 +1156,7 @@ export function RoomDetailScreen({ roomId = '', onBack, openBattle }: RoomDetail
           onGiftOpen={() => setShowGiftShop(true)}
           onBattlePress={handleBattlePress}
           hasRoomBg={!!rewardBgUrl}
-          showBattle={roomInfo?.visibility !== 'private'}
+          showBattle={isHost && roomInfo?.visibility !== 'private'}
         />
       </View>
 
@@ -946,7 +1190,9 @@ export function RoomDetailScreen({ roomId = '', onBack, openBattle }: RoomDetail
           overlap the input bar). Simplest correct fix: don't render the
           shortcuts while typing, same as GiftBar already does. */}
       {!keyboardVisible && (
-        <View style={styles.floatingBar} pointerEvents="box-none">
+        <View
+          style={[styles.floatingBar, bottomBarHeight > 0 && { bottom: insets.bottom + bottomBarHeight + 8 }]}
+          pointerEvents="box-none">
           {FLOATING_ACTIONS.map((item) => (
             <View key={item.key} style={styles.floatingItem}>
               <TouchableOpacity
@@ -954,13 +1200,13 @@ export function RoomDetailScreen({ roomId = '', onBack, openBattle }: RoomDetail
                 style={styles.floatingBtn}
                 onPress={
                   item.key === 'dailytask' ? () => setShowDailyTask(true) :
-                  item.key === 'coinbox'   ? () => setShowCoinBox(true)   : undefined
+                  item.key === 'coinbox'   ? () => { reloadGiftSlab(); setShowCoinBox(true); } : undefined
                 }>
                 <ExpoImage source={item.src} style={styles.floatingImg} contentFit="contain" />
               </TouchableOpacity>
               {item.key === 'coinbox' && (
                 <View style={styles.rankTrack}>
-                  <View style={styles.rankFill} />
+                  <View style={[styles.rankFill, { width: `${slabProgressPct(giftSlab)}%` }]} />
                 </View>
               )}
             </View>
@@ -968,15 +1214,31 @@ export function RoomDetailScreen({ roomId = '', onBack, openBattle }: RoomDetail
         </View>
       )}
 
+      <MessageActionSheet
+        target={msgTarget}
+        isHost={isHost}
+        onClose={() => setMsgTarget(null)}
+        onAction={handleMessageAction}
+      />
+      <ReportReasonModal
+        visible={!!reportTarget}
+        title="Report Message"
+        subtitle={reportTarget ? `Why are you reporting ${reportTarget.userName}'s message?` : undefined}
+        notice={REPORT_GUIDANCE}
+        reasons={[CHILD_SAFETY_REASON, 'Abuse or hate speech', 'Sexual content', 'Spam or scam', 'Sharing private information', 'Something else']}
+        onClose={() => setReportTarget(null)}
+        onSubmit={submitMessageReport}
+      />
+
       <DailyTaskModal visible={showDailyTask} onClose={() => setShowDailyTask(false)} roomId={roomId} refreshKey={taskRefreshKey} />
-      <CoinBoxModal visible={showCoinBox} onClose={() => setShowCoinBox(false)} />
+      <CoinBoxModal visible={showCoinBox} onClose={() => setShowCoinBox(false)} data={giftSlab} />
 
       {/* No battle modal — non-host when no active battle */}
       <Modal visible={showNoBattle} transparent animationType="fade" onRequestClose={() => setShowNoBattle(false)}>
         <TouchableOpacity style={modal.overlay} activeOpacity={1} onPress={() => setShowNoBattle(false)} />
         <View style={modal.sheet}>
           <View style={modal.handle} />
-          <Text style={{ fontSize: 40, marginBottom: 4 }}>⚔️</Text>
+          <Text style={{ fontSize: 28, marginBottom: 4 }}>⚔️</Text>
           <Text style={modal.title}>No Battle Right Now</Text>
           <Text style={modal.subtitle}>There is no active battle in this room at the moment.</Text>
           <TouchableOpacity onPress={() => setShowNoBattle(false)} style={modal.cancelBtn}>
@@ -984,6 +1246,15 @@ export function RoomDetailScreen({ roomId = '', onBack, openBattle }: RoomDetail
           </TouchableOpacity>
         </View>
       </Modal>
+      <BattleOverlay
+        status={battleStatus}
+        result={battleResult}
+        roomId={roomId}
+        myUserId={currentUserId}
+        onCloseStatus={() => setShowBattleStatus(false)}
+        onCloseResult={() => { setShowBattleStatus(false); socketStore.dismissBattleResult(); }}
+      />
+
       <BattleModal
         visible={showBattle}
         onClose={() => setShowBattle(false)}
@@ -1019,10 +1290,11 @@ export function RoomDetailScreen({ roomId = '', onBack, openBattle }: RoomDetail
 
           targets.forEach(({ userId: targetUserId, name: targetName }) => {
             const giftTargetId = targetUserId || hostUserId;
-            sendMessage(
+            sendGift(
               `__gift__🎁__to__${targetName}__img__${gift.image_url ?? ''}__bg__${gift.bg_color}` +
               `__giftid__${gift.id}__coins__${gift.coins}__qty__${qty}` +
-              `__senderid__${currentUserId}__recipientid__${hostUserId}__giftfor__${giftTargetId}`
+              `__senderid__${currentUserId}__recipientid__${hostUserId}__giftfor__${giftTargetId}`,
+              gift.coins * qty,
             );
             playMyGift(gift, qty, giftTargetId, targetName);
           });
@@ -1050,6 +1322,12 @@ export function RoomDetailScreen({ roomId = '', onBack, openBattle }: RoomDetail
         onRemoveFromStage={removeFromStage}
         onAddToStage={handleAddToStageFromProfile}
         onToggleTargetMute={handleToggleTargetMuteFromProfile}
+        selfIsMuted={isMuted}
+        selfOnStage={isOnStage}
+        canExitStage={isHost ? !hostOffStage : iAmOnStage}
+        onToggleSelfMute={toggleMute}
+        onExitStage={isHost ? hostLeaveStage : leaveStage}
+        onReturnToStage={hostOffStage ? hostReturnStage : undefined}
       />
 
       <RoomLevelUp
@@ -1189,9 +1467,20 @@ export function RoomDetailScreen({ roomId = '', onBack, openBattle }: RoomDetail
 
 
       {/* Exit / Minimize modal */}
-      <Modal visible={showExitModal} transparent animationType="fade" onRequestClose={() => setShowExitModal(false)}>
+      {/* Translucent bars → the modal always draws behind the Android nav bar.
+          Its bottom padding comes from insets measured inside the modal's own
+          window (ModalSafeArea), so it clears a 3-button nav bar and adds no
+          strip on devices without one. */}
+      <Modal
+        visible={showExitModal}
+        transparent
+        animationType="fade"
+        statusBarTranslucent
+        navigationBarTranslucent
+        onRequestClose={() => setShowExitModal(false)}>
+        <ModalSafeArea>
         <TouchableOpacity style={modal.overlay} activeOpacity={1} onPress={() => setShowExitModal(false)} />
-        <View style={[modal.exitSheet, { paddingBottom: Math.max(insets.bottom, 8) }]}>
+        <ModalBottomSheet style={modal.exitSheet}>
           <View style={modal.exitHandle} />
           <Text style={modal.exitTitle}>Exit Chat?</Text>
           <Text style={modal.exitSubtitle}>
@@ -1212,33 +1501,27 @@ export function RoomDetailScreen({ roomId = '', onBack, openBattle }: RoomDetail
               <Text style={modal.exitActionLabel}>Exit</Text>
             </TouchableOpacity>
           </View>
-        </View>
+        </ModalBottomSheet>
+        </ModalSafeArea>
       </Modal>
 
     </>
   );
 
-  const innerStyle = { flex: 1, paddingTop: insets.top, paddingBottom: insets.bottom };
-
-  if (rewardBgUrl) {
-    return (
-      <>
-        <StatusBar style="dark" backgroundColor="transparent" translucent />
-        <ImageBackground source={{ uri: rewardBgUrl }} style={styles.flex} resizeMode="cover">
-          <View style={[styles.flex, styles.bgOverlay, innerStyle]}>
-            {screenContent}
-          </View>
-        </ImageBackground>
-      </>
-    );
-  }
-
   return (
     <>
-      <StatusBar style="dark" backgroundColor="#FFFFFF" />
-      <SafeAreaView style={[styles.root, styles.defaultBg]} edges={['top', 'bottom']}>
-        {screenContent}
-      </SafeAreaView>
+      {/* Top background (image or stage gradient) runs under the status bar.
+          The bar is translucent app-wide (app/_layout.tsx), so this only
+          changes the icon colour — no layout jump on open/back. */}
+      <StatusBar style={hasTopBg ? 'light' : 'dark'} backgroundColor="transparent" translucent />
+      <View style={[styles.root, rewardBgUrl ? null : styles.defaultBg, { paddingBottom: insets.bottom }]}>
+        {!!rewardBgUrl && (
+          <ExpoImage source={{ uri: rewardBgUrl }} style={StyleSheet.absoluteFill} contentFit="cover" transition={200} />
+        )}
+        <View style={[styles.flex, rewardBgUrl ? styles.bgOverlay : null]}>
+          {screenContent}
+        </View>
+      </View>
     </>
   );
 }
@@ -1251,13 +1534,7 @@ function SeatRequestBanner({ request, onAccept, onReject }: {
   const uri = resolveAvatar(request.fromAvatarUrl);
   return (
     <View style={banner.container}>
-      {uri ? (
-        <Image source={{ uri }} style={banner.avatar} />
-      ) : (
-        <View style={[banner.avatar, banner.avatarFallback]}>
-          <Text style={banner.initial}>{request.fromUserName[0]?.toUpperCase()}</Text>
-        </View>
-      )}
+      <Image source={avatarSource(uri)} style={banner.avatar} />
       <View style={banner.info}>
         <Text style={banner.name} numberOfLines={1}>{request.fromUserName}</Text>
         <Text style={banner.sub}>wants to join slot {request.slotIndex}</Text>
@@ -1282,13 +1559,7 @@ function StageInviteBanner({ invite, onAccept, onReject }: {
   const uri = resolveAvatar(invite.hostAvatarUrl);
   return (
     <View style={banner.container}>
-      {uri ? (
-        <Image source={{ uri }} style={banner.avatar} />
-      ) : (
-        <View style={[banner.avatar, banner.avatarFallback]}>
-          <Text style={banner.initial}>{invite.hostName[0]?.toUpperCase()}</Text>
-        </View>
-      )}
+      <Image source={avatarSource(uri)} style={banner.avatar} />
       <View style={banner.info}>
         <Text style={banner.name} numberOfLines={1}>{invite.hostName}</Text>
         <Text style={banner.sub}>invited you to the stage</Text>
@@ -1326,8 +1597,8 @@ const congratsStyles = StyleSheet.create({
     shadowRadius: 20,
     elevation: 12,
   },
-  emoji: { fontSize: 48, marginBottom: 8 },
-  title: { fontSize: 22, fontWeight: '900', color: '#1C1E22', marginBottom: 4 },
+  emoji: { fontSize: 32, marginBottom: 8 },
+  title: { fontSize: 20, fontWeight: '900', color: '#1C1E22', marginBottom: 4 },
   sub: { fontSize: 14, color: '#60626A', textAlign: 'center', lineHeight: 20, marginBottom: 16 },
   name: { fontWeight: '800', color: '#7A0EED' },
   rewardRow: { flexDirection: 'row', gap: 12, marginBottom: 16 },
@@ -1342,7 +1613,7 @@ const congratsStyles = StyleSheet.create({
     backgroundColor: 'rgba(0,0,0,0.55)', borderRadius: 6,
     paddingHorizontal: 5, paddingVertical: 1,
   },
-  rewardCardTagText: { fontSize: 9, fontWeight: '800', color: '#FFFFFF' },
+  rewardCardTagText: { fontSize: 10, fontWeight: '800', color: '#FFFFFF' },
   hint: { fontSize: 11, color: '#ABADB2', fontWeight: '500' },
 });
 
@@ -1374,22 +1645,22 @@ const battleInvitePopup = StyleSheet.create({
     backgroundColor: '#E0DDED', marginTop: 16,
   },
   title: {
-    fontSize: 18, fontWeight: '800', color: '#1C1E22', marginBottom: 16,
+    fontSize: 16, fontWeight: '800', color: '#1C1E22', marginBottom: 16,
   },
   roomRow: {
     flexDirection: 'row', alignItems: 'center', gap: 12, marginBottom: 8, width: '100%',
   },
   avatar: {
-    width: 52, height: 52, borderRadius: 26,
+    width: 44, height: 44, borderRadius: 22,
   },
   avatarFallback: {
     backgroundColor: '#EDE8F7', alignItems: 'center', justifyContent: 'center',
   },
   avatarInitial: {
-    fontSize: 20, fontWeight: '800', color: '#7A0EED',
+    fontSize: 18, fontWeight: '800', color: '#7A0EED',
   },
   roomName: {
-    flex: 1, fontSize: 15, fontWeight: '700', color: '#1C1E22',
+    flex: 1, fontSize: 14, fontWeight: '700', color: '#1C1E22',
   },
   sub: {
     fontSize: 13, color: '#ABADB2', fontWeight: '500', marginBottom: 20,
@@ -1398,7 +1669,7 @@ const battleInvitePopup = StyleSheet.create({
     flexDirection: 'row', gap: 12, width: '100%',
   },
   btn: {
-    flex: 1, paddingVertical: 13, borderRadius: 14, alignItems: 'center',
+    flex: 1, paddingVertical: 11, borderRadius: 14, alignItems: 'center',
   },
   declineBtn: {
     backgroundColor: '#F5F3FF', borderWidth: 1.5, borderColor: '#E0DCF0',
@@ -1414,11 +1685,17 @@ const battleInvitePopup = StyleSheet.create({
   },
 });
 
+// Right-side floating icon column: 8 from the edge + 44 wide + 6 gap
+const FLOATING_COL_INSET = 58;
+
 const styles = StyleSheet.create({
   root: { flex: 1, backgroundColor: 'transparent' },
   defaultBg: { flex: 1, backgroundColor: '#FFFFFF' },
   flex: { flex: 1 },
   bgOverlay: { backgroundColor: 'rgba(0,0,0,0.25)' },
+  // Light shade over the stage background so white names/icons stay readable
+  topBgShade: { ...StyleSheet.absoluteFillObject, backgroundColor: 'rgba(0,0,0,0.18)' },
+  topBgBacking: { backgroundColor: '#1B1430' },
   scrollContent: { paddingBottom: 8 },
   stageWrap: {
     position: 'relative',
@@ -1445,23 +1722,23 @@ const styles = StyleSheet.create({
   toastText: { color: '#FFFFFF', fontSize: 13, fontWeight: '600' },
   floatingBar: {
     position: 'absolute',
-    right: 10,
+    right: 8,
     bottom: 150,   // default/fallback — actual bottom is set inline to counter keyboard resize, see usage
     zIndex: 4,
     flexDirection: 'column',
     alignItems: 'center',
-    gap: 6,
+    gap: 10,
     // picker bar zIndex: 30 sits above this when open
   },
-  floatingItem: { alignItems: 'center', gap: 4 },
-  floatingBtn: { width: 48, height: 48, alignItems: 'center', justifyContent: 'center' },
-  floatingImg: { width: 48, height: 48 },
+  floatingItem: { alignItems: 'center', gap: 3 },
+  floatingBtn: { width: 44, height: 44, alignItems: 'center', justifyContent: 'center' },
+  floatingImg: { width: 44, height: 44 },
   rankTrack: {
-    width: 46, height: 5, borderRadius: 3,
+    width: 40, height: 4, borderRadius: 2,
     backgroundColor: '#E8E0FA', overflow: 'hidden',
   },
   rankFill: {
-    width: '42%', height: '100%',
+    height: '100%',
     backgroundColor: '#7A0EED', borderRadius: 3,
   },
 });
@@ -1518,17 +1795,17 @@ const modal = StyleSheet.create({
     gap: 12, alignItems: 'center',
   },
   handle: { width: 40, height: 4, borderRadius: 2, backgroundColor: '#E0DDED', marginBottom: 8 },
-  title: { fontSize: 20, fontWeight: '800', color: '#1C1E22', letterSpacing: -0.3 },
+  title: { fontSize: 18, fontWeight: '800', color: '#1C1E22', letterSpacing: -0.3 },
   subtitle: { fontSize: 14, color: '#60626A', textAlign: 'center', lineHeight: 20 },
   exitBtn: {
     width: '100%', flexDirection: 'row', alignItems: 'center',
-    justifyContent: 'center', gap: 8, paddingVertical: 14,
+    justifyContent: 'center', gap: 8, paddingVertical: 11,
     borderRadius: 48, backgroundColor: '#FFF5F5',
     borderWidth: 1, borderColor: '#FFE4E4',
   },
   exitLabel: { fontSize: 16, fontWeight: '700', color: '#E14C57' },
   cancelBtn: { paddingVertical: 10 },
-  cancelLabel: { fontSize: 15, color: '#ABADB2', fontWeight: '600' },
+  cancelLabel: { fontSize: 14, color: '#ABADB2', fontWeight: '600' },
   exitSheet: {
     position: 'absolute',
     bottom: 0, left: 0, right: 0,
@@ -1538,7 +1815,7 @@ const modal = StyleSheet.create({
     alignItems: 'center',
   },
   exitHandle: { width: 40, height: 4, borderRadius: 2, backgroundColor: '#E0DDED', marginBottom: 16 },
-  exitTitle: { fontSize: 18, fontWeight: '700', color: '#1C1E22' },
+  exitTitle: { fontSize: 16, fontWeight: '700', color: '#1C1E22' },
   exitSubtitle: {
     fontSize: 13, color: '#8A8C94', textAlign: 'center', lineHeight: 19,
     paddingHorizontal: 32, marginTop: 8,

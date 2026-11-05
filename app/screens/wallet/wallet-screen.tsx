@@ -1,9 +1,10 @@
 import { Ionicons } from '@expo/vector-icons';
 import { LinearGradient } from 'expo-linear-gradient';
 import { useRouter } from 'expo-router';
-import { useEffect, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import {
   ActivityIndicator,
+  Alert,
   Image,
   Linking,
   ScrollView,
@@ -13,494 +14,263 @@ import {
   View,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
+import { FEATURES } from '@/constants/features';
 import { BASE_URL } from '@/services/api';
 import { authStore } from '@/store/auth-store';
+import {
+  EARNING_SOURCES, SOURCE_BY_KEY, formatInr, formatTxnTime, monthLabel, type EarningSource,
+} from './earnings-shared';
 
 const WHATSAPP_NUMBER = '+919676855851';
+const PURSE_IMG = require('@/assets/images/wallet-purse.png');
 
-type WalletTab = 'coins' | 'gems';
-type GemTab = 'chat-rooms' | 'friend-zone' | 'live';
+type WalletTab = 'coins' | 'earnings' | 'store';
 
 type CoinPackage = {
   id: string; coins: number; price: string;
   original_price: string | null; discount: string; highlighted: boolean;
 };
 
-// ── Gem Tier Data ─────────────────────────────────────────────────────────────
+// ── Earnings data ─────────────────────────────────────────────────────────────
 
-type Tier = { gems: number; payout: number; hostPct: number };
-
-const ALL_TIERS: Tier[] = [
-  // Host 50%
-  { gems: 12_500,      payout: 168,       hostPct: 50 },
-  { gems: 20_000,      payout: 270,       hostPct: 50 },
-  { gems: 40_000,      payout: 540,       hostPct: 50 },
-  { gems: 80_000,      payout: 1_080,     hostPct: 50 },
-  { gems: 105_000,     payout: 1_418,     hostPct: 50 },
-  { gems: 185_000,     payout: 2_497,     hostPct: 50 },
-  { gems: 255_000,     payout: 3_442,     hostPct: 50 },
-  { gems: 355_000,     payout: 4_792,     hostPct: 50 },
-  { gems: 510_000,     payout: 7_650,     hostPct: 50 },
-  { gems: 735_000,     payout: 11_025,    hostPct: 50 },
-  { gems: 1_025_000,   payout: 15_375,    hostPct: 50 },
-  { gems: 1_380_000,   payout: 20_700,    hostPct: 50 },
-  { gems: 1_860_000,   payout: 27_900,    hostPct: 50 },
-  { gems: 2_415_000,   payout: 36_225,    hostPct: 50 },
-  { gems: 2_895_000,   payout: 43_425,    hostPct: 50 },
-  { gems: 3_325_000,   payout: 49_875,    hostPct: 50 },
-  { gems: 3_820_000,   payout: 57_300,    hostPct: 50 },
-  { gems: 4_200_000,   payout: 63_000,    hostPct: 50 },
-  { gems: 4_620_000,   payout: 69_300,    hostPct: 50 },
-  // Host 55%
-  { gems: 5_016_000,   payout: 83_820,    hostPct: 55 },
-  { gems: 5_585_000,   payout: 92_152,    hostPct: 55 },
-  { gems: 6_140_000,   payout: 101_310,   hostPct: 55 },
-  { gems: 6_750_000,   payout: 111_375,   hostPct: 55 },
-  { gems: 7_425_000,   payout: 122_512,   hostPct: 55 },
-  { gems: 8_165_000,   payout: 134_722,   hostPct: 55 },
-  { gems: 8_980_000,   payout: 148_170,   hostPct: 55 },
-  { gems: 9_875_000,   payout: 162_937,   hostPct: 55 },
-  { gems: 10_860_000,  payout: 179_190,   hostPct: 55 },
-  { gems: 11_945_000,  payout: 197_092,   hostPct: 55 },
-  { gems: 13_135_000,  payout: 216_727,   hostPct: 55 },
-  { gems: 14_445_000,  payout: 238_342,   hostPct: 55 },
-  { gems: 15_165_000,  payout: 250_222,   hostPct: 55 },
-  { gems: 15_920_000,  payout: 262_680,   hostPct: 55 },
-  { gems: 16_715_000,  payout: 275_797,   hostPct: 55 },
-  { gems: 17_380_000,  payout: 286_770,   hostPct: 55 },
-  { gems: 18_075_000,  payout: 298_237,   hostPct: 55 },
-  { gems: 18_795_000,  payout: 310_117,   hostPct: 55 },
-  { gems: 19_545_000,  payout: 322_492,   hostPct: 55 },
-  { gems: 20_130_000,  payout: 332_145,   hostPct: 55 },
-  { gems: 20_730_000,  payout: 342_045,   hostPct: 55 },
-  { gems: 21_555_000,  payout: 355_657,   hostPct: 55 },
-  { gems: 22_415_000,  payout: 369_847,   hostPct: 55 },
-  { gems: 23_310_000,  payout: 384_615,   hostPct: 55 },
-  { gems: 24_475_000,  payout: 403_837,   hostPct: 55 },
-  { gems: 25_695_000,  payout: 423_967,   hostPct: 55 },
-  { gems: 26_945_000,  payout: 444_593,   hostPct: 55 },
-  { gems: 28_945_000,  payout: 477_593,   hostPct: 55 },
-  { gems: 30_945_000,  payout: 510_592,   hostPct: 55 },
-  { gems: 32_945_000,  payout: 543_592,   hostPct: 55 },
-  { gems: 34_945_000,  payout: 576_592,   hostPct: 55 },
-  { gems: 37_445_000,  payout: 617_842,   hostPct: 55 },
-  { gems: 39_945_000,  payout: 659_092,   hostPct: 55 },
-  { gems: 42_445_000,  payout: 700_342,   hostPct: 55 },
-  { gems: 45_445_000,  payout: 749_842,   hostPct: 55 },
-  { gems: 48_445_000,  payout: 799_342,   hostPct: 55 },
-  { gems: 51_445_000,  payout: 848_842,   hostPct: 55 },
-  { gems: 54_945_000,  payout: 906_592,   hostPct: 55 },
-  { gems: 58_445_000,  payout: 964_342,   hostPct: 55 },
-  { gems: 61_945_000,  payout: 1_022_092, hostPct: 55 },
-  { gems: 65_945_000,  payout: 1_088_092, hostPct: 55 },
-];
-
-const WINDOW_SIZE = 20;
-
-function formatN(n: number): string {
-  return n.toLocaleString('en-IN');
-}
-
-function formatPayout(n: number): string {
-  return n.toLocaleString('en-IN');
-}
-
-function formatPerGem(gems: number, payout: number): string {
-  const rate = payout / gems;
-  if (rate >= 1)    return `₹${rate.toFixed(2)}/Gem`;
-  if (rate >= 0.01) return `₹${rate.toFixed(3)}/Gem`;
-  return `₹${rate.toFixed(4)}/Gem`;
-}
-
-// ── Gem Tiers component ───────────────────────────────────────────────────────
-
-// Index where 55% tiers start
-const FIRST_55_IDX = ALL_TIERS.findIndex(t => t.hostPct === 55);
-
-function PctBadge({ pct, done }: { pct: number; done?: boolean }) {
-  const is55 = pct === 55;
-  return (
-    <View style={[tier.pctBadge, is55 ? tier.pctBadge55 : tier.pctBadge50, done && tier.pctBadgeDone]}>
-      <Text style={[tier.pctBadgeText, is55 ? tier.pctBadgeText55 : tier.pctBadgeText50, done && tier.pctBadgeTextDone]}>
-        {pct}%
-      </Text>
-    </View>
-  );
-}
-
-function UnlockBanner() {
-  return (
-    <LinearGradient
-      colors={['#7A0EED22', '#B5035722']}
-      start={{ x: 0, y: 0 }} end={{ x: 1, y: 0 }}
-      style={tier.unlockBanner}>
-      <Ionicons name="arrow-up-circle" size={16} color="#7A0EED" />
-      <Text style={tier.unlockText}>
-        Complete target &amp; unlock{' '}
-        <Text style={tier.unlockHighlight}>55% withdraw value</Text>
-      </Text>
-      <Ionicons name="chevron-forward" size={14} color="#B50357" />
-    </LinearGradient>
-  );
-}
-
-function GemTiers({ gemBalance, children }: { gemBalance: number; children?: React.ReactNode }) {
-  const currentTierIdx = (() => {
-    let idx = -1;
-    for (let i = 0; i < ALL_TIERS.length; i++) {
-      if (gemBalance >= ALL_TIERS[i].gems) idx = i; else break;
-    }
-    return idx;
-  })();
-
-  const windowStart  = Math.max(0, currentTierIdx);
-  const windowEnd    = Math.min(ALL_TIERS.length, windowStart + WINDOW_SIZE);
-  const visibleTiers = ALL_TIERS.slice(windowStart, windowEnd);
-
-  // Whether banner should appear inside visible window
-  const bannerAbsIdx = FIRST_55_IDX; // show banner just before first 55% row
-
-  const rows: React.ReactNode[] = [];
-  let bannerInserted = false;
-
-  visibleTiers.forEach((t, i) => {
-    const absIdx      = windowStart + i;
-    const isCompleted = absIdx <= currentTierIdx;
-    const isCurrent   = absIdx === currentTierIdx + 1;
-    const isLast      = i === visibleTiers.length - 1;
-
-    // Insert unlock banner before first 55% row (only if not yet in 55% zone)
-    if (!bannerInserted && absIdx === bannerAbsIdx && currentTierIdx < FIRST_55_IDX - 1) {
-      rows.push(<UnlockBanner key="unlock-banner" />);
-      bannerInserted = true;
-    }
-
-    if (isCompleted) {
-      const isTopCompleted = absIdx === currentTierIdx;
-      const handleWithdraw = () => {
-        const text = `Hi, I want to withdraw ${formatN(t.gems)} gems (₹${formatPayout(t.payout)}) on Rara Live.\nUsername: @${authStore.getUser()?.username ?? ''}`;
-        Linking.openURL(`https://wa.me/${WHATSAPP_NUMBER}?text=${encodeURIComponent(text)}`).catch(() => {});
-      };
-
-      rows.push(
-        <View key={absIdx} style={[tier.row, !isLast && tier.rowBorder, tier.rowDone]}>
-          <View style={tier.leftCol}>
-            <Ionicons name="checkmark-circle" size={15} color="#16A34A" style={{ marginRight: 6 }} />
-            <View>
-              <Text style={tier.gemsTextDone}>{formatN(t.gems)}</Text>
-              <Text style={tier.perGemDone}>{formatPerGem(t.gems, t.payout)}</Text>
-            </View>
-          </View>
-          <View style={tier.rightCol}>
-            <PctBadge pct={t.hostPct} done />
-            {isTopCompleted ? (
-              <TouchableOpacity activeOpacity={0.8} onPress={handleWithdraw} style={gem.withdrawBtn}>
-                <Ionicons name="cash-outline" size={13} color="#FFFFFF" />
-                <Text style={gem.withdrawText}>₹{formatPayout(t.payout)}</Text>
-              </TouchableOpacity>
-            ) : (
-              <View style={[tier.payoutBadge, tier.payoutBadgeDone]}>
-                <Text style={[tier.payoutBadgeText, tier.payoutBadgeTextDone]}>₹{formatPayout(t.payout)}</Text>
-              </View>
-            )}
-          </View>
-        </View>
-      );
-      return;
-    }
-
-    if (isCurrent) {
-      rows.push(
-        <LinearGradient
-          key={absIdx}
-          colors={['#1D6FE014', '#4A90E214']}
-          start={{ x: 0, y: 0 }} end={{ x: 1, y: 0 }}
-          style={[tier.row, !isLast && tier.rowBorder, tier.rowCurrent]}>
-          <View style={tier.leftCol}>
-            <Ionicons name="diamond" size={16} color="#1D6FE0" style={{ marginRight: 6 }} />
-            <View>
-              <Text style={tier.gemsTextCurrent}>{formatN(t.gems)}</Text>
-              <Text style={tier.perGemCurrent}>{formatPerGem(t.gems, t.payout)}</Text>
-            </View>
-          </View>
-          <View style={tier.rightCol}>
-            <PctBadge pct={t.hostPct} />
-            <View style={tier.payoutBadge}>
-              <Text style={tier.payoutBadgeText}>₹{formatPayout(t.payout)}</Text>
-            </View>
-          </View>
-        </LinearGradient>
-      );
-      return;
-    }
-
-    rows.push(
-      <View key={absIdx} style={[tier.row, !isLast && tier.rowBorder]}>
-        <View style={tier.leftCol}>
-          <Ionicons name="diamond" size={14} color="#4A90E2" style={{ marginRight: 6 }} />
-          <View>
-            <Text style={tier.gemsText}>{formatN(t.gems)}</Text>
-            <Text style={tier.perGemText}>{formatPerGem(t.gems, t.payout)}</Text>
-          </View>
-        </View>
-        <View style={tier.rightCol}>
-          <PctBadge pct={t.hostPct} />
-          <View style={[tier.payoutBadge, tier.payoutBadgeFuture]}>
-            <Text style={[tier.payoutBadgeText, tier.payoutBadgeTextFuture]}>₹{formatPayout(t.payout)}</Text>
-          </View>
-        </View>
-      </View>
-    );
-  });
-
-  return (
-    <ScrollView style={{ flex: 1 }} showsVerticalScrollIndicator={false} contentContainerStyle={tier.container}>
-      <View style={tier.colHeader}>
-        <Text style={tier.colLeft}>Getting Gems</Text>
-        <Text style={tier.colRight}>Rate · Host Payment</Text>
-      </View>
-
-      <View style={tier.list}>{rows}</View>
-
-      <View style={gem.withdrawInfoCard}>
-        <View style={gem.withdrawInfoIconWrap}>
-          <Ionicons name="gift" size={20} color="#1D6FE0" />
-        </View>
-        <View style={{ flex: 1 }}>
-          <Text style={gem.withdrawInfoTitle}>Withdraw Value</Text>
-          <Text style={gem.withdrawInfoSub}>{ALL_TIERS[0].hostPct}% of gems will be added to your wallet balance.</Text>
-        </View>
-        <Ionicons name="chevron-forward" size={18} color="#ABADB2" />
-      </View>
-
-      {children}
-    </ScrollView>
-  );
-}
-
-type GiftEvent = {
-  id: string; coins: number; quantity: number; gems_earned: number;
-  gift_name: string; gift_image_url: string | null; created_at: string;
-  room_name: string; room_id: string;
-  sender_name: string | null; sender_username: string | null; sender_avatar: string | null;
+type SourceSummary = {
+  source: EarningSource; month_gems: number; month_earnings: number;
+  current_slab: string | null; next_slab: { name: string; gems: number } | null;
 };
 
-type FriendZoneCallEarning = {
-  kind: 'call';
-  id: string; call_type: 'audio' | 'video'; duration_seconds: number; gems_earned: number;
-  created_at: string;
-  caller_name: string | null; caller_username: string | null; caller_avatar: string | null;
+type WalletTxn =
+  | { type: 'credit'; source: EarningSource; slab: string; amount: number; at: string }
+  | { type: 'withdrawal'; id: string; amount: number; status: 'pending' | 'paid' | 'rejected'; at: string };
+
+type WalletMonth = { month: string; added: number; withdrawn: number; transactions: WalletTxn[] };
+
+const WITHDRAW_STATUS: Record<'pending' | 'paid' | 'rejected', { label: string; color: string }> = {
+  pending:  { label: 'Pending',  color: '#F59E0B' },
+  paid:     { label: 'Paid',     color: '#16A34A' },
+  rejected: { label: 'Rejected · refunded', color: '#DC2626' },
 };
 
-type FriendZoneGiftEarning = {
-  kind: 'gift';
-  id: string; call_type: 'audio' | 'video'; gift_name: string; gift_image_url: string | null;
-  coins: number; quantity: number; gems_earned: number; created_at: string;
-  sender_name: string | null; sender_username: string | null; sender_avatar: string | null;
+type EarningsOverview = {
+  month: string;
+  total_month_earnings: number;
+  growth_pct: number | null;
+  available_balance: number;
+  sources: SourceSummary[];
+  months: WalletMonth[];
 };
 
-type FriendZoneEarning = FriendZoneCallEarning | FriendZoneGiftEarning;
+// ── Earnings Tab ──────────────────────────────────────────────────────────────
 
-type GemHistory = {
-  chatroom: { total_gems: number; events: GiftEvent[] };
-  friendzone: { total_gems: number; events: FriendZoneEarning[] };
-  live: { total_gems: number; events: [] };
-};
-
-function formatGems(n: number): string {
-  if (n >= 10_000_000) return `${(n / 10_000_000).toFixed(2)} Cr`;
-  if (n >= 100_000)    return `${(n / 100_000).toFixed(2)} Lac`;
-  if (n >= 1_000)      return `${(n / 1_000).toFixed(1)}K`;
-  return n.toLocaleString();
-}
-
-// ── Placeholder for Live ──────────────────────────────────────────────────────
-
-function ComingSoonGems({ icon, label }: { icon: string; label: string }) {
-  return (
-    <View style={gem.empty}>
-      <Ionicons name={icon as any} size={40} color="#D8D3EC" />
-      <Text style={gem.emptyText}>No gems from {label} yet</Text>
-      <Text style={gem.emptyHint}>Gems from {label} will appear here</Text>
-    </View>
-  );
-}
-
-// ── Friend Zone earnings list ─────────────────────────────────────────────────
-
-function formatCallDuration(seconds: number): string {
-  const m = Math.floor(seconds / 60);
-  const s = seconds % 60;
-  return `${String(m).padStart(2, '0')}:${String(s).padStart(2, '0')}`;
-}
-
-function FriendZoneEarningsList({ events }: { events: FriendZoneEarning[] }) {
-  if (events.length === 0) {
-    return <ComingSoonGems icon="people-outline" label="Friend Zone" />;
-  }
-
-  return (
-    <View style={gem.group}>
-      {events.map((e, i) => {
-        const isGift = e.kind === 'gift';
-        const person = isGift
-          ? (e.sender_name || e.sender_username || 'Unknown')
-          : (e.caller_name || e.caller_username || 'Unknown');
-        return (
-          <View key={e.id} style={[gem.row, i < events.length - 1 && gem.rowBorder]}>
-            <View style={gem.giftImgWrap}>
-              <Ionicons
-                name={isGift ? 'gift' : (e.call_type === 'video' ? 'videocam' : 'call')}
-                size={18}
-                color="#0EA5E9"
-              />
-            </View>
-            <View style={gem.rowInfo}>
-              <Text style={gem.rowTitle} numberOfLines={1}>{person}</Text>
-              <Text style={gem.rowSub}>
-                {isGift
-                  ? `Sent ${e.quantity > 1 ? `${e.quantity}x ` : ''}${e.gift_name}`
-                  : `${e.call_type === 'video' ? 'Video call' : 'Audio call'} · ${formatCallDuration(e.duration_seconds)}`}
-              </Text>
-            </View>
-            <View style={gem.rowRight}>
-              <Text style={gem.rowGems}>+{formatGems(e.gems_earned)}</Text>
-              <Text style={gem.rowTime}>
-                {new Date(e.created_at).toLocaleDateString('en-IN', { day: '2-digit', month: 'short' })}
-              </Text>
-            </View>
-          </View>
-        );
-      })}
-    </View>
-  );
-}
-
-// ── Gems Tab ──────────────────────────────────────────────────────────────────
-
-function nextTierFor(gems: number) {
-  for (const t of ALL_TIERS) { if (gems < t.gems) return t; }
-  return null;
-}
-
-function GemsTab({ gemBalance }: { gemBalance: number }) {
-  const [activeGemTab, setActiveGemTab] = useState<GemTab>('chat-rooms');
-  const [history, setHistory] = useState<GemHistory | null>(null);
+function EarningsTab() {
+  const router = useRouter();
+  const [data, setData] = useState<EarningsOverview | null>(null);
   const [loading, setLoading] = useState(true);
+  const [withdrawing, setWithdrawing] = useState(false);
 
-  useEffect(() => {
+  const load = useCallback(() => {
     const token = authStore.getToken();
     if (!token) { setLoading(false); return; }
-    fetch(`${BASE_URL}/tasks/gem-history`, { headers: { Authorization: `Bearer ${token}` } })
+    fetch(`${BASE_URL}/tasks/earnings`, { headers: { Authorization: `Bearer ${token}` } })
       .then(r => r.json())
-      .then(j => { if (j.success) setHistory(j.data); })
+      .then(j => { if (j.success) setData(j.data); })
       .catch(() => {})
       .finally(() => setLoading(false));
   }, []);
 
-  const chatroomGems   = history?.chatroom.total_gems   ?? 0;
-  const friendzoneGems = history?.friendzone.total_gems ?? 0;
-  const liveGems       = history?.live.total_gems       ?? 0;
+  useEffect(() => { load(); }, [load]);
 
-  // Top card + tier/slab table always reflect the COMBINED total across all
-  // sources — the slab list is shared, not per-source, so there's one
-  // withdraw action tied to the combined total's current tier.
-  const totalGems = chatroomGems + friendzoneGems + liveGems;
-  const nt = nextTierFor(totalGems);
+  const monthTotal = data?.total_month_earnings ?? 0;
+  const growth = data?.growth_pct ?? null;
+  const available = data?.available_balance ?? 0;
+  const months = data?.months ?? [];
+
+  // Records the request (deducting it from the wallet right away), then hands
+  // off to WhatsApp where the payout is settled.
+  const submitWithdraw = async () => {
+    setWithdrawing(true);
+    try {
+      const r = await fetch(`${BASE_URL}/tasks/earnings/withdraw`, {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${authStore.getToken()}` },
+      });
+      const j = await r.json();
+      if (!j.success) { Alert.alert('Withdraw failed', j.message ?? 'Please try again.'); return; }
+      const text = `Hi, I want to withdraw ${formatInr(j.data.amount)} from my RaRa Live earnings.\nRequest ID: ${j.data.id}\nUsername: @${authStore.getUser()?.username ?? ''}`;
+      Linking.openURL(`https://wa.me/${WHATSAPP_NUMBER}?text=${encodeURIComponent(text)}`).catch(() => {});
+      load();
+    } catch {
+      Alert.alert('Withdraw failed', 'Please check your connection and try again.');
+    } finally {
+      setWithdrawing(false);
+    }
+  };
+
+  const handleWithdraw = () => {
+    if (available <= 0 || withdrawing) return;
+    Alert.alert('Withdraw', `Withdraw ${formatInr(available)} from your wallet?`, [
+      { text: 'Cancel', style: 'cancel' },
+      { text: 'Withdraw', onPress: submitWithdraw },
+    ]);
+  };
+
+  const openSource = (source: EarningSource) =>
+    router.push({ pathname: '/service-earnings', params: { source } } as any);
+
+  if (loading) return <ActivityIndicator color="#7A0EED" style={{ marginTop: 32 }} />;
 
   return (
-    <View style={{ flex: 1 }}>
-      {/* Fixed header: balance card + pills + sub-tabs */}
-      <View style={s.gemHeader}>
-        <LinearGradient
-          colors={['#2F6FE0', '#1D4FC4', '#153A9E']}
-          start={{ x: 0, y: 0 }} end={{ x: 1, y: 1 }}
-          style={gem.balanceCard}>
-          {/* Soft radial-style glow behind the diamond, layered circles since
-              RN LinearGradient has no true radial mode */}
-          <View style={gem.glowOuter} pointerEvents="none" />
-          <View style={gem.glowInner} pointerEvents="none" />
+    <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={s.scroll}>
+      {/* Total earnings card */}
+      <LinearGradient
+        colors={['#7A0EED', '#B50357']}
+        start={{ x: 0, y: 0 }} end={{ x: 1, y: 1 }}
+        style={e.balanceCard}>
+        <View style={e.glowOuter} pointerEvents="none" />
+        <View style={e.glowInner} pointerEvents="none" />
 
-          <View style={gem.balanceCardLeft}>
-            <View style={gem.balanceCardTop}>
-              <Ionicons name="diamond" size={14} color="#BFE0FF" />
-              <Text style={gem.balanceCardLabel}>Gems Balance</Text>
+        <View style={e.totalRow}>
+          <View style={{ flex: 1 }}>
+            <Text style={e.balanceLabel}>Total Earnings (This Month)</Text>
+            <View style={e.balanceRow}>
+              <Text style={e.balanceNumber}>{formatInr(monthTotal)}</Text>
+              {growth !== null && (
+                <View style={[e.growthBadge, growth < 0 && e.growthBadgeDown]}>
+                  <Text style={[e.growthText, growth < 0 && e.growthTextDown]}>
+                    {growth >= 0 ? '+' : ''}{growth.toFixed(1)}%
+                  </Text>
+                </View>
+              )}
             </View>
-            <Text style={gem.balanceCardNumber}>{formatGems(totalGems)}</Text>
-            <Text style={gem.balanceCardInr}>≈ ₹{(totalGems * 0.0135).toFixed(2)}</Text>
           </View>
-
-          <Image source={require('@/assets/tabs/wallet/gemscard.png')} style={gem.balanceCardImage} resizeMode="contain" />
-        </LinearGradient>
-
-        <View style={gem.sourcePills}>
-          <SourcePill
-            icon="chatbubble-ellipses" label="Chat Rooms" gems={chatroomGems} color="#1D6FE0"
-            onPress={() => setActiveGemTab('chat-rooms')}
-          />
-          <SourcePill
-            icon="people" label="Friend Zone" gems={friendzoneGems} color="#1D6FE0"
-            onPress={() => setActiveGemTab('friend-zone')}
-          />
-          <SourcePill
-            icon="radio" label="Live" gems={liveGems} color="#E91E7F"
-            onPress={() => setActiveGemTab('live')}
-          />
+          <Image source={PURSE_IMG} style={e.purseImg} resizeMode="contain" />
         </View>
 
-        {nt && (
-          <View style={gem.targetCard}>
-            <View style={gem.targetTop}>
-              <View style={gem.targetLeft}>
-                <Ionicons name="flag" size={13} color="#1D6FE0" />
-                <Text style={gem.targetText}>
-                  Next target: <Text style={gem.targetVal}>{formatN(nt.gems)} gems</Text>
-                </Text>
+        <View style={e.divider} />
+
+        <View style={e.availableRow}>
+          <View style={{ flex: 1 }}>
+            <Text style={e.availableLabel}>Available in Wallet</Text>
+            <Text style={e.availableNumber}>{formatInr(available)}</Text>
+          </View>
+          <TouchableOpacity
+            activeOpacity={0.85}
+            onPress={handleWithdraw}
+            disabled={available <= 0 || withdrawing}
+            style={[e.withdrawBtn, (available <= 0 || withdrawing) && { opacity: 0.6 }]}>
+            {withdrawing
+              ? <ActivityIndicator color="#7A0EED" size="small" />
+              : <Text style={e.withdrawText}>Withdraw</Text>}
+          </TouchableOpacity>
+        </View>
+      </LinearGradient>
+
+      {/* Earnings overview — tap a service for its slab screen */}
+      <SectionHeader title="Earnings Overview" hint="(This Month)" />
+      <ScrollView
+        horizontal
+        showsHorizontalScrollIndicator={false}
+        style={e.overviewScroll}
+        contentContainerStyle={e.overviewRow}>
+        {EARNING_SOURCES.map(src => {
+          const amount = data?.sources.find(x => x.source === src.key)?.month_earnings ?? 0;
+          const pct = monthTotal > 0 ? (amount / monthTotal) * 100 : 0;
+          return (
+            <TouchableOpacity key={src.key} activeOpacity={0.8} disabled={src.comingSoon} onPress={() => openSource(src.key)} style={e.overviewCard}>
+              <View style={e.overviewTop}>
+                <View style={[e.iconWrap, { backgroundColor: src.tint }]}>
+                  <Ionicons name={src.icon as any} size={16} color={src.color} />
+                </View>
+                <Text style={e.overviewLabel} numberOfLines={2}>{src.label}</Text>
               </View>
-              <Text style={gem.targetPct}>{nt.hostPct}% withdraw value</Text>
+              <Text style={e.overviewAmount}>{formatInr(amount)}</Text>
+              <Text style={[e.overviewPct, { color: src.color }]}>
+                {src.comingSoon ? 'Coming soon' : `${pct.toFixed(2)}%`}
+              </Text>
+            </TouchableOpacity>
+          );
+        })}
+      </ScrollView>
+
+      {/* Recent wallet transactions, one section per month */}
+      <SectionHeader title="Recent Transactions" />
+      {months.length === 0 ? (
+        <View style={e.empty}>
+          <Ionicons name="wallet-outline" size={40} color="#D8D3EC" />
+          <Text style={e.emptyText}>No transactions yet</Text>
+          <Text style={e.emptyHint}>Complete a slab to add money to your wallet</Text>
+        </View>
+      ) : (
+        months.map(m => (
+          <View key={m.month} style={e.monthBlock}>
+            <View style={e.monthHeader}>
+              <Text style={e.monthTitle}>{monthLabel(m.month)}</Text>
+              <Text style={e.monthSummary}>
+                <Text style={e.monthAdded}>+{formatInr(m.added).replace(' ', '')}</Text>
+                {m.withdrawn > 0 && <Text style={e.monthWithdrawn}>  −{formatInr(m.withdrawn).replace(' ', '')}</Text>}
+              </Text>
             </View>
-            <View style={gem.targetTrack}>
-              <View style={[gem.targetFill, { width: `${Math.min(100, (totalGems / nt.gems) * 100)}%` }]} />
+            <View style={e.txnList}>
+              {m.transactions.map((t, i) => (
+                <TxnRow
+                  key={t.type === 'credit' ? `c-${t.source}-${t.slab}-${t.at}` : `w-${t.id}`}
+                  txn={t}
+                  last={i === m.transactions.length - 1}
+                  onPress={t.type === 'credit' ? () => openSource(t.source) : undefined}
+                />
+              ))}
             </View>
           </View>
-        )}
-      </View>
-
-      {/* Scrollable content: one shared tier/slab table (combined total)
-          always on top, followed by the selected source's history below it
-          in the same scroll region — the slab list itself never changes
-          per tab, only what's appended after it does. */}
-      {loading ? (
-        <ActivityIndicator color="#7A0EED" style={{ marginTop: 32 }} />
-      ) : (
-        <GemTiers gemBalance={totalGems}>
-          {activeGemTab === 'friend-zone' && (
-            <FriendZoneEarningsList events={history?.friendzone.events ?? []} />
-          )}
-          {activeGemTab === 'live' && (
-            <ComingSoonGems icon="radio-outline" label="Live" />
-          )}
-        </GemTiers>
+        ))
       )}
-    </View>
+    </ScrollView>
   );
 }
 
-function SourcePill({ icon, label, gems, color, onPress }: {
-  icon: string; label: string; gems: number; color: string;
-  onPress?: () => void;
-}) {
+function TxnRow({ txn, last, onPress }: { txn: WalletTxn; last: boolean; onPress?: () => void }) {
+  const src = txn.type === 'credit' ? SOURCE_BY_KEY[txn.source] : null;
+  const status = txn.type === 'withdrawal' ? WITHDRAW_STATUS[txn.status] : null;
   return (
     <TouchableOpacity
+      activeOpacity={0.8}
+      disabled={!onPress}
       onPress={onPress}
-      activeOpacity={0.75}
-      style={[gem.pill, { borderColor: color + '33', backgroundColor: '#FAFAFA' }]}>
-      <Ionicons name={icon as any} size={14} color={color} />
-      <View style={gem.pillText}>
-        <Text style={[gem.pillGems, { color }]}>{formatGems(gems)}</Text>
-        <Text style={gem.pillLabel}>{label}</Text>
+      style={[e.txnRow, !last && e.txnBorder]}>
+      <View style={[e.iconWrap, e.txnIconWrap, { backgroundColor: src?.tint ?? '#FEF3E2' }]}>
+        <Ionicons name={(src?.icon ?? 'arrow-up-circle') as any} size={18} color={src?.color ?? '#F59E0B'} />
       </View>
+      <View style={e.txnInfo}>
+        <Text style={e.txnTitle} numberOfLines={1}>
+          {txn.type === 'credit' ? `${src!.short} - ${txn.slab}` : 'Withdrawal'}
+        </Text>
+        <Text style={e.txnSub} numberOfLines={1}>
+          {formatTxnTime(new Date(txn.at))}
+          {status && <Text style={{ color: status.color, fontWeight: '700' }}>  · {status.label}</Text>}
+        </Text>
+      </View>
+      <Text style={[
+        e.txnAmount,
+        txn.type === 'withdrawal' && e.txnAmountOut,
+        txn.type === 'withdrawal' && txn.status === 'rejected' && e.txnAmountVoid,
+      ]}>
+        {txn.type === 'credit' ? '+' : '−'}{formatInr(txn.amount).replace(' ', '')}
+      </Text>
     </TouchableOpacity>
+  );
+}
+
+function SectionHeader({ title, hint, onViewAll }: { title: string; hint?: string; onViewAll?: () => void }) {
+  return (
+    <View style={e.sectionRow}>
+      <Text style={s.sectionHeading}>
+        {title}{hint ? <Text style={e.sectionHint}> {hint}</Text> : null}
+      </Text>
+      {onViewAll && (
+        <TouchableOpacity onPress={onViewAll} hitSlop={8} style={e.viewAll}>
+          <Text style={e.viewAllText}>View All</Text>
+          <Ionicons name="chevron-forward" size={13} color="#7A0EED" />
+        </TouchableOpacity>
+      )}
+    </View>
   );
 }
 
@@ -511,7 +281,6 @@ export function WalletScreen() {
   const [activeTab, setActiveTab] = useState<WalletTab>('coins');
   const username = authStore.getUser()?.username ?? '';
   const [coinBalance, setCoinBalance] = useState(0);
-  const [gemBalance, setGemBalance] = useState(0);
   const [packages, setPackages] = useState<CoinPackage[]>([]);
   const [pkgLoading, setPkgLoading] = useState(true);
 
@@ -519,7 +288,7 @@ export function WalletScreen() {
     const token = authStore.getToken();
     const headers: Record<string, string> = token ? { Authorization: `Bearer ${token}` } : {};
     fetch(`${BASE_URL}/wallet/me`, { headers }).then(r => r.json()).then(j => { if (j.success) setCoinBalance(j.data.coins); }).catch(() => {});
-    fetch(`${BASE_URL}/tasks/gems`, { headers }).then(r => r.json()).then(j => { if (j.success) setGemBalance(j.data.gems); }).catch(() => {});
+    if (!FEATURES.coinPurchases) { setPkgLoading(false); return; }
     fetch(`${BASE_URL}/coin-packages/public`).then(r => r.json()).then(j => { if (j.success) setPackages(j.data); }).catch(() => {}).finally(() => setPkgLoading(false));
   }, []);
 
@@ -536,9 +305,9 @@ export function WalletScreen() {
         </TouchableOpacity>
       </View>
 
-      {/* Coins / Gems tabs */}
+      {/* Coins / Earnings / Store tabs */}
       <View style={s.tabRow}>
-        {(['coins', 'gems'] as WalletTab[]).map(tab => (
+        {(['coins', 'earnings', 'store'] as WalletTab[]).map(tab => (
           <TouchableOpacity
             key={tab}
             style={[s.tabBtn, activeTab === tab && s.tabBtnActive]}
@@ -559,13 +328,13 @@ export function WalletScreen() {
             start={{ x: 0, y: 0 }} end={{ x: 1, y: 1 }}
             style={s.balanceCard}>
             <View style={s.balanceCardTop}>
-              <Ionicons name="logo-usd" size={16} color="#FFD75E" />
               <Text style={s.balanceCardLabel}>Total Coins</Text>
             </View>
             <Text style={s.balanceCardNumber}>{coinBalance.toLocaleString()}</Text>
             <Image source={require('@/assets/tabs/wallet/walletcard.png')} style={s.coinIcon} resizeMode="contain" />
           </LinearGradient>
 
+          {FEATURES.spinAndWin && (
           <View style={s.spinCard}>
             <View style={s.spinIconWrap}>
               <Image source={require('@/assets/tabs/wallet/spin.png')} style={s.spinIcon} resizeMode="contain" />
@@ -583,21 +352,49 @@ export function WalletScreen() {
               </LinearGradient>
             </TouchableOpacity>
           </View>
+          )}
 
-          <Text style={s.sectionHeading}>Buy Coins</Text>
+          {FEATURES.coinPurchases ? (
+            <>
+              <Text style={s.sectionHeading}>Buy Coins</Text>
 
-          {pkgLoading ? (
-            <ActivityIndicator color="#7A0EED" style={{ marginTop: 20 }} />
+              {pkgLoading ? (
+                <ActivityIndicator color="#7A0EED" style={{ marginTop: 20 }} />
+              ) : (
+                <View style={s.packageList}>
+                  {packages.map(pkg => <PackageRow key={pkg.id} pkg={pkg} username={username} />)}
+                </View>
+              )}
+            </>
           ) : (
-            <View style={s.packageList}>
-              {packages.map(pkg => <PackageRow key={pkg.id} pkg={pkg} username={username} />)}
+            <View style={s.comingSoonCard}>
+              <Ionicons name="time-outline" size={22} color="#7A0EED" />
+              <View style={{ flex: 1 }}>
+                <Text style={s.comingSoonTitle}>Coin packages coming soon</Text>
+                <Text style={s.comingSoonSub}>{"You'll be able to buy coins right here in the app."}</Text>
+              </View>
             </View>
           )}
         </ScrollView>
       )}
 
-      {/* Gems tab */}
-      {activeTab === 'gems' && <GemsTab gemBalance={gemBalance} />}
+      {/* Earnings tab */}
+      {activeTab === 'earnings' && <EarningsTab />}
+
+      {/* Store tab — placeholder until the store is built */}
+      {activeTab === 'store' && (
+        <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={s.scroll}>
+          <View style={s.storeCard}>
+            <View style={s.storeIconWrap}>
+              <Ionicons name="storefront-outline" size={28} color="#7A0EED" />
+            </View>
+            <Text style={s.storeTitle}>Store coming soon</Text>
+            <Text style={s.storeSub}>
+              Frames, entry effects and more — buy them with your coins right here.
+            </Text>
+          </View>
+        </ScrollView>
+      )}
     </SafeAreaView>
   );
 }
@@ -622,7 +419,7 @@ function PackageRow({ pkg, username }: { pkg: CoinPackage; username: string }) {
   const discount = parseFloat(pkg.discount);
 
   const handlePress = () => {
-    const text = `Hi, I want to buy a package of ${pkg.coins} coins for ₹${price.toFixed(0)} on Rara Live.\nUsername: @${username}`;
+    const text = `Hi, I want to buy a package of ${pkg.coins} coins for ₹${price.toFixed(0)} on RaRa Live.\nUsername: @${username}`;
     Linking.openURL(`https://wa.me/${WHATSAPP_NUMBER}?text=${encodeURIComponent(text)}`).catch(() => {});
   };
 
@@ -635,13 +432,9 @@ function PackageRow({ pkg, username }: { pkg: CoinPackage; username: string }) {
       <View style={s.pkgLeft}>
         <View style={s.pkgCoinRow}>
           <Text style={s.pkgCoins}>{pkg.coins.toLocaleString()}</Text>
-          <Text style={s.pkgCoinsLabel}> COINS</Text>
+          <Text style={s.pkgCoinsLabel}> Coins</Text>
         </View>
-        {discount > 0 && (
-          <View style={s.discountBadge}>
-            <Text style={s.discountText}>-{discount.toFixed(0)}%</Text>
-          </View>
-        )}
+        {discount > 0 && <Text style={s.discountText}>-{discount.toFixed(0)}%</Text>}
       </View>
 
       <View style={s.priceBtn}>
@@ -656,16 +449,16 @@ function PackageRow({ pkg, username }: { pkg: CoinPackage; username: string }) {
 
 const s = StyleSheet.create({
   root: { flex: 1, backgroundColor: '#F7F4FD' },
-  header: { flexDirection: 'row', alignItems: 'center', paddingHorizontal: 16, paddingVertical: 14, backgroundColor: '#F7F4FD' },
+  header: { flexDirection: 'row', alignItems: 'center', gap: 8, paddingHorizontal: 12, paddingVertical: 10, backgroundColor: '#F7F4FD' },
   headerBtn: { width: 36, height: 36, alignItems: 'center', justifyContent: 'center' },
-  headerTitle: { flex: 1, textAlign: 'left', fontSize: 18, fontWeight: '700', color: '#1C1E22' },
-  tabRow: { flexDirection: 'row', marginHorizontal: 16, backgroundColor: '#EDE8F8', borderRadius: 30, padding: 4, marginBottom: 16 },
-  tabBtn: { flex: 1, paddingVertical: 9, borderRadius: 26, alignItems: 'center' },
+  headerTitle: { flex: 1, fontSize: 20, fontWeight: '700', color: '#1C1E22' },
+  tabRow: { flexDirection: 'row', marginHorizontal: 16, backgroundColor: '#EDE8F8', borderRadius: 24, padding: 4, marginTop: 4, marginBottom: 16 },
+  tabBtn: { flex: 1, height: 38, borderRadius: 20, alignItems: 'center', justifyContent: 'center' },
   tabBtnActive: { backgroundColor: '#FFFFFF', shadowColor: '#7A0EED', shadowOpacity: 0.12, shadowRadius: 6, shadowOffset: { width: 0, height: 2 }, elevation: 3 },
-  tabText: { fontSize: 14, fontWeight: '500', color: '#7A7A8A' },
+  tabText: { fontSize: 15, fontWeight: '500', color: '#7A7A8A' },
   tabTextActive: { color: '#1C1E22', fontWeight: '700' },
   scroll: { paddingHorizontal: 16, paddingBottom: 40 },
-  balanceCard: { backgroundColor: '#FFFFFF', borderRadius: 20, paddingVertical: 24, alignItems: 'center', marginBottom: 16, gap: 4, shadowColor: '#7A0EED', shadowOpacity: 0.06, shadowRadius: 12, shadowOffset: { width: 0, height: 4 }, elevation: 3, overflow: 'hidden' },
+  balanceCard: { backgroundColor: '#FFFFFF', borderRadius: 20, paddingBottom: 20, alignItems: 'center', marginBottom: 16, gap: 4, shadowColor: '#7A0EED', shadowOpacity: 0.06, shadowRadius: 12, shadowOffset: { width: 0, height: 4 }, elevation: 3, overflow: 'hidden' },
   coinIcon: { position: 'absolute', width: 192, height: 152, right: -20},
   balanceNumber: { fontSize: 34, fontWeight: '800', color: '#1C1E22' },
   balanceTarget: { fontSize: 12, color: '#ABADB2', fontWeight: '400', marginTop: -2 },
@@ -680,20 +473,37 @@ const s = StyleSheet.create({
   spinCard: {
     flexDirection: 'row', alignItems: 'center', gap: 12,
     backgroundColor: '#FFFFFF', borderRadius: 16, borderWidth: 1, borderColor: '#F6D8E8',
-    paddingHorizontal: 14, paddingVertical: 12, marginBottom: 20,
+    paddingHorizontal: 14, paddingVertical: 12, marginBottom: 16,
     shadowColor: '#B50357', shadowOpacity: 0.06, shadowRadius: 10, shadowOffset: { width: 0, height: 3 }, elevation: 2,
   },
   spinIconWrap: { width: 44, height: 44, borderRadius: 22, backgroundColor: '#F3EFFE', alignItems: 'center', justifyContent: 'center' },
   spinIcon: { width: 85, height: 85 },
   spinTextWrap: { flex: 1, gap: 2 },
   spinTitle: { fontSize: 14, fontWeight: '800', color: '#1C1E22' },
-  spinSub: { fontSize: 11, color: '#8A8A96', fontWeight: '400' },
+  spinSub: { fontSize: 12, color: '#8A8A96' },
   spinBtn: { borderRadius: 20, overflow: 'hidden' },
-  spinBtnGradient: { paddingHorizontal: 16, paddingVertical: 9 },
+  spinBtnGradient: { height: 36, paddingHorizontal: 16, justifyContent: 'center' },
   spinBtnText: { fontSize: 13, fontWeight: '700', color: '#FFFFFF' },
 
-  sectionHeading: { fontSize: 16, fontWeight: '800', color: '#1C1E22', marginBottom: 12, marginTop: 4 },
+  sectionHeading: { fontSize: 16, fontWeight: '700', color: '#1C1E22', marginBottom: 10, marginTop: 4 },
   packageList: { gap: 10 },
+  comingSoonCard: {
+    flexDirection: 'row', alignItems: 'center', gap: 12,
+    backgroundColor: '#F5F0FF', borderRadius: 16, padding: 16, marginTop: 4,
+  },
+  comingSoonTitle: { fontSize: 14, fontWeight: '700', color: '#1C1E22' },
+  comingSoonSub:   { fontSize: 12, color: '#6B6E7A', marginTop: 2 },
+  storeCard: {
+    alignItems: 'center', gap: 6, backgroundColor: '#FFFFFF', borderRadius: 20,
+    paddingVertical: 32, paddingHorizontal: 24,
+    shadowColor: '#7A0EED', shadowOpacity: 0.05, shadowRadius: 10, shadowOffset: { width: 0, height: 3 }, elevation: 2,
+  },
+  storeIconWrap: {
+    width: 56, height: 56, borderRadius: 28, backgroundColor: '#F4EEFF',
+    alignItems: 'center', justifyContent: 'center', marginBottom: 6,
+  },
+  storeTitle: { fontSize: 16, fontWeight: '700', color: '#1C1E22' },
+  storeSub: { fontSize: 13, color: '#6B6E7A', textAlign: 'center', lineHeight: 19 },
   pkgRow: { flexDirection: 'row', alignItems: 'center', gap: 12, backgroundColor: '#FFFFFF', borderRadius: 16, paddingHorizontal: 14, paddingVertical: 12, shadowColor: '#000', shadowOpacity: 0.04, shadowRadius: 6, shadowOffset: { width: 0, height: 2 }, elevation: 1 },
   pkgIconWrap: { width: 56, height: 56, borderRadius: 12, backgroundColor: '#FFF7E8', alignItems: 'center', justifyContent: 'center' },
   pkgIcon: { width: 84, height: 84 },
@@ -701,159 +511,97 @@ const s = StyleSheet.create({
   pkgCoinRow: { flexDirection: 'row', alignItems: 'baseline' },
   pkgCoins: { fontSize: 18, fontWeight: '800', color: '#1C1E22' },
   pkgCoinsLabel: { fontSize: 11, fontWeight: '600', color: '#7A7A8A', letterSpacing: 0.5 },
-  discountBadge: { backgroundColor: '#E91E7F', borderRadius: 6, paddingHorizontal: 7, paddingVertical: 2, alignSelf: 'flex-start' },
-  discountText: { fontSize: 11, fontWeight: '700', color: '#FFFFFF' },
-  priceBtn: { flexDirection: 'row', alignItems: 'baseline', backgroundColor: '#7A0EED', paddingHorizontal: 16, paddingVertical: 10, borderRadius: 30 },
-  priceText: { fontSize: 15, fontWeight: '700', color: '#FFFFFF' },
-  origPrice: { fontSize: 11, color: 'rgba(255,255,255,0.7)', textDecorationLine: 'line-through' },
-  gemHeader: { paddingHorizontal: 16, paddingTop: 0, paddingBottom: 0 },
+  // Discount: plain green text, no badge background
+  discountText: { fontSize: 11, fontWeight: '700', color: '#16A34A' },
+  // Price: light purple instead of solid purple — same size and layout as before
+  priceBtn: { flexDirection: 'row', alignItems: 'baseline', backgroundColor: '#F1EBFF', paddingHorizontal: 16, paddingVertical: 9, borderRadius: 20 },
+  priceText: { fontSize: 14, fontWeight: '700', color: '#7A0EED' },
+  origPrice: { fontSize: 11, color: '#9A94AE', textDecorationLine: 'line-through' },
 });
 
-// Gem tier styles
-const tier = StyleSheet.create({
-  container:  { gap: 12, paddingHorizontal: 16, paddingTop: 8, paddingBottom: 40 },
-  colHeader:  { flexDirection: 'row', justifyContent: 'space-between', paddingHorizontal: 6, paddingBottom: 2 },
-  colLeft:    { fontSize: 12, fontWeight: '700', color: '#7A7A8A', textTransform: 'uppercase', letterSpacing: 0.4 },
-  colRight:   { fontSize: 12, fontWeight: '700', color: '#7A7A8A', textTransform: 'uppercase', letterSpacing: 0.4 },
-  list: {
-    backgroundColor: '#FFFFFF', borderRadius: 18,
-    shadowColor: '#7A0EED', shadowOpacity: 0.06, shadowRadius: 10, shadowOffset: { width: 0, height: 3 }, elevation: 3,
-    overflow: 'hidden',
-  },
-  row:        { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingHorizontal: 16, paddingVertical: 12 },
-  rowBorder:  { borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: '#F0EDF8' },
-  rowDone:    { backgroundColor: '#F4FBF5' },
-  rowCurrent: { borderLeftWidth: 3, borderLeftColor: '#7A0EED' },
-  leftCol:    { flexDirection: 'row', alignItems: 'center' },
-  currDot:    { width: 8, height: 8, borderRadius: 4, backgroundColor: '#1D6FE0', marginRight: 8 },
-
-  // future rows
-  gemsText:    { fontSize: 14, fontWeight: '600', color: '#1C1E22' },
-  perGemText:  { fontSize: 11, color: '#ABADB2', fontWeight: '400', marginTop: 1 },
-  payoutText:  { fontSize: 14, fontWeight: '600', color: '#6B7280' },
-
-  // completed rows
-  gemsTextDone:  { fontSize: 14, fontWeight: '700', color: '#16A34A' },
-  perGemDone:    { fontSize: 11, color: '#86EFAC', fontWeight: '400', marginTop: 1 },
-  payoutTextDone:{ fontSize: 14, fontWeight: '700', color: '#16A34A' },
-
-  // current (next target) row
-  gemsTextCurrent:  { fontSize: 15, fontWeight: '800', color: '#1D6FE0' },
-  perGemCurrent:    { fontSize: 11, color: '#7FADE8', fontWeight: '500', marginTop: 1 },
-
-  // payout badge — shared shape, different fills per state
-  payoutBadge:            { borderRadius: 20, paddingHorizontal: 13, paddingVertical: 6, alignItems: 'center', justifyContent: 'center', backgroundColor: '#1D6FE0' },
-  payoutBadgeText:        { fontSize: 13, fontWeight: '800', color: '#FFFFFF' },
-  // done: green tint
-  payoutBadgeDone:        { backgroundColor: '#16A34A' },
-  payoutBadgeTextDone:    { color: '#FFFFFF' },
-  // future: same solid blue pill as reference
-  payoutBadgeFuture:      { backgroundColor: '#1D6FE0' },
-  payoutBadgeTextFuture:  { color: '#FFFFFF', fontWeight: '800' },
-
-  rightCol: { flexDirection: 'row', alignItems: 'center', gap: 6 },
-
-  // % badge on each row
-  pctBadge:        { borderRadius: 6, paddingHorizontal: 6, paddingVertical: 2, borderWidth: 1 },
-  pctBadge50:      { backgroundColor: '#E4EFFD', borderColor: '#B8D3F5' },
-  pctBadge55:      { backgroundColor: '#FDE8F3', borderColor: '#F0A8D0' },
-  pctBadgeDone:    { backgroundColor: '#E8F5E9', borderColor: '#86EFAC' },
-  pctBadgeText:    { fontSize: 10, fontWeight: '800', letterSpacing: 0.3 },
-  pctBadgeText50:  { color: '#1D6FE0' },
-  pctBadgeText55:  { color: '#B50357' },
-  pctBadgeTextDone:{ color: '#16A34A' },
-
-  // Unlock banner between 50% and 55% groups
-  unlockBanner: {
-    flexDirection: 'row', alignItems: 'center', gap: 8,
-    borderRadius: 12, paddingHorizontal: 14, paddingVertical: 10,
-    marginVertical: 4,
-  },
-  unlockText:      { flex: 1, fontSize: 12, fontWeight: '600', color: '#1C1E22' },
-  unlockHighlight: { color: '#B50357', fontWeight: '800' },
-});
-
-// Gem sub-tab switcher styles
-// Gem content styles
-const gem = StyleSheet.create({
-  // Gems balance card (deep-blue "shiny diamond" theme)
+// Earnings tab styles
+const e = StyleSheet.create({
+  // Total earnings card
   balanceCard: {
-    borderRadius: 24, paddingVertical: 22, paddingHorizontal: 20, marginBottom: 16,
-    overflow: 'hidden', minHeight: 150,
-    shadowColor: '#1D4FC4', shadowOpacity: 0.35, shadowRadius: 18, shadowOffset: { width: 0, height: 8 }, elevation: 8,
+    borderRadius: 20, paddingHorizontal: 18, paddingVertical: 16, marginBottom: 16, overflow: 'hidden',
+    shadowColor: '#7A0EED', shadowOpacity: 0.25, shadowRadius: 16, shadowOffset: { width: 0, height: 6 }, elevation: 6,
   },
   glowOuter: {
-    position: 'absolute', right: -50, top: -40,
-    width: 220, height: 220, borderRadius: 110,
-    backgroundColor: 'rgba(255,255,255,0.10)',
+    position: 'absolute', right: -60, top: -50,
+    width: 200, height: 200, borderRadius: 100,
+    backgroundColor: 'rgba(255,255,255,0.08)',
   },
   glowInner: {
-    position: 'absolute', right: -10, top: 10,
-    width: 140, height: 140, borderRadius: 70,
-    backgroundColor: 'rgba(191,224,255,0.22)',
+    position: 'absolute', right: 10, bottom: 60,
+    width: 70, height: 70, borderRadius: 35,
+    backgroundColor: 'rgba(255,255,255,0.10)',
   },
-  balanceCardLeft: { maxWidth: '58%' },
-  balanceCardTop: { flexDirection: 'row', alignItems: 'center', gap: 6 },
-  balanceCardLabel: { fontSize: 13.5, fontWeight: '600', color: '#D8E9FF' },
-  balanceCardNumber: { fontSize: 34, fontWeight: '800', color: '#FFFFFF', marginTop: 6, letterSpacing: 0.3 },
-  balanceCardInr: { fontSize: 13, color: '#AFCBF5', fontWeight: '500', marginTop: 3 },
-  balanceCardImage: { position: 'absolute', right: -8, bottom: -14, width: 170, height: 170 },
+  balanceLabel: { fontSize: 13, fontWeight: '600', color: 'rgba(255,255,255,0.85)' },
+  balanceRow: { flexDirection: 'row', alignItems: 'center', gap: 10, marginTop: 4, flexWrap: 'wrap' },
+  balanceNumber: { fontSize: 28, fontWeight: '800', color: '#FFFFFF' },
+  growthBadge: { backgroundColor: '#DCFCE7', borderRadius: 8, paddingHorizontal: 7, paddingVertical: 3 },
+  growthBadgeDown: { backgroundColor: '#FEE2E2' },
+  growthText: { fontSize: 11, fontWeight: '800', color: '#16A34A' },
+  growthTextDown: { color: '#DC2626' },
+  divider: { height: StyleSheet.hairlineWidth, backgroundColor: 'rgba(255,255,255,0.35)', marginVertical: 14 },
+  availableRow: { flexDirection: 'row', alignItems: 'center', gap: 12 },
+  // Total earnings on the left, purse artwork (transparent PNG) on the right
+  totalRow: { flexDirection: 'row', alignItems: 'center', gap: 10 },
+  purseImg: { width: 72, height: 72, marginVertical: -6 },
+  availableLabel: { fontSize: 12, fontWeight: '500', color: 'rgba(255,255,255,0.75)' },
+  availableNumber: { fontSize: 18, fontWeight: '700', color: '#FFFFFF', marginTop: 2 },
+  withdrawBtn: { backgroundColor: '#FFFFFF', borderRadius: 20, height: 40, minWidth: 110, paddingHorizontal: 18, alignItems: 'center', justifyContent: 'center' },
+  withdrawText: { fontSize: 14, fontWeight: '800', color: '#7A0EED' },
 
-  // Tappable withdraw pill on a completed tier row
-  withdrawBtn: {
-    flexDirection: 'row', alignItems: 'center', gap: 4,
-    borderRadius: 20, paddingHorizontal: 13, paddingVertical: 6,
-    backgroundColor: '#16A34A',
+  // Section headers
+  sectionRow: { flexDirection: 'row', alignItems: 'baseline', justifyContent: 'space-between' },
+  sectionHint: { fontSize: 12, fontWeight: '500', color: '#8A8A96' },
+  viewAll: { flexDirection: 'row', alignItems: 'center', gap: 2 },
+  viewAllText: { fontSize: 13, fontWeight: '700', color: '#7A0EED' },
+
+  // Earnings overview grid
+  // Bleeds to the screen edges so cards scroll under the 16px gutter
+  // Earnings overview grid
+  // Bleeds to the screen edges so cards scroll under the 16px gutter
+  overviewScroll: { marginHorizontal: -16, marginBottom: 16 },
+  overviewRow: { paddingHorizontal: 16, paddingBottom: 4, gap: 10 },
+  overviewCard: {
+    width: 140, backgroundColor: '#FFFFFF', borderRadius: 16, paddingHorizontal: 12, paddingVertical: 12, gap: 6,
+    shadowColor: '#7A0EED', shadowOpacity: 0.05, shadowRadius: 8, shadowOffset: { width: 0, height: 2 }, elevation: 2,
   },
-  withdrawText: { fontSize: 13, fontWeight: '800', color: '#FFFFFF' },
+  overviewTop: { flexDirection: 'row', alignItems: 'center', gap: 8, marginBottom: 2 },
+  iconWrap: { width: 32, height: 32, borderRadius: 10, alignItems: 'center', justifyContent: 'center' },
+  overviewLabel: { flex: 1, fontSize: 12, fontWeight: '700', color: '#1C1E22', lineHeight: 16, minHeight: 32 },
+  overviewAmount: { fontSize: 16, fontWeight: '800', color: '#1C1E22' },
+  overviewPct: { fontSize: 11, fontWeight: '600' },
 
-  // Next target progress card
-  targetCard: {
-    backgroundColor: '#FFFFFF', borderRadius: 14, padding: 14, marginBottom: 16,
-    shadowColor: '#000', shadowOpacity: 0.04, shadowRadius: 6, shadowOffset: { width: 0, height: 2 }, elevation: 1,
+
+  // Gem value card
+
+  // Recent transactions
+  txnList: {
+    backgroundColor: '#FFFFFF', borderRadius: 16, overflow: 'hidden',
+    shadowColor: '#7A0EED', shadowOpacity: 0.05, shadowRadius: 8, shadowOffset: { width: 0, height: 2 }, elevation: 2,
   },
-  targetTop: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: 10 },
-  targetLeft: { flexDirection: 'row', alignItems: 'center', gap: 6 },
-  targetText: { fontSize: 12, color: '#60626A', fontWeight: '500' },
-  targetVal: { color: '#1D6FE0', fontWeight: '700' },
-  targetPct: { fontSize: 11, color: '#8A8A96', fontWeight: '600' },
-  targetTrack: { height: 6, borderRadius: 3, backgroundColor: '#EAF0F8', overflow: 'hidden' },
-  targetFill: { height: '100%', borderRadius: 3, backgroundColor: '#1D6FE0' },
+  txnRow: { flexDirection: 'row', alignItems: 'center', gap: 12, paddingHorizontal: 14, paddingVertical: 11 },
+  txnBorder: { borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: '#F0EDF8' },
+  txnIconWrap: { width: 36, height: 36, borderRadius: 10 },
+  txnInfo: { flex: 1, gap: 2 },
+  txnTitle: { fontSize: 14, fontWeight: '600', color: '#1C1E22' },
+  txnSub: { fontSize: 12, color: '#ABADB2' },
+  txnAmount: { fontSize: 14, fontWeight: '800', color: '#16A34A' },
+  txnAmountOut: { color: '#DC2626' },
+  txnAmountVoid: { color: '#ABADB2', textDecorationLine: 'line-through' },
 
-  sourcePills: { flexDirection: 'row', gap: 8, marginBottom: 16 },
-  pill: { flex: 1, flexDirection: 'row', alignItems: 'center', gap: 6, backgroundColor: '#FAFAFA', borderRadius: 12, padding: 10, borderWidth: 1 },
-  pillText: { flex: 1 },
-  pillGems: { fontSize: 14, fontWeight: '800' },
-  pillLabel: { fontSize: 10, color: '#ABADB2', fontWeight: '500', marginTop: 1 },
-  sectionDivider: { paddingVertical: 12, paddingHorizontal: 2 },
-  sectionLabel: { fontSize: 14, fontWeight: '700', color: '#1C1E22' },
-  list: { gap: 12 },
-  group: { backgroundColor: '#FFFFFF', borderRadius: 16, overflow: 'hidden', shadowColor: '#7A0EED', shadowOpacity: 0.05, shadowRadius: 8, shadowOffset: { width: 0, height: 2 }, elevation: 2 },
-  groupHeader: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingHorizontal: 14, paddingVertical: 10, backgroundColor: '#F9F5FF' },
-  groupMonth: { fontSize: 13, fontWeight: '700', color: '#1C1E22' },
-  groupTotal: { fontSize: 12, fontWeight: '700', color: '#A855F7' },
-  row: { flexDirection: 'row', alignItems: 'center', gap: 12, paddingHorizontal: 14, paddingVertical: 12 },
-  rowBorder: { borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: '#F0EDF8' },
-  giftImgWrap: { width: 40, height: 40, borderRadius: 12, backgroundColor: '#F5F0FF', alignItems: 'center', justifyContent: 'center', overflow: 'hidden' },
-  giftImg: { width: 32, height: 32 },
-  giftEmoji: { fontSize: 20 },
-  rowInfo: { flex: 1, gap: 2 },
-  rowTitle: { fontSize: 13, fontWeight: '700', color: '#1C1E22' },
-  rowSub: { fontSize: 11, color: '#ABADB2', fontWeight: '400' },
-  rowRight: { alignItems: 'flex-end', gap: 2 },
-  rowGems: { fontSize: 13, fontWeight: '800', color: '#A855F7' },
-  rowTime: { fontSize: 10, color: '#ABADB2' },
+  // Month sections in Recent Transactions
+  monthBlock: { marginBottom: 14 },
+  monthHeader: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingHorizontal: 4, marginBottom: 8 },
+  monthTitle: { fontSize: 13, fontWeight: '700', color: '#60626A' },
+  monthSummary: { fontSize: 12, fontWeight: '700' },
+  monthAdded: { color: '#16A34A' },
+  monthWithdrawn: { color: '#DC2626' },
+
   empty: { alignItems: 'center', justifyContent: 'center', paddingVertical: 48, gap: 10 },
   emptyText: { fontSize: 14, color: '#B0AEC0', fontWeight: '500' },
   emptyHint: { fontSize: 12, color: '#C8C5D8', fontWeight: '400' },
-
-  // Withdraw value info card (bottom of tier list)
-  withdrawInfoCard: {
-    flexDirection: 'row', alignItems: 'center', gap: 12,
-    backgroundColor: '#FFFFFF', borderRadius: 16, padding: 14, marginTop: 4,
-    shadowColor: '#000', shadowOpacity: 0.04, shadowRadius: 6, shadowOffset: { width: 0, height: 2 }, elevation: 1,
-  },
-  withdrawInfoIconWrap: { width: 40, height: 40, borderRadius: 12, backgroundColor: '#E4EFFD', alignItems: 'center', justifyContent: 'center' },
-  withdrawInfoTitle: { fontSize: 13, fontWeight: '700', color: '#1C1E22' },
-  withdrawInfoSub: { fontSize: 11, color: '#ABADB2', fontWeight: '400', marginTop: 2 },
 });

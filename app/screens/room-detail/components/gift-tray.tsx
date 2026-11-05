@@ -10,6 +10,8 @@ import {
 } from 'react-native';
 import { BASE_URL, MEDIA_BASE } from '@/services/api';
 import type { GiftItem } from '../room-detail.data';
+import { RC } from '../room-ui';
+import { avatarSource } from '@/utils/default-avatar';
 
 const COIN_IMG = require('@/assets/tabs/coin.png');
 
@@ -46,19 +48,9 @@ function resolveImg(url: string | null | undefined) {
 }
 
 function Avatar({ url, name, size = 38 }: { url: string | null; name: string; size?: number }) {
-  const uri = resolveImg(url);
-  if (uri) return <Image source={{ uri }} style={{ width: size, height: size, borderRadius: size / 2 }} />;
-  return (
-    <View style={[av.fallback, { width: size, height: size, borderRadius: size / 2 }]}>
-      <Text style={av.initial}>{name[0]?.toUpperCase()}</Text>
-    </View>
-  );
+  return <Image source={avatarSource(resolveImg(url))} style={{ width: size, height: size, borderRadius: size / 2 }} />;
 }
 
-const av = StyleSheet.create({
-  fallback: { backgroundColor: '#EDE8F7', alignItems: 'center', justifyContent: 'center' },
-  initial: { fontSize: 15, fontWeight: '700', color: '#7A0EED' },
-});
 
 // ── Gift Tray (always visible, horizontal scroll of gifts) ────────────────────
 
@@ -110,28 +102,28 @@ const tray = StyleSheet.create({
     borderTopWidth: 1,
     borderTopColor: '#F0EDF8',
     backgroundColor: '#FFFFFF',
-    paddingVertical: 8,
+    paddingVertical: 6,
   },
   scrollContent: {
-    paddingHorizontal: 10,
+    paddingHorizontal: 6,
     gap: 4,
     alignItems: 'center',
   },
   cell: {
     alignItems: 'center',
-    paddingHorizontal: 10,
-    paddingVertical: 6,
+    paddingHorizontal: 6,
+    paddingVertical: 4,
     borderRadius: 12,
-    gap: 4,
-    minWidth: 52,
+    gap: 3,
+    minWidth: 54,
   },
-  giftImg: { width: 26, height: 26 },
-  placeholder: { width: 26, height: 26, borderRadius: 6, backgroundColor: '#EDE8F7' },
+  giftImg: { width: 28, height: 28 },
+  placeholder: { width: 28, height: 28, borderRadius: 6, backgroundColor: '#EDE8F7' },
   coinRow: { flexDirection: 'row', alignItems: 'center', gap: 2 },
-  coinImg: { width: 11, height: 11 },
-  coinText: { fontSize: 11, fontWeight: '700', color: '#1C1E22' },
+  coinImg: { width: 10, height: 10 },
+  coinText: { fontSize: 11, fontWeight: '600', color: RC.number },
   containerBg: { backgroundColor: 'rgba(0,0,0,0.45)', borderTopColor: 'rgba(255,255,255,0.1)' },
-  coinTextBg: { color: '#FFFFFF' },
+  coinTextBg: { color: RC.numberOnDark },
 });
 
 // ── Gift Picker Bar (slides up when a gift is tapped) ─────────────────────────
@@ -330,8 +322,8 @@ const bar = StyleSheet.create({
   giftCellPlaceholder: { width: 28, height: 28, borderRadius: 6, backgroundColor: '#EDE8F7' },
   giftCellCoin: { flexDirection: 'row', alignItems: 'center', gap: 2 },
   giftCellCoinImg: { width: 10, height: 10 },
-  giftCellCoinText: { fontSize: 10, fontWeight: '700', color: '#60626A' },
-  giftCellCoinTextSel: { color: '#E8944A' },
+  giftCellCoinText: { fontSize: 10, fontWeight: '700', color: RC.number },
+  giftCellCoinTextSel: { color: RC.number },
 
   // Control row
   controlRow: {
@@ -386,7 +378,7 @@ const bar = StyleSheet.create({
     paddingHorizontal: 12,
     paddingVertical: 7,
   },
-  qtyToggleText: { fontSize: 13, fontWeight: '800', color: '#FFFFFF' },
+  qtyToggleText: { fontSize: 13, fontWeight: '800', color: RC.numberOnDark },
   qtyToggleCaret: { fontSize: 9, color: '#ABADB2' },
 
   // Send
@@ -429,13 +421,13 @@ const bar = StyleSheet.create({
     alignItems: 'center', justifyContent: 'center',
   },
   qtyManualIcon: { fontSize: 13, color: '#FFFFFF', fontWeight: '600', lineHeight: 16 },
-  qtyManualCount: { fontSize: 12, fontWeight: '800', color: '#FFFFFF', minWidth: 22, textAlign: 'center' },
+  qtyManualCount: { fontSize: 12, fontWeight: '800', color: RC.numberOnDark, minWidth: 22, textAlign: 'center' },
   qtyPresetRow: {
     paddingVertical: 5,
     paddingHorizontal: 16,
     alignItems: 'center',
   },
   qtyPresetRowActive: { backgroundColor: 'rgba(255,255,255,0.08)' },
-  qtyPresetText: { fontSize: 12, fontWeight: '600', color: 'rgba(255,255,255,0.7)' },
-  qtyPresetTextActive: { color: '#E8944A', fontWeight: '800' },
+  qtyPresetText: { fontSize: 12, fontWeight: '600', color: RC.numberOnDark },
+  qtyPresetTextActive: { fontWeight: '800' },
 });

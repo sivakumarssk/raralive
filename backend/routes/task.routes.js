@@ -3,6 +3,7 @@ const { authenticate, authenticateAdmin } = require('../middleware/auth.middlewa
 const { uploadTask } = require('../middleware/upload.middleware');
 const ctrl = require('../controllers/task.controller');
 const { userGiftHistory, roomGiftHistory, getMyGems, getMyGemHistory } = require('../controllers/gift-history.controller');
+const earnings = require('../controllers/earnings.controller');
 
 const router = express.Router();
 
@@ -18,6 +19,10 @@ router.post('/claim',         authenticate, ctrl.claimReward);
 router.get('/active-reward',  authenticate, ctrl.getActiveReward);
 router.get('/gems',           authenticate, getMyGems);
 router.get('/gem-history',    authenticate, getMyGemHistory);
+router.get('/earnings',       authenticate, earnings.getEarningsOverview);
+router.post('/earnings/withdraw', authenticate, earnings.requestWithdrawal);
+router.get('/earnings/config', earnings.getEarningConfig);
+router.get('/earnings/:source', authenticate, earnings.getSourceEarnings);
 router.get('/top-hosts',      authenticate, ctrl.getTopHosts);
 router.get('/winners',        authenticate, ctrl.getWinners);
 router.get('/top-gifters',    authenticate, ctrl.getTopGifters);
@@ -27,6 +32,14 @@ router.get('/admin',          authenticateAdmin, ctrl.listTasks);
 router.post('/admin',         authenticateAdmin, taskUpload, ctrl.createTask);
 router.patch('/admin/:id',    authenticateAdmin, taskUpload, ctrl.updateTask);
 router.delete('/admin/:id',   authenticateAdmin, ctrl.deleteTask);
+
+// Earnings withdrawals (admin)
+router.get('/admin/withdrawals',        authenticateAdmin, earnings.adminListWithdrawals);
+router.patch('/admin/withdrawals/:id',  authenticateAdmin, earnings.adminUpdateWithdrawal);
+
+// Earning slabs + gem value per service (admin)
+router.get('/admin/earning-config',         authenticateAdmin, earnings.adminGetEarningConfig);
+router.put('/admin/earning-config/:source', authenticateAdmin, earnings.adminSaveEarningConfig);
 
 // Gift history (admin)
 router.get('/admin/gift-history/user/:userId', authenticateAdmin, userGiftHistory);

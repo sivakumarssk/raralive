@@ -1,6 +1,5 @@
 import { Ionicons } from '@expo/vector-icons';
 import { LinearGradient } from 'expo-linear-gradient';
-import * as Location from 'expo-location';
 import { useEffect, useState } from 'react';
 import {
   ActivityIndicator,
@@ -18,6 +17,7 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { BASE_URL, type MyRoom } from '@/services/api';
 import { authStore } from '@/store/auth-store';
+import { LocationPicker, type PickedLocation } from './location-picker';
 
 const TAGS = [
   'Music', 'Gaming', 'Talk', 'Comedy', 'Podcast',
@@ -36,8 +36,6 @@ type FormErrors = {
   location?: string;
   api?: string;
 };
-
-type LocationStatus = 'idle' | 'detecting' | 'done' | 'error';
 
 type CreateRoomSheetProps = {
   visible: boolean;
@@ -60,10 +58,8 @@ export function CreateRoomSheet({ visible, onClose, hasPublic, hasPrivate, onCre
   const [errors, setErrors] = useState<FormErrors>({});
   const [submitting, setSubmitting] = useState(false);
 
-  const [city, setCity] = useState('');
-  const [stateName, setStateName] = useState('');
-  const [district, setDistrict] = useState('');
-  const [locationStatus, setLocationStatus] = useState<LocationStatus>('idle');
+  const [location, setLocation] = useState<PickedLocation | null>(null);
+  const [showLocationPicker, setShowLocationPicker] = useState(false);
 
   // Re-sync default when sheet opens
   useEffect(() => {
@@ -81,45 +77,10 @@ export function CreateRoomSheet({ visible, onClose, hasPublic, hasPrivate, onCre
     const next: FormErrors = {};
     if (!name.trim()) next.name = 'Room name is required.';
     if (visibility === 'public' && !agentCode.trim()) next.agentCode = 'Agent code is required for public rooms.';
+    if (!location) next.location = 'Select your location.';
     if (selectedTags.length === 0) next.tags = 'Select at least one tag.';
     setErrors(next);
     return Object.keys(next).length === 0;
-  };
-
-  const detectLocation = async () => {
-    setLocationStatus('detecting');
-    setErrors(p => ({ ...p, location: undefined }));
-    try {
-      const { status } = await Location.requestForegroundPermissionsAsync();
-      if (status !== 'granted') {
-        setLocationStatus('error');
-        setErrors(p => ({ ...p, location: 'Location permission denied. You can enter it manually.' }));
-        return;
-      }
-
-      const position = await Location.getCurrentPositionAsync({
-        accuracy: Location.Accuracy.Balanced,
-      });
-
-      const [place] = await Location.reverseGeocodeAsync({
-        latitude: position.coords.latitude,
-        longitude: position.coords.longitude,
-      });
-
-      if (!place) {
-        setLocationStatus('error');
-        setErrors(p => ({ ...p, location: 'Could not resolve address. You can enter it manually.' }));
-        return;
-      }
-
-      setCity(place.city || place.subregion || '');
-      setStateName(place.region || '');
-      setDistrict(place.district || place.subregion || '');
-      setLocationStatus('done');
-    } catch {
-      setLocationStatus('error');
-      setErrors(p => ({ ...p, location: 'Failed to detect location. You can enter it manually.' }));
-    }
   };
 
   const handleCreate = async () => {
@@ -137,9 +98,7 @@ export function CreateRoomSheet({ visible, onClose, hasPublic, hasPrivate, onCre
           ...(visibility === 'public' && { agent_code: agentCode.trim() }),
           visibility,
           tags: selectedTags,
-          ...(city.trim() && { city: city.trim() }),
-          ...(stateName.trim() && { state: stateName.trim() }),
-          ...(district.trim() && { district: district.trim() }),
+          ...(location && { city: location.city, state: location.state }),
         }),
       });
       const json = await res.json();
@@ -161,10 +120,8 @@ export function CreateRoomSheet({ visible, onClose, hasPublic, hasPrivate, onCre
     setName('');
     setAgentCode('');
     setSelectedTags([]);
-    setCity('');
-    setStateName('');
-    setDistrict('');
-    setLocationStatus('idle');
+    setLocation(null);
+    setShowLocationPicker(false);
     setErrors({});
     onClose();
   };
@@ -194,7 +151,7 @@ export function CreateRoomSheet({ visible, onClose, hasPublic, hasPrivate, onCre
 
             {/* Room name */}
             <View style={sheet.field}>
-              <Text style={sheet.label}>ROOM NAME</Text>
+              <Text style={sheet.label}>Room name</Text>
               <View style={[sheet.inputBox, errors.name && sheet.inputBoxError]}>
                 <Ionicons name="chatbubbles-outline" size={18} color="#7A0EED" />
                 <TextInput
@@ -218,7 +175,7 @@ export function CreateRoomSheet({ visible, onClose, hasPublic, hasPrivate, onCre
             {/* Visibility — only show if both aren't taken; hide taken option */}
             {!(hasPublic && hasPrivate) && (
               <View style={sheet.field}>
-                <Text style={sheet.label}>VISIBILITY</Text>
+                <Text style={sheet.label}>Visibility</Text>
                 <View style={sheet.radioRow}>
                   {!hasPublic && (
                     <TouchableOpacity
@@ -259,9 +216,9 @@ export function CreateRoomSheet({ visible, onClose, hasPublic, hasPrivate, onCre
             {visibility === 'public' && (
               <View style={sheet.field}>
                 <View style={sheet.labelRow}>
-                  <Text style={sheet.label}>AGENT CODE</Text>
+                  <Text style={sheet.label}>Agent code</Text>
                   <View style={sheet.requiredBadge}>
-                    <Text style={sheet.requiredText}>REQUIRED</Text>
+                    <Text style={sheet.requiredText}>Required</Text>
                   </View>
                 </View>
                 <View style={[sheet.inputBox, errors.agentCode && sheet.inputBoxError]}>
@@ -284,78 +241,25 @@ export function CreateRoomSheet({ visible, onClose, hasPublic, hasPrivate, onCre
               </View>
             )}
 
-            {/* Location — auto-detected city / state / district */}
+            {/* Location — state → city picker */}
             <View style={sheet.field}>
-              <View style={sheet.labelRow}>
-                <Text style={sheet.label}>LOCATION</Text>
-              </View>
-
+              <Text style={sheet.label}>Location</Text>
               <TouchableOpacity
-                onPress={detectLocation}
+                onPress={() => setShowLocationPicker(true)}
                 activeOpacity={0.85}
-                disabled={locationStatus === 'detecting'}
-                style={sheet.detectBtn}>
-                {locationStatus === 'detecting' ? (
-                  <ActivityIndicator size="small" color="#7A0EED" />
-                ) : (
-                  <Ionicons name="locate-outline" size={18} color="#7A0EED" />
-                )}
-                <Text style={sheet.detectBtnText}>
-                  {locationStatus === 'detecting'
-                    ? 'Detecting your location…'
-                    : locationStatus === 'done'
-                    ? 'Detected — tap to re-detect'
-                    : 'Auto-detect my location'}
+                style={[sheet.locationSelect, location && sheet.locationSelectFilled, errors.location && sheet.inputBoxError]}>
+                <Ionicons name="location-outline" size={18} color="#7A0EED" />
+                <Text style={[sheet.locationText, !location && sheet.locationPlaceholder]} numberOfLines={1}>
+                  {location ? `${location.city}, ${location.state}` : 'Select state & city'}
                 </Text>
+                <Ionicons name="chevron-down" size={16} color="#ABADB2" />
               </TouchableOpacity>
-
               {errors.location ? <Text style={sheet.errorText}>{errors.location}</Text> : null}
-
-              {(locationStatus === 'done' || locationStatus === 'error' || city || stateName || district) && (
-                <View style={sheet.locationFields}>
-                  <View style={[sheet.inputBox, sheet.locationInputBox]}>
-                    <Ionicons name="business-outline" size={16} color="#7A0EED" />
-                    <TextInput
-                      style={sheet.input}
-                      placeholder="City"
-                      placeholderTextColor="#ABADB2"
-                      value={city}
-                      onChangeText={setCity}
-                      returnKeyType="done"
-                      underlineColorAndroid="transparent"
-                    />
-                  </View>
-                  <View style={[sheet.inputBox, sheet.locationInputBox]}>
-                    <Ionicons name="map-outline" size={16} color="#7A0EED" />
-                    <TextInput
-                      style={sheet.input}
-                      placeholder="District"
-                      placeholderTextColor="#ABADB2"
-                      value={district}
-                      onChangeText={setDistrict}
-                      returnKeyType="done"
-                      underlineColorAndroid="transparent"
-                    />
-                  </View>
-                  <View style={[sheet.inputBox, sheet.locationInputBox]}>
-                    <Ionicons name="flag-outline" size={16} color="#7A0EED" />
-                    <TextInput
-                      style={sheet.input}
-                      placeholder="State"
-                      placeholderTextColor="#ABADB2"
-                      value={stateName}
-                      onChangeText={setStateName}
-                      returnKeyType="done"
-                      underlineColorAndroid="transparent"
-                    />
-                  </View>
-                </View>
-              )}
             </View>
 
             {/* Tags */}
             <View style={sheet.field}>
-              <Text style={sheet.label}>SELECT TAGS</Text>
+              <Text style={sheet.label}>Select tags</Text>
               <Text style={sheet.hint}>Pick tags that describe your room.</Text>
               <View style={sheet.tagsWrap}>
                 {TAGS.map(tag => {
@@ -399,6 +303,18 @@ export function CreateRoomSheet({ visible, onClose, hasPublic, hasPrivate, onCre
 
         </View>
       </KeyboardAvoidingView>
+
+      {showLocationPicker && (
+        <LocationPicker
+          initial={location}
+          onClose={() => setShowLocationPicker(false)}
+          onConfirm={picked => {
+            setLocation(picked);
+            setShowLocationPicker(false);
+            if (errors.location) setErrors(p => ({ ...p, location: undefined }));
+          }}
+        />
+      )}
     </Modal>
   );
 }
@@ -426,7 +342,7 @@ const sheet = StyleSheet.create({
   scrollContent: { gap: 20, paddingBottom: 12 },
   field: { gap: 8 },
   labelRow: { flexDirection: 'row', alignItems: 'center', gap: 8 },
-  label: { fontSize: 11, fontWeight: '700', color: '#7A0EED', letterSpacing: 1.2 },
+  label: { fontSize: 12, fontWeight: '700', color: '#7A0EED', letterSpacing: 0.2 },
   requiredBadge: { backgroundColor: '#FFF0F1', paddingHorizontal: 7, paddingVertical: 2, borderRadius: 5 },
   requiredText: { fontSize: 9, fontWeight: '700', color: '#E14C57', letterSpacing: 0.5 },
   inputBox: {
@@ -459,14 +375,15 @@ const sheet = StyleSheet.create({
   radioTitle: { fontSize: 13, fontWeight: '600', color: '#60626A' },
   radioTitleActive: { color: '#7A0EED', fontWeight: '700' },
   radioSub: { fontSize: 11, color: '#ABADB2' },
-  detectBtn: {
-    flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8,
-    height: 46, borderRadius: 12, backgroundColor: '#F4EEFF',
-    borderWidth: 1, borderColor: '#E0CFFF',
+  // Same box as the text inputs above it
+  locationSelect: {
+    height: 50, borderRadius: 12, backgroundColor: '#F7F5FF',
+    borderWidth: 1, borderColor: 'transparent',
+    flexDirection: 'row', alignItems: 'center', paddingHorizontal: 14, gap: 10,
   },
-  detectBtnText: { fontSize: 13, fontWeight: '600', color: '#7A0EED' },
-  locationFields: { gap: 10, marginTop: 4 },
-  locationInputBox: { height: 46 },
+  locationSelectFilled: { borderColor: '#7A0EED', backgroundColor: '#F4EEFF' },
+  locationText: { flex: 1, fontSize: 14, fontWeight: '500', color: '#1C1E22' },
+  locationPlaceholder: { color: '#ABADB2' },
   tagsWrap: { flexDirection: 'row', flexWrap: 'wrap', gap: 8, marginTop: 4 },
   tag: {
     flexDirection: 'row', alignItems: 'center',

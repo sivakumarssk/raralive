@@ -14,29 +14,22 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 
 import { GradientButton } from '@/components/ui/gradient-button';
 import { ScreenBackground } from '@/components/ui/screen-background';
-import { apiCompleteProfile, apiVerifyOtp } from '@/services/api';
+import { apiCompleteProfile, apiResendOtp, apiSendLoginOtp, apiVerifyLoginOtp, apiVerifyOtp } from '@/services/api';
+import { armSmsOtp, disarmSmsOtp, useSmsOtp } from '@/services/sms-otp';
 import { authStore } from '@/store/auth-store';
 import { friendZoneSocketStore } from '@/store/friend-zone-socket-store';
 
-function generateUsername(fullName: string): string {
-  const base = fullName
-    .toLowerCase()
-    .replace(/[^a-z0-9]/g, '_')
-    .replace(/_+/g, '_')
-    .replace(/^_|_$/g, '')
-    .slice(0, 14);
-  const suffix = String(Math.floor(1000 + Math.random() * 9000));
-  return `${base || 'user'}_${suffix}`;
-}
 
-const DEV_BYPASS = '1234';
+const OTP_LENGTH = 4;
 const RESEND_SECONDS = 59;
 
 type OtpVerifyScreenProps = {
+  /** Set for OTP login; without it this is the registration step. */
+  loginPhone?: string;
   onVerifyContinue?: () => void;
 };
 
-export function OtpVerifyScreen({ onVerifyContinue }: OtpVerifyScreenProps) {
+export function OtpVerifyScreen({ loginPhone, onVerifyContinue }: OtpVerifyScreenProps) {
   const [otp, setOtp] = useState(['', '', '', '']);
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(false);
@@ -58,7 +51,17 @@ export function OtpVerifyScreen({ onVerifyContinue }: OtpVerifyScreenProps) {
   }, [resendTimer]);
 
   const handleDigitChange = (index: number, value: string) => {
-    const digit = value.replace(/\D/g, '').slice(-1);
+    const digits = value.replace(/\D/g, '');
+
+    // Whole code pasted / autofilled from the SMS into one box
+    if (digits.length === OTP_LENGTH) {
+      setOtp(digits.split(''));
+      if (error) setError('');
+      inputRefs.current[OTP_LENGTH - 1]?.focus();
+      return;
+    }
+
+    const digit = digits.slice(-1);
 
     setOtp((prev) => {
       const next = [...prev];
@@ -86,10 +89,45 @@ export function OtpVerifyScreen({ onVerifyContinue }: OtpVerifyScreenProps) {
     }
   };
 
-  const handleVerify = async (codeOverride?: string) => {
-    const code = codeOverride ?? otp.join('');
-    if (code.length !== 4) {
+  // Android: once the user Allows the OTP SMS, it fills the boxes and submits
+  useSmsOtp((smsCode) => {
+    setOtp(smsCode.split(''));
+    setError('');
+    handleVerify(smsCode);
+  });
+
+  const handleVerify = async (autoCode?: string) => {
+    const code = autoCode ?? otp.join('');
+    if (code.length !== OTP_LENGTH) {
       setError('Enter the 4-digit verification code.');
+      return;
+    }
+
+    if (loginPhone) {
+      setLoading(true);
+      setError('');
+      const result = await apiVerifyLoginOtp(loginPhone, code);
+      setLoading(false);
+      if (!result.ok) {
+        setError(result.message);
+        return;
+      }
+      const u = result.data.user;
+      authStore.setToken(result.data.token);
+      authStore.setUser({
+        id: u.id,
+        phone: u.phone,
+        fullName: u.full_name,
+        username: u.username,
+        avatarUrl: u.avatar_url,
+        isPhoneVerified: u.is_phone_verified,
+        gender: u.gender ?? null,
+        preferredLanguage: u.preferred_language ?? null,
+        loginMethod: 'phone',
+      });
+      friendZoneSocketStore.connect();
+      disarmSmsOtp();
+      onVerifyContinue?.();
       return;
     }
 
@@ -116,14 +154,19 @@ export function OtpVerifyScreen({ onVerifyContinue }: OtpVerifyScreenProps) {
       friendZoneSocketStore.connect();
     }
     const userId = authStore.getUserId() ?? '';
-    const pendingName = authStore.getPendingName();
+    const pendingUsername = authStore.getPendingUsername();
+    const pendingGender = authStore.getPendingGender();
 
-    if (pendingName && result.data.token) {
-      // Auto-create profile with name + generated username; step 2 lets user update it
-      const autoUsername = generateUsername(pendingName);
+    if (pendingUsername && result.data.token) {
+      // Save the step-1 details (username, gender, date of birth) to the new
+      // account; step 2 adds the full name, photo and bio.
       try {
         const profileResult = await apiCompleteProfile(
-          { fullName: pendingName, username: autoUsername },
+          {
+            username: pendingUsername,
+            gender: pendingGender ?? undefined,
+            dateOfBirth: authStore.getPendingDob() ?? undefined,
+          },
           result.data.token,
         );
         if (profileResult.ok) {
@@ -131,34 +174,48 @@ export function OtpVerifyScreen({ onVerifyContinue }: OtpVerifyScreenProps) {
           authStore.setUser({
             id: d?.id ?? userId,
             phone,
-            fullName: d?.full_name ?? pendingName,
-            username: d?.username ?? autoUsername,
+            fullName: d?.full_name ?? null,
+            username: d?.username ?? pendingUsername,
             avatarUrl: d?.avatar_url ?? null,
             isPhoneVerified: true,
+            gender: d?.gender ?? pendingGender,
+            preferredLanguage: d?.preferred_language ?? null,
           });
         } else {
-          authStore.setUser({ id: userId, phone, fullName: pendingName, username: null, avatarUrl: null, isPhoneVerified: true });
+          authStore.setUser({ id: userId, phone, fullName: null, username: null, avatarUrl: null, isPhoneVerified: true, gender: pendingGender, preferredLanguage: null });
         }
       } catch {
-        authStore.setUser({ id: userId, phone, fullName: pendingName, username: null, avatarUrl: null, isPhoneVerified: true });
+        authStore.setUser({ id: userId, phone, fullName: null, username: null, avatarUrl: null, isPhoneVerified: true, gender: pendingGender, preferredLanguage: null });
       }
     } else if (phone && userId) {
-      authStore.setUser({ id: userId, phone, fullName: null, username: null, avatarUrl: null, isPhoneVerified: true });
+      authStore.setUser({ id: userId, phone, fullName: null, username: null, avatarUrl: null, isPhoneVerified: true, preferredLanguage: null });
     }
 
+    disarmSmsOtp();
     onVerifyContinue?.();
   };
 
-  const handleResend = () => {
+  const handleResend = async () => {
     if (resendTimer > 0) return;
+    const phone = loginPhone ?? authStore.getPhone();
+    if (!phone) {
+      setError('Session expired. Please register again.');
+      return;
+    }
     setResendTimer(RESEND_SECONDS);
     setOtp(['', '', '', '']);
     setError('');
     inputRefs.current[0]?.focus();
-    // TODO: call resend OTP API
+    armSmsOtp();
+    const result = await (loginPhone ? apiSendLoginOtp(phone) : apiResendOtp(phone));
+    if (!result.ok) {
+      disarmSmsOtp();
+      setError(result.message);
+      setResendTimer(0);
+    }
   };
 
-  const phone = authStore.getPhone() ?? '+91 ••••••••••';
+  const phone = loginPhone ?? authStore.getPhone() ?? '+91 ••••••••••';
   const resendLabel = resendTimer > 0
     ? `Resend in 0:${String(resendTimer).padStart(2, '0')}`
     : 'Resend code';
@@ -190,7 +247,9 @@ export function OtpVerifyScreen({ onVerifyContinue }: OtpVerifyScreenProps) {
                   error ? styles.codeBoxError : null,
                 ]}
                 keyboardType="number-pad"
-                maxLength={1}
+                maxLength={OTP_LENGTH}
+                textContentType={slot === 0 ? 'oneTimeCode' : 'none'}
+                autoComplete={slot === 0 ? 'sms-otp' : 'off'}
                 value={otp[slot]}
                 onChangeText={(value) => handleDigitChange(slot, value)}
                 onKeyPress={({ nativeEvent }) => handleKeyPress(slot, nativeEvent.key)}
@@ -222,19 +281,6 @@ export function OtpVerifyScreen({ onVerifyContinue }: OtpVerifyScreenProps) {
             onPress={() => handleVerify()}
             disabled={loading}
           />
-
-          {/* Dev bypass button */}
-          {__DEV__ && (
-            <TouchableOpacity
-              onPress={() => {
-                setOtp(['1', '2', '3', '4']);
-                handleVerify(DEV_BYPASS);
-              }}
-              style={styles.devBypass}
-              activeOpacity={0.7}>
-              <Text style={styles.devBypassText}>DEV: Use 1234</Text>
-            </TouchableOpacity>
-          )}
         </View>
       </ScrollView>
     </SafeAreaView>
@@ -265,9 +311,4 @@ const styles = StyleSheet.create({
   resend: { marginTop: 20, fontSize: 13, lineHeight: 18, fontWeight: '700', color: '#ABADB2' },
   resendActive: { color: '#7A0EED' },
   ctaButton: { width: '92%', marginTop: 32, alignSelf: 'center' },
-  devBypass: {
-    marginTop: 16, paddingHorizontal: 20, paddingVertical: 8,
-    borderRadius: 8, backgroundColor: '#FFF3CD', borderWidth: 1, borderColor: '#FFD54F',
-  },
-  devBypassText: { fontSize: 12, fontWeight: '600', color: '#E65100' },
 });

@@ -1,0 +1,14 @@
+1<?xml version="1.0" encoding="utf-8"?>
+2<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+3    package="expo.modules.smsconsent" >
+4
+5    <uses-sdk android:minSdkVersion="24" />
+6    <!-- The consent screen belongs to Google Play services; lets us confirm that before opening it -->
+7    <queries>
+7-->C:\Users\sivak\Desktop\sowsi\projects\RaraLive\app\modules\sms-consent\android\src\main\AndroidManifest.xml:3:3-5:13
+8        <package android:name="com.google.android.gms" />
+8-->C:\Users\sivak\Desktop\sowsi\projects\RaraLive\app\modules\sms-consent\android\src\main\AndroidManifest.xml:4:5-54
+8-->C:\Users\sivak\Desktop\sowsi\projects\RaraLive\app\modules\sms-consent\android\src\main\AndroidManifest.xml:4:14-51
+9    </queries>
+10
+11</manifest>

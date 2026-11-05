@@ -3,6 +3,14 @@ import { api } from '../../api/client';
 
 const MEDIA_BASE = import.meta.env.VITE_API_URL ?? 'http://192.168.0.3:5000';
 
+type Placement = 'home' | 'chatroom' | 'live';
+
+const PLACEMENTS: { key: Placement; label: string; hint: string }[] = [
+  { key: 'home', label: 'Home', hint: 'Top of the Home feed, above Trending / Following' },
+  { key: 'chatroom', label: 'Chat Rooms', hint: 'Top of the Chat Rooms tab' },
+  { key: 'live', label: 'Live', hint: 'Top of the Live tab, above Go Live' },
+];
+
 type Banner = {
   id: string;
   title: string | null;
@@ -10,6 +18,7 @@ type Banner = {
   link_url: string | null;
   sort_order: number;
   is_active: boolean;
+  placement?: Placement;
   created_at: string;
 };
 
@@ -18,6 +27,7 @@ function resolveImg(url: string) {
 }
 
 export function BannersPage() {
+  const [placement, setPlacement] = useState<Placement>('home');
   const [banners, setBanners] = useState<Banner[]>([]);
   const [loading, setLoading] = useState(true);
   const [showForm, setShowForm] = useState(false);
@@ -32,12 +42,14 @@ export function BannersPage() {
 
   const load = () => {
     setLoading(true);
-    api.get<Banner[]>('/banners/admin')
+    api.get<Banner[]>(`/banners/admin?placement=${placement}`)
       .then(r => { if (r.ok) setBanners(r.data); })
       .finally(() => setLoading(false));
   };
 
-  useEffect(() => { load(); }, []);
+  useEffect(() => { load(); setShowForm(false); setError(''); }, [placement]);
+
+  const placementMeta = PLACEMENTS.find(p => p.key === placement)!;
 
   const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const f = e.target.files?.[0] ?? null;
@@ -61,6 +73,7 @@ export function BannersPage() {
       if (title) form.append('title', title);
       if (linkUrl) form.append('link_url', linkUrl);
       form.append('sort_order', sortOrder);
+      form.append('placement', placement);
 
       const r = await api.upload<Banner>('/banners/admin', form);
       if (r.ok) {
@@ -95,7 +108,7 @@ export function BannersPage() {
       <div className="flex items-center justify-between">
         <div>
           <h1 className="text-2xl font-bold text-gray-900">Banners</h1>
-          <p className="text-sm text-gray-500 mt-1">Manage carousel banners shown in the app</p>
+          <p className="text-sm text-gray-500 mt-1">Carousel banners shown in the app — one set per screen</p>
         </div>
         <button
           onClick={() => setShowForm(!showForm)}
@@ -104,10 +117,25 @@ export function BannersPage() {
         </button>
       </div>
 
+      {/* Placement tabs */}
+      <div className="flex flex-wrap items-center gap-2">
+        {PLACEMENTS.map(p => (
+          <button
+            key={p.key}
+            onClick={() => setPlacement(p.key)}
+            className={`px-4 py-2 rounded-lg text-sm font-semibold transition-colors ${
+              placement === p.key ? 'bg-purple-600 text-white' : 'bg-white text-gray-600 border border-gray-200 hover:bg-gray-50'
+            }`}>
+            {p.label}
+          </button>
+        ))}
+        <span className="text-xs text-gray-400 ml-2">{placementMeta.hint}</span>
+      </div>
+
       {/* Create form */}
       {showForm && (
         <div className="bg-white rounded-2xl border border-gray-100 shadow-sm p-6 space-y-4">
-          <h3 className="font-bold text-gray-800">New Banner</h3>
+          <h3 className="font-bold text-gray-800">New {placementMeta.label} Banner</h3>
 
           {/* Image upload */}
           <div>
@@ -145,7 +173,7 @@ export function BannersPage() {
               <input
                 value={linkUrl}
                 onChange={e => setLinkUrl(e.target.value)}
-                placeholder="https://..."
+                placeholder="https://… or app screen e.g. /create"
                 className="w-full px-3 py-2 border border-gray-200 rounded-lg text-sm focus:ring-2 focus:ring-purple-500 focus:border-transparent outline-none"
               />
             </div>
@@ -179,7 +207,7 @@ export function BannersPage() {
           <svg className="w-12 h-12 mx-auto text-gray-200 mb-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
             <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16l4.586-4.586a2 2 0 012.828 0L16 16m-2-2l1.586-1.586a2 2 0 012.828 0L20 14m-6-6h.01M6 20h12a2 2 0 002-2V6a2 2 0 00-2-2H6a2 2 0 00-2 2v12a2 2 0 002 2z" />
           </svg>
-          <p className="text-gray-400 font-medium">No banners yet</p>
+          <p className="text-gray-400 font-medium">No {placementMeta.label} banners yet</p>
           <p className="text-xs text-gray-300 mt-1">Click "Add Banner" to create one</p>
         </div>
       ) : (

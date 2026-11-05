@@ -37,9 +37,11 @@ export type LiveBroadcaster = {
 export type LiveFilter = 'popular' | 'new' | 'following';
 
 type LiveScreenProps = {
-  /** Admin-uploaded promo banners, shown as a carousel above the Go Live header — same source as the Home tab. */
+  /** Admin-uploaded Live banners (Admin → Banners → Live), shown above the Go Live header. */
   banners?: Banner[];
   broadcasters: LiveBroadcaster[];
+  /** Only chatroom owners can go live — hides the GO LIVE button when false. */
+  canGoLive?: boolean;
   onGoLive: () => void;
   onBroadcasterPress: (b: LiveBroadcaster) => void;
   onRefresh?: () => void;
@@ -121,7 +123,7 @@ function BroadcasterCard({ item, onPress }: {
 
       <View style={card.liveBadge}>
         <View style={card.liveDot} />
-        <Text style={card.liveText}>LIVE</Text>
+        <Text style={card.liveText}>Live</Text>
       </View>
 
       {typeof item.viewerCount === 'number' && (
@@ -155,13 +157,13 @@ function BroadcasterCard({ item, onPress }: {
 // ── Main Screen ───────────────────────────────────────────────────────────────
 
 export function LiveScreen({
-  banners = [], broadcasters, onGoLive, onBroadcasterPress, onRefresh, refreshing = false, myLiveBroadcast, onResumeMyLive,
+  banners = [], broadcasters, canGoLive = true, onGoLive, onBroadcasterPress, onRefresh, refreshing = false, myLiveBroadcast, onResumeMyLive,
 }: LiveScreenProps) {
   const [activeFilter, setActiveFilter] = useState<LiveFilter>('popular');
 
   return (
     <View style={s.container}>
-      {/* Banner carousel — above the Go Live header, same admin-uploaded banners as Home */}
+      {/* Banner carousel — above the Go Live header (Admin → Banners → Live) */}
       <BannerCarousel banners={banners} />
 
       {/* Header row */}
@@ -170,18 +172,20 @@ export function LiveScreen({
           <Text style={s.title}>Live Now</Text>
           <Text style={s.subtitle}>Broadcasters</Text>
         </View>
-        <View style={s.headerActions}>
-          <TouchableOpacity onPress={onGoLive} activeOpacity={0.88} style={s.goLiveBtn}>
-            <LinearGradient
-              colors={['#7A0EED', '#B50357']}
-              start={{ x: 0, y: 0.5 }}
-              end={{ x: 1, y: 0.5 }}
-              style={s.goLiveGrad}>
-              <Ionicons name="videocam" size={13} color="#FFFFFF" />
-              <Text style={s.goLiveText}>GO LIVE</Text>
-            </LinearGradient>
-          </TouchableOpacity>
-        </View>
+        {canGoLive && (
+          <View style={s.headerActions}>
+            <TouchableOpacity onPress={onGoLive} activeOpacity={0.88} style={s.goLiveBtn}>
+              <LinearGradient
+                colors={['#7A0EED', '#B50357']}
+                start={{ x: 0, y: 0.5 }}
+                end={{ x: 1, y: 0.5 }}
+                style={s.goLiveGrad}>
+                <Ionicons name="videocam" size={13} color="#FFFFFF" />
+                <Text style={s.goLiveText}>Go live</Text>
+              </LinearGradient>
+            </TouchableOpacity>
+          </View>
+        )}
       </View>
 
       {myLiveBroadcast && (
@@ -204,7 +208,7 @@ export function LiveScreen({
             </View>
             <View style={s.myLiveBadge}>
               <View style={s.liveDotSmall} />
-              <Text style={s.myLiveBadgeText}>LIVE</Text>
+              <Text style={s.myLiveBadgeText}>Live</Text>
             </View>
             <Ionicons name="chevron-forward" size={16} color="rgba(255,255,255,0.85)" />
           </LinearGradient>

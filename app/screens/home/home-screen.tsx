@@ -1,4 +1,5 @@
 import { Ionicons } from '@expo/vector-icons';
+import { cacheDirectory, downloadAsync } from 'expo-file-system/legacy';
 import { LinearGradient } from 'expo-linear-gradient';
 import * as MediaLibrary from 'expo-media-library';
 import { useVideoPlayer, VideoView } from 'expo-video';
@@ -12,9 +13,11 @@ import {
   Dimensions,
   FlatList,
   Image,
-  KeyboardAvoidingView,
+  Keyboard,
   Modal,
   Platform,
+  Pressable,
+  ScrollView,
   StyleSheet,
   Text,
   TextInput,
@@ -23,8 +26,11 @@ import {
 } from 'react-native';
 import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
 import { AppScreenHeader } from '@/components/ui/app-screen-header';
-import { BASE_URL, MEDIA_BASE } from '@/services/api';
+import { apiPostTags, apiTrendingPostTags, BASE_URL, MEDIA_BASE, type PostTag } from '@/services/api';
 import { authStore } from '@/store/auth-store';
+import { earningsConfigStore } from '@/store/earnings-config-store';
+import { BannerCarousel, fetchBanners, type Banner } from '@/screens/chat-rooms/components/banner-carousel';
+import { avatarSource } from '@/utils/default-avatar';
 
 const COIN_IMG = require('@/assets/tabs/coin.png') as number;
 const { width: SCREEN_W } = Dimensions.get('window');
@@ -50,6 +56,8 @@ type FeedPost = {
   username: string | null;
   avatar_url: string | null;
   media: PostMedia[];
+  /** Admin tags on the post (sub tags carry their tab's id in parent_id). */
+  tag_list?: { id: string; name: string; parent_id: string | null }[];
 };
 
 type Comment = {
@@ -91,8 +99,14 @@ function formatCount(n: number) {
   return n >= 1000 ? `${(n / 1000).toFixed(1)}k` : String(n);
 }
 
-const TABS = ['Trending', 'Following'] as const;
-type HomeTab = typeof TABS[number];
+// Trending / Video / Following are fixed; admin Home tabs (Admin → Post Tags)
+// follow them. `key` is what the feed API filters on (a tag id for admin tabs).
+type HomeTab = { key: string; label: string };
+const DEFAULT_TABS: HomeTab[] = [
+  { key: 'trending', label: 'Trending' },
+  { key: 'video', label: 'Video' },
+  { key: 'following', label: 'Following' },
+];
 
 // ── Header right ──────────────────────────────────────────────────────────────
 
@@ -102,7 +116,6 @@ function HeaderRight() {
   const avatarUrl = user?.avatarUrl
     ? (user.avatarUrl.startsWith('http') ? user.avatarUrl : `${MEDIA_BASE}/${user.avatarUrl.replace(/^\//, '')}`)
     : null;
-  const initials = (user?.fullName || user?.username || '?')[0]?.toUpperCase() ?? '?';
 
   const fetchUnread = useCallback(async () => {
     try {
@@ -126,12 +139,13 @@ function HeaderRight() {
 
   return (
     <View style={hdr.row}>
-      <TouchableOpacity style={hdr.iconBtn} activeOpacity={0.75} onPress={() => router.push('/wallet' as any)}>
+      <TouchableOpacity style={hdr.iconBtn} activeOpacity={0.75} hitSlop={8} onPress={() => router.push('/wallet' as any)}>
         <Image source={COIN_IMG} style={hdr.coinImg} resizeMode="contain" />
       </TouchableOpacity>
       <TouchableOpacity
         style={hdr.iconBtn}
         activeOpacity={0.75}
+        hitSlop={8}
         onPress={() => router.push('/notifications' as any)}>
         <Ionicons name="notifications-outline" size={24} color="#1C1E22" />
         {unreadCount > 0 && (
@@ -144,13 +158,7 @@ function HeaderRight() {
         style={hdr.avatarBtn}
         activeOpacity={0.85}
         onPress={() => router.push('/(tabs)/profile' as any)}>
-        {avatarUrl ? (
-          <Image source={{ uri: avatarUrl }} style={hdr.avatar} />
-        ) : (
-          <View style={hdr.avatarFallback}>
-            <Text style={hdr.avatarInitial}>{initials}</Text>
-          </View>
-        )}
+        <Image source={avatarSource(avatarUrl, user?.gender)} style={hdr.avatar} />
       </TouchableOpacity>
     </View>
   );
@@ -158,24 +166,56 @@ function HeaderRight() {
 
 // ── Tab bar ───────────────────────────────────────────────────────────────────
 
-function HomeTabs({ active, onChange }: { active: HomeTab; onChange: (t: HomeTab) => void }) {
+function HomeTabs({ items, active, onChange }: { items: HomeTab[]; active: string; onChange: (key: string) => void }) {
   return (
     <View style={tabs.container}>
-      {TABS.map((tab) => {
-        const isActive = tab === active;
-        return (
-          <TouchableOpacity key={tab} onPress={() => onChange(tab)} activeOpacity={0.8} style={tabs.tab}>
-            <Text style={[tabs.label, isActive && tabs.labelActive]}>{tab}</Text>
-            {isActive && (
-              <LinearGradient
-                colors={['#7A0EED', '#B50357']}
-                start={{ x: 0, y: 0 }} end={{ x: 1, y: 0 }}
-                style={tabs.underline}
-              />
-            )}
-          </TouchableOpacity>
-        );
-      })}
+      <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={tabs.scroll}>
+        {items.map((tab) => {
+          const isActive = tab.key === active;
+          return (
+            <TouchableOpacity key={tab.key} onPress={() => onChange(tab.key)} activeOpacity={0.8} style={tabs.tab}>
+              <Text style={[tabs.label, isActive && tabs.labelActive]} numberOfLines={1}>{tab.label}</Text>
+              {isActive && (
+                <LinearGradient
+                  colors={['#7A0EED', '#B50357']}
+                  start={{ x: 0, y: 0 }} end={{ x: 1, y: 0 }}
+                  style={tabs.underline}
+                />
+              )}
+            </TouchableOpacity>
+          );
+        })}
+      </ScrollView>
+    </View>
+  );
+}
+
+// "Trending Now" / sub-tag chip box shown at the top of the feed (scrolls with it)
+function TagChips({ title, chips, selected, onSelect }: {
+  title: string;
+  chips: { id: string; name: string }[];
+  selected: string | null;
+  onSelect: (id: string | null) => void;
+}) {
+  if (!chips.length) return null;
+  return (
+    <View style={chipBox.wrap}>
+      <Text style={chipBox.title}>{title}</Text>
+      <View style={chipBox.row}>
+        {chips.map(c => {
+          const active = c.id === selected;
+          return (
+            <TouchableOpacity
+              key={c.id}
+              activeOpacity={0.8}
+              onPress={() => onSelect(active ? null : c.id)}
+              style={[chipBox.chip, active && chipBox.chipActive]}>
+              <Text style={[chipBox.chipText, active && chipBox.chipTextActive]}>{c.name}</Text>
+              {active && <Ionicons name="close" size={13} color="#7A0EED" />}
+            </TouchableOpacity>
+          );
+        })}
+      </View>
     </View>
   );
 }
@@ -187,13 +227,7 @@ function Avatar({ initial, color, size = 42, uri }: {
 }) {
   return (
     <View style={{ width: size, height: size }}>
-      {uri ? (
-        <Image source={{ uri }} style={{ width: size, height: size, borderRadius: size / 2 }} />
-      ) : (
-        <View style={[av.circle, { width: size, height: size, borderRadius: size / 2, backgroundColor: color }]}>
-          <Text style={[av.initial, { fontSize: size * 0.38 }]}>{initial}</Text>
-        </View>
-      )}
+      <Image source={avatarSource(uri)} style={{ width: size, height: size, borderRadius: size / 2 }} />
     </View>
   );
 }
@@ -232,7 +266,8 @@ type CommentsSheetProps = {
 function CommentsSheet({ visible, postId, allowComments, onClose, onCountChange }: CommentsSheetProps) {
   const insets = useSafeAreaInsets();
   const { height: SCREEN_H } = Dimensions.get('window');
-  const SHEET_H = SCREEN_H * 0.72;
+  // Half the screen; the comment list scrolls inside it
+  const SHEET_H = SCREEN_H * 0.5;
   const slideY = useRef(new Animated.Value(SHEET_H)).current;
 
   const [comments, setComments] = useState<Comment[]>([]);
@@ -241,6 +276,40 @@ function CommentsSheet({ visible, postId, allowComments, onClose, onCountChange 
   const [posting, setPosting] = useState(false);
   const countRef = useRef(0);
   const loadedPostId = useRef<string | null>(null);
+
+  // Keyboard handling: lift the whole sheet by however much the keyboard
+  // actually overlaps the modal root. The overlap is re-measured whenever the
+  // root's layout changes too, so if Android resizes the modal window for the
+  // keyboard (after keyboardDidShow) the lift drops back to 0 instead of being
+  // applied twice and pushing the sheet up past the status bar.
+  const rootRef = useRef<View>(null);
+  const kbTopRef = useRef<number | null>(null);
+  const [kbLift, setKbLift] = useState(0);
+  const [rootH, setRootH] = useState(SCREEN_H);
+
+  const measureLift = useCallback(() => {
+    const kbTop = kbTopRef.current;
+    if (kbTop == null) { setKbLift(0); return; }
+    rootRef.current?.measureInWindow((_x, y, _w, h) => {
+      setKbLift(Math.max(0, Math.round(y + h - kbTop)));
+    });
+  }, []);
+
+  useEffect(() => {
+    if (!visible) { kbTopRef.current = null; setKbLift(0); return; }
+    const show = Keyboard.addListener(
+      Platform.OS === 'ios' ? 'keyboardWillShow' : 'keyboardDidShow',
+      e => { kbTopRef.current = e.endCoordinates.screenY; measureLift(); },
+    );
+    const hide = Keyboard.addListener(
+      Platform.OS === 'ios' ? 'keyboardWillHide' : 'keyboardDidHide',
+      () => { kbTopRef.current = null; setKbLift(0); },
+    );
+    return () => { show.remove(); hide.remove(); };
+  }, [visible, measureLift]);
+
+  // Never taller than the space between the status bar and the keyboard
+  const sheetH = Math.max(160, Math.min(SHEET_H, rootH - kbLift - insets.top - 12));
 
   // Animate in when visible, reset + load when postId changes
   useEffect(() => {
@@ -309,57 +378,63 @@ function CommentsSheet({ visible, postId, allowComments, onClose, onCountChange 
 
   return (
     <Modal visible={visible} transparent animationType="none" onRequestClose={dismiss} statusBarTranslucent>
-      <TouchableOpacity style={cmt.backdrop} activeOpacity={1} onPress={dismiss} />
-      <Animated.View style={[cmt.sheet, { height: SHEET_H, paddingBottom: insets.bottom + 4, transform: [{ translateY: slideY }] }]}>
-        {/* Drag handle */}
-        <View style={cmt.handleWrap}>
-          <View style={cmt.handle} />
-        </View>
-
-        {/* Header row */}
-        <View style={cmt.headerRow}>
-          <Text style={cmt.title}>Comments</Text>
-          <TouchableOpacity onPress={dismiss} hitSlop={10}>
-            <Ionicons name="close" size={22} color="#60626A" />
-          </TouchableOpacity>
-        </View>
-
-        {/* Comment list */}
-        {loading ? (
-          <ActivityIndicator color="#7A0EED" style={{ marginVertical: 40 }} />
-        ) : comments.length === 0 ? (
-          <View style={cmt.empty}>
-            <Ionicons name="chatbubbles-outline" size={48} color="#D0C8F0" />
-            <Text style={cmt.emptyText}>No comments yet. Be the first!</Text>
+      <View ref={rootRef} style={{ flex: 1 }} onLayout={e => { setRootH(e.nativeEvent.layout.height); measureLift(); }}>
+        <TouchableOpacity style={cmt.backdrop} activeOpacity={1} onPress={dismiss} />
+        <Animated.View style={[cmt.sheet, {
+          height: sheetH,
+          bottom: kbLift,
+          // the home-indicator inset is under the keyboard while it's open
+          paddingBottom: kbLift > 0 ? 4 : insets.bottom + 4,
+          transform: [{ translateY: slideY }],
+        }]}>
+          {/* Drag handle */}
+          <View style={cmt.handleWrap}>
+            <View style={cmt.handle} />
           </View>
-        ) : (
-          <FlatList
-            data={comments}
-            keyExtractor={c => c.id}
-            showsVerticalScrollIndicator={false}
-            style={{ flex: 1 }}
-            contentContainerStyle={{ paddingHorizontal: 16, paddingTop: 4, paddingBottom: 12 }}
-            renderItem={({ item }) => {
-              const name = item.username ?? item.full_name ?? 'User';
-              const uri = resolveMedia(item.avatar_url);
-              return (
-                <View style={cmt.row}>
-                  <Avatar initial={name[0]?.toUpperCase() ?? '?'} color={avatarColor(item.user_id)} size={36} uri={uri} />
-                  <View style={cmt.bubble}>
-                    <Text style={cmt.commentName}>
-                      {name} <Text style={cmt.commentText}>{item.text}</Text>
-                    </Text>
-                    <Text style={cmt.commentTime}>{timeAgo(item.created_at)}</Text>
+  
+          {/* Header row */}
+          <View style={cmt.headerRow}>
+            <Text style={cmt.title}>Comments</Text>
+            <TouchableOpacity onPress={dismiss} hitSlop={10}>
+              <Ionicons name="close" size={22} color="#60626A" />
+            </TouchableOpacity>
+          </View>
+  
+          {/* Comment list */}
+          {loading ? (
+            <ActivityIndicator color="#7A0EED" style={{ flex: 1 }} />
+          ) : comments.length === 0 ? (
+            <View style={cmt.empty}>
+              <Ionicons name="chatbubbles-outline" size={48} color="#D0C8F0" />
+              <Text style={cmt.emptyText}>No comments yet. Be the first!</Text>
+            </View>
+          ) : (
+            <FlatList
+              data={comments}
+              keyExtractor={c => c.id}
+              showsVerticalScrollIndicator={false}
+              style={{ flex: 1 }}
+              contentContainerStyle={{ paddingHorizontal: 16, paddingTop: 4, paddingBottom: 12 }}
+              renderItem={({ item }) => {
+                const name = item.username ?? item.full_name ?? 'User';
+                const uri = resolveMedia(item.avatar_url);
+                return (
+                  <View style={cmt.row}>
+                    <Avatar initial={name[0]?.toUpperCase() ?? '?'} color={avatarColor(item.user_id)} size={36} uri={uri} />
+                    <View style={cmt.bubble}>
+                      <Text style={cmt.commentName}>
+                        {name} <Text style={cmt.commentText}>{item.text}</Text>
+                      </Text>
+                      <Text style={cmt.commentTime}>{timeAgo(item.created_at)}</Text>
+                    </View>
                   </View>
-                </View>
-              );
-            }}
-          />
-        )}
-
-        {/* Input */}
-        {allowComments ? (
-          <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : 'height'}>
+                );
+              }}
+            />
+          )}
+  
+          {/* Input */}
+          {allowComments ? (
             <View style={cmt.inputRow}>
               <TextInput
                 style={cmt.input}
@@ -380,14 +455,14 @@ function CommentsSheet({ visible, postId, allowComments, onClose, onCountChange 
                   : <Ionicons name="send" size={16} color="#FFFFFF" />}
               </TouchableOpacity>
             </View>
-          </KeyboardAvoidingView>
-        ) : (
-          <View style={cmt.disabledBar}>
-            <Ionicons name="lock-closed-outline" size={14} color="#ABADB2" />
-            <Text style={cmt.disabledText}>Comments are turned off</Text>
-          </View>
-        )}
-      </Animated.View>
+          ) : (
+            <View style={cmt.disabledBar}>
+              <Ionicons name="lock-closed-outline" size={14} color="#ABADB2" />
+              <Text style={cmt.disabledText}>Comments are turned off</Text>
+            </View>
+          )}
+        </Animated.View>
+      </View>
     </Modal>
   );
 }
@@ -398,12 +473,19 @@ const VIDEO_H   = SCREEN_W * 1.25; // fixed 4:5 portrait for all videos (Instagr
 const MAX_IMG_H = SCREEN_W * 1.25; // image cap at 4:5 portrait
 const MIN_IMG_H = SCREEN_W * 0.5;  // image floor at 2:1 landscape
 
-function PostCard({ post, currentUserId, onOpenComments, following, onFollowChange }: {
+// Calls into an expo-video player that may already have been released
+// (component unmounting); a released player throws, which is safe to ignore.
+function safePlayer(fn: () => void) {
+  try { fn(); } catch { /* player already released */ }
+}
+
+function PostCard({ post, currentUserId, onOpenComments, following, onFollowChange, onTagPress }: {
   post: FeedPost;
   currentUserId: string;
   onOpenComments: (postId: string, allowComments: boolean) => void;
   following: boolean;
   onFollowChange: (userId: string, nowFollowing: boolean) => void;
+  onTagPress?: (tag: { id: string; parent_id: string | null }) => void;
 }) {
   const firstMedia = post.media?.[0];
   const mediaUri = firstMedia ? resolveMedia(firstMedia.media_url) : null;
@@ -419,6 +501,13 @@ function PostCard({ post, currentUserId, onOpenComments, following, onFollowChan
   const [videoPlaying, setVideoPlaying] = useState(false);
   const likeScale = useRef(new Animated.Value(1)).current;
   const initDone = useRef(false);
+  // Double-tap-to-like: big heart that pops over the media
+  const bigHeartScale = useRef(new Animated.Value(0)).current;
+  const bigHeartOpacity = useRef(new Animated.Value(0)).current;
+  const lastTapRef = useRef(0);
+  const singleTapTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  useEffect(() => () => { if (singleTapTimer.current) clearTimeout(singleTapTimer.current); }, []);
 
   const isOwnPost = !!currentUserId && post.user_id === currentUserId;
   const displayName = post.username ?? post.full_name ?? 'User';
@@ -445,12 +534,15 @@ function PostCard({ post, currentUserId, onOpenComments, following, onFollowChan
     );
   }, [mediaUri, isVideo]);
 
-  // Pause video when user switches away from this tab
+  // Pause video when user switches away from this tab. This cleanup also runs
+  // when the card unmounts (reload, list recycling), and by then
+  // useVideoPlayer may already have released the native player — calling
+  // pause() on it throws "shared object already released", so guard it.
   useFocusEffect(
     useCallback(() => {
       return () => {
         if (isVideo && videoPlayer) {
-          videoPlayer.pause();
+          safePlayer(() => videoPlayer.pause());
           setVideoPlaying(false);
         }
       };
@@ -517,17 +609,61 @@ function PostCard({ post, currentUserId, onOpenComments, following, onFollowChan
       });
   };
 
+  const toggleVideo = () => {
+    if (videoPlaying) {
+      safePlayer(() => videoPlayer.pause());
+      setVideoPlaying(false);
+    } else {
+      safePlayer(() => videoPlayer.play());
+      setVideoPlaying(true);
+    }
+  };
+
+  const popBigHeart = () => {
+    bigHeartScale.setValue(0);
+    bigHeartOpacity.setValue(1);
+    Animated.sequence([
+      Animated.spring(bigHeartScale, { toValue: 1, friction: 4, tension: 140, useNativeDriver: true }),
+      Animated.delay(350),
+      Animated.parallel([
+        Animated.timing(bigHeartScale, { toValue: 1.3, duration: 200, useNativeDriver: true }),
+        Animated.timing(bigHeartOpacity, { toValue: 0, duration: 200, useNativeDriver: true }),
+      ]),
+    ]).start();
+  };
+
+  // Double tap = like (never unlikes, like Instagram) + heart pop. On videos a
+  // single tap still plays/pauses, but only after the double-tap window has
+  // passed so a double tap doesn't also toggle playback.
+  const DOUBLE_TAP_MS = 280;
+  const handleMediaTap = () => {
+    const now = Date.now();
+    if (now - lastTapRef.current < DOUBLE_TAP_MS) {
+      lastTapRef.current = 0;
+      if (singleTapTimer.current) { clearTimeout(singleTapTimer.current); singleTapTimer.current = null; }
+      popBigHeart();
+      if (!liked) handleLike();
+      return;
+    }
+    lastTapRef.current = now;
+    if (isVideo && !mediaError) {
+      singleTapTimer.current = setTimeout(() => {
+        singleTapTimer.current = null;
+        toggleVideo();
+      }, DOUBLE_TAP_MS);
+    }
+  };
+
   const handleDownload = async () => {
     if (!mediaUri || downloading) return;
     setDownloading(true);
     try {
-      const { status } = await MediaLibrary.requestPermissionsAsync();
+      const { status } = await MediaLibrary.requestPermissionsAsync(true);
       if (status !== 'granted') {
         Alert.alert('Permission needed', 'Allow gallery access to save the file.');
         return;
       }
       const ext = isVideo ? 'mp4' : 'jpg';
-      const { downloadAsync, cacheDirectory } = await import('expo-file-system/legacy');
       const destUri = `${cacheDirectory}rara_${post.id}.${ext}`;
       const result = await downloadAsync(mediaUri, destUri);
       if (result.status === 200) {
@@ -572,6 +708,15 @@ function PostCard({ post, currentUserId, onOpenComments, following, onFollowChan
         )}
       </View>
 
+      {/* Admin tags, e.g. "#📺 తెలుగు టీవీ షోస్ #Janmashtami" — tap to open that tab */}
+      {!!post.tag_list?.length && (
+        <View style={card.tagRow}>
+          {post.tag_list.map(t => (
+            <Text key={t.id} style={card.tagText} onPress={() => onTagPress?.(t)}>#{t.name}</Text>
+          ))}
+        </View>
+      )}
+
       {/* Media */}
       <View style={[card.media, { height: mediaHeight }]}>
         {mediaUri && !mediaError ? (
@@ -595,27 +740,23 @@ function PostCard({ post, currentUserId, onOpenComments, following, onFollowChan
             <Ionicons name={isVideo ? 'videocam-outline' : 'image-outline'} size={40} color="rgba(255,255,255,0.3)" />
           </View>
         )}
+        {/* Tap layer sits ON TOP of the media: the native video surface
+            swallows touches on Android, so a wrapper around it never sees them */}
+        <Pressable style={StyleSheet.absoluteFill} onPress={handleMediaTap} />
         {isVideo && !mediaError && (
-          <TouchableOpacity
-            style={card.playOverlay}
-            activeOpacity={0.8}
-            onPress={() => {
-              if (videoPlaying) {
-                videoPlayer.pause();
-                setVideoPlaying(false);
-              } else {
-                videoPlayer.play();
-                setVideoPlaying(true);
-              }
-            }}
-          >
+          <View style={card.playOverlay} pointerEvents="none">
             {!videoPlaying && (
               <View style={card.playCircle}>
                 <Ionicons name="play" size={28} color="#FFFFFF" style={{ paddingLeft: 3 }} />
               </View>
             )}
-          </TouchableOpacity>
+          </View>
         )}
+        <View style={card.bigHeartWrap} pointerEvents="none">
+          <Animated.View style={{ opacity: bigHeartOpacity, transform: [{ scale: bigHeartScale }] }}>
+            <Ionicons name="heart" size={96} color="#E14C57" style={card.bigHeart} />
+          </Animated.View>
+        </View>
       </View>
 
       {/* Actions */}
@@ -661,14 +802,25 @@ function PostCard({ post, currentUserId, onOpenComments, following, onFollowChan
 
 export function HomeScreen() {
   const insets = useSafeAreaInsets();
+
+  // Earning slabs / gem value (admin-managed) — loaded quietly so the wallet
+  // has them ready; the wallet retries if this fails.
+  useEffect(() => { earningsConfigStore.load(); }, []);
   const bottomInset    = Platform.OS === 'android' ? Math.max(insets.bottom, 12) : 0;
   const TAB_BAR_HEIGHT = Platform.OS === 'ios' ? 80 : 56 + bottomInset;
 
   const currentUserId = authStore.getUserId() ?? '';
-  const [activeTab, setActiveTab] = useState<HomeTab>('Trending');
+  const [activeTab, setActiveTab] = useState<string>('trending');
+  // Sub-tag chip selected under the current tab (null = whole tab)
+  const [activeChip, setActiveChip] = useState<string | null>(null);
+  const [tagTabs, setTagTabs] = useState<PostTag[]>([]);
+  const [trendingChips, setTrendingChips] = useState<PostTag[]>([]);
   const [posts, setPosts] = useState<FeedPost[]>([]);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
+  // Admin → Banners → Home
+  const [banners, setBanners] = useState<Banner[]>([]);
+  useEffect(() => { fetchBanners('home').then(setBanners); }, []);
 
   // Follow state shared across all posts — keyed by userId
   const [followMap, setFollowMap] = useState<Record<string, boolean>>({});
@@ -694,10 +846,42 @@ export function HomeScreen() {
     setPosts(prev => prev.map(p => p.id === postId ? { ...p, comments_count: n } : p));
   }, []);
 
+  const loadTags = useCallback(() => {
+    apiPostTags().then(r => { if (r.ok) setTagTabs(r.data); });
+    apiTrendingPostTags().then(r => { if (r.ok) setTrendingChips(r.data); });
+  }, []);
+  useEffect(() => { loadTags(); }, [loadTags]);
+
+  const homeTabs: HomeTab[] = [...DEFAULT_TABS, ...tagTabs.map(t => ({ key: t.id, label: t.name }))];
+  const currentTagTab = tagTabs.find(t => t.id === activeTab) ?? null;
+  // Chips under the tab: Trending → most-used tags; admin tab → its sub tags
+  const chips = activeTab === 'trending' ? trendingChips : currentTagTab?.children ?? [];
+  const chipTitle = activeTab === 'trending' ? 'Trending Now' : currentTagTab?.name ?? '';
+
+  // An admin tab removed in the admin panel falls back to Trending
+  useEffect(() => {
+    if (!DEFAULT_TABS.some(t => t.key === activeTab) && tagTabs.length && !currentTagTab) {
+      setActiveTab('trending'); setActiveChip(null);
+    }
+  }, [tagTabs, activeTab, currentTagTab]);
+
+  const changeTab = useCallback((key: string) => { setActiveTab(key); setActiveChip(null); }, []);
+
+  // #tag on a post → open its tab (sub tag also selects that chip)
+  const openTag = useCallback((tag: { id: string; parent_id: string | null }) => {
+    if (tag.parent_id) { setActiveTab(tag.parent_id); setActiveChip(tag.id); }
+    else { setActiveTab(tag.id); setActiveChip(null); }
+  }, []);
+
   const loadFeed = useCallback(async (silent = false) => {
     if (!silent) setLoading(true);
     try {
-      const r = await fetch(`${BASE_URL}/posts/feed?limit=30`);
+      const params = new URLSearchParams({ limit: '30', tab: activeTab });
+      if (activeChip) params.set('tag', activeChip);
+      const token = authStore.getToken();
+      const r = await fetch(`${BASE_URL}/posts/feed?${params}`, {
+        headers: token ? { Authorization: `Bearer ${token}` } : {},
+      });
       const j = await r.json();
       if (j.success) {
         const feedPosts: FeedPost[] = j.data;
@@ -720,16 +904,17 @@ export function HomeScreen() {
       setLoading(false);
       setRefreshing(false);
     }
-  }, [currentUserId]);
+  }, [currentUserId, activeTab, activeChip]);
 
   useEffect(() => { loadFeed(); }, [loadFeed]);
 
   return (
     <SafeAreaView style={styles.safe} edges={['top']}>
-      <AppScreenHeader title="Rara Live" right={<HeaderRight />} backgroundColor="#FFFFFF" noBottomShadow />
+      <AppScreenHeader title="RaRa Live" right={<HeaderRight />} backgroundColor="#FFFFFF" noBottomShadow />
       <View style={styles.headerGap} />
       <View style={styles.screenBody}>
-        <HomeTabs active={activeTab} onChange={setActiveTab} />
+        <BannerCarousel banners={banners} />
+        <HomeTabs items={homeTabs} active={activeTab} onChange={changeTab} />
 
         {loading ? (
           <View style={styles.loadingWrap}>
@@ -747,12 +932,21 @@ export function HomeScreen() {
             }
             ItemSeparatorComponent={() => <View style={styles.separator} />}
             refreshing={refreshing}
-            onRefresh={() => { setRefreshing(true); loadFeed(true); }}
+            onRefresh={() => { setRefreshing(true); loadFeed(true); loadTags(); fetchBanners('home').then(setBanners); }}
+            ListHeaderComponent={
+              <TagChips title={chipTitle} chips={chips} selected={activeChip} onSelect={setActiveChip} />
+            }
             ListEmptyComponent={
               <View style={styles.emptyWrap}>
-                <Ionicons name="images-outline" size={56} color="#D0C8F0" />
-                <Text style={styles.emptyTitle}>No posts yet</Text>
-                <Text style={styles.emptySub}>Posts you and others share will appear here</Text>
+                <Ionicons name={activeTab === 'following' ? 'people-outline' : activeTab === 'video' ? 'videocam-outline' : 'images-outline'} size={56} color="#D0C8F0" />
+                <Text style={styles.emptyTitle}>
+                  {activeTab === 'following' ? 'No posts from people you follow'
+                    : activeTab === 'video' ? 'No videos yet'
+                    : activeChip ? 'No posts with this tag yet' : 'No posts yet'}
+                </Text>
+                <Text style={styles.emptySub}>
+                  {activeTab === 'following' ? 'Follow people to see their posts here' : 'Posts you and others share will appear here'}
+                </Text>
               </View>
             }
             renderItem={({ item }) => (
@@ -762,6 +956,7 @@ export function HomeScreen() {
                 onOpenComments={openComments}
                 following={!!followMap[item.user_id]}
                 onFollowChange={handleFollowChange}
+                onTagPress={openTag}
               />
             )}
           />
@@ -794,11 +989,13 @@ const styles = StyleSheet.create({
 });
 
 const hdr = StyleSheet.create({
-  row:      { flexDirection: 'row', alignItems: 'center', gap: 4 },
-  iconBtn:  { width: 38, height: 38, alignItems: 'center', justifyContent: 'center', position: 'relative' },
+  // Box as wide as the icon → even 14px gaps (same as the chat rooms header);
+  // hitSlop keeps the tap target generous.
+  row:      { flexDirection: 'row', alignItems: 'center', gap: 14 },
+  iconBtn:  { width: 28, height: 38, alignItems: 'center', justifyContent: 'center', position: 'relative' },
   coinImg:  { width: 28, height: 28 },
   badge: {
-    position: 'absolute', top: 4, right: 4,
+    position: 'absolute', top: 4, right: -4,
     minWidth: 16, height: 16, borderRadius: 8,
     backgroundColor: '#E14C57', borderWidth: 1.5, borderColor: '#FFFFFF',
     alignItems: 'center', justifyContent: 'center',
@@ -820,17 +1017,29 @@ const hdr = StyleSheet.create({
 });
 
 const tabs = StyleSheet.create({
-  container:   { flexDirection: 'row', backgroundColor: '#FFFFFF', paddingHorizontal: 20, borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: '#E0DDED' },
+  container:   { backgroundColor: '#FFFFFF', borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: '#E0DDED' },
+  scroll:      { paddingHorizontal: 20 },
   tab:         { paddingVertical: 10, marginRight: 28, alignItems: 'center', position: 'relative' },
   label:       { fontSize: 15, fontWeight: '600', color: '#ABADB2' },
   labelActive: { color: '#7A0EED', fontWeight: '700' },
   underline:   { position: 'absolute', bottom: 0, left: 0, right: 0, height: 2.5, borderRadius: 2 },
 });
 
-const av = StyleSheet.create({
-  circle:  { alignItems: 'center', justifyContent: 'center', shadowColor: '#000', shadowOpacity: 0.1, shadowRadius: 3, shadowOffset: { width: 0, height: 1 }, elevation: 2 },
-  initial: { color: '#FFFFFF', fontWeight: '800' },
+const chipBox = StyleSheet.create({
+  wrap:           { backgroundColor: '#F1F0F6', paddingHorizontal: 16, paddingTop: 14, paddingBottom: 16, marginBottom: 10 },
+  title:          { fontSize: 15, fontWeight: '800', color: '#1C1E22', marginBottom: 10 },
+  row:            { flexDirection: 'row', flexWrap: 'wrap', gap: 8 },
+  chip: {
+    flexDirection: 'row', alignItems: 'center', gap: 4,
+    backgroundColor: '#FFFFFF', borderRadius: 6, paddingHorizontal: 12, paddingVertical: 9,
+    borderWidth: 1, borderColor: '#E6E3EE',
+    shadowColor: '#000', shadowOpacity: 0.05, shadowRadius: 3, shadowOffset: { width: 0, height: 1 }, elevation: 1,
+  },
+  chipActive:     { borderColor: '#7A0EED', backgroundColor: '#F4EEFF' },
+  chipText:       { fontSize: 13.5, color: '#1C1E22', fontWeight: '500' },
+  chipTextActive: { color: '#7A0EED', fontWeight: '700' },
 });
+
 
 const cap = StyleSheet.create({
   wrap:     { paddingHorizontal: 16, paddingBottom: 14 },
@@ -850,9 +1059,14 @@ const card = StyleSheet.create({
   followingBtn:  { backgroundColor: 'transparent', borderWidth: 1.5, borderColor: '#7A0EED', shadowOpacity: 0, elevation: 0 },
   followText:    { fontSize: 13, fontWeight: '700', color: '#FFFFFF' },
   followingText: { color: '#7A0EED' },
+  tagRow:        { flexDirection: 'row', flexWrap: 'wrap', columnGap: 8, rowGap: 2, paddingHorizontal: 16, paddingBottom: 10 },
+  tagText:       { fontSize: 14, fontWeight: '600', color: '#3B6FE0' },
 
   media:            { width: SCREEN_W, overflow: 'hidden' },
   mediaPlaceholder: { width: SCREEN_W, backgroundColor: '#0D0D1A', alignItems: 'center', justifyContent: 'center' },
+  bigHeartWrap: { ...StyleSheet.absoluteFillObject, alignItems: 'center', justifyContent: 'center' },
+  // same red as the liked heart in the action row; soft dark glow keeps it visible on red/bright media
+  bigHeart: { textShadowColor: 'rgba(0,0,0,0.35)', textShadowRadius: 14, textShadowOffset: { width: 0, height: 2 } },
   playOverlay:      { ...StyleSheet.absoluteFillObject, alignItems: 'center', justifyContent: 'center' },
   playCircle:       { width: 62, height: 62, borderRadius: 31, backgroundColor: 'rgba(255,255,255,0.22)', alignItems: 'center', justifyContent: 'center', borderWidth: 2, borderColor: 'rgba(255,255,255,0.5)' },
 
@@ -869,7 +1083,8 @@ const cmt = StyleSheet.create({
   handle:          { width: 40, height: 4, borderRadius: 2, backgroundColor: '#E0DFF5' },
   headerRow:       { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingHorizontal: 20, paddingBottom: 10, borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: '#F0EFF5' },
   title:           { fontSize: 16, fontWeight: '800', color: '#1C1E22' },
-  empty:           { alignItems: 'center', justifyContent: 'center', gap: 10, paddingVertical: 48 },
+  // flex: 1 like the comment list, so the input stays pinned to the bottom of the sheet
+  empty:           { flex: 1, alignItems: 'center', justifyContent: 'center', gap: 10, paddingVertical: 48 },
   emptyText:       { fontSize: 14, color: '#ABADB2' },
   row:             { flexDirection: 'row', gap: 10, marginBottom: 16, alignItems: 'flex-start' },
   bubble:          { flex: 1 },

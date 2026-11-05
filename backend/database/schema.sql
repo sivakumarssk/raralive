@@ -12,7 +12,7 @@ CREATE TABLE IF NOT EXISTS users (
   full_name VARCHAR(120),
   gender VARCHAR(20),
   date_of_birth DATE,
-  preferred_language VARCHAR(10) DEFAULT 'en',
+  preferred_language VARCHAR(10), -- NULL until the user picks one in the app
   avatar_url TEXT,
   is_phone_verified BOOLEAN NOT NULL DEFAULT FALSE,
   created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
@@ -29,6 +29,7 @@ CREATE TABLE IF NOT EXISTS otp_codes (
   phone VARCHAR(20) NOT NULL,
   code VARCHAR(6) NOT NULL,
   purpose VARCHAR(32) NOT NULL DEFAULT 'register',
+  attempts SMALLINT NOT NULL DEFAULT 0,
   expires_at TIMESTAMPTZ NOT NULL,
   consumed_at TIMESTAMPTZ,
   created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()

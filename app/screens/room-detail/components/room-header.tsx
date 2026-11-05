@@ -5,6 +5,7 @@ import { useRouter } from 'expo-router';
 import { useEffect, useRef, useState } from 'react';
 import {
   ActivityIndicator,
+  Alert,
   Animated,
   FlatList,
   Image,
@@ -18,10 +19,15 @@ import {
   TouchableWithoutFeedback,
   View,
 } from 'react-native';
+import { BoldIcon } from '@/components/ui/bold-icon';
+import { MenuIcon } from '@/components/ui/menu-icon';
 import { BASE_URL, MEDIA_BASE } from '@/services/api';
 import { authStore } from '@/store/auth-store';
 import type { SeatSlot } from '@/hooks/useRoomSocket';
 import { getLevelImage } from './room-level-up';
+import { SupportSheet, type SupportKind } from './support-sheet';
+import { RC } from '../room-ui';
+import { avatarSource } from '@/utils/default-avatar';
 
 type RoomHeaderProps = {
   name: string;
@@ -43,6 +49,8 @@ type RoomHeaderProps = {
   seats?: SeatSlot[];
   onInviteToStage?: (userId: string, slotIndex: number) => void;
   onRefreshRoom?: () => void;
+  /** Parent paints the background (e.g. stage gradient behind header) — no white fill. */
+  transparentBg?: boolean;
 };
 
 type RoomMember = {
@@ -184,13 +192,7 @@ function MembersSheet({
           activeOpacity={isMe ? 1 : 0.7}
           disabled={isMe}
           onPress={() => { onClose(); router.push(`/user/${item.userId}` as any); }}>
-          {avatarUri ? (
-            <Image source={{ uri: avatarUri }} style={mb.avatar} />
-          ) : (
-            <View style={[mb.avatar, mb.avatarFallback]}>
-              <Text style={mb.avatarInitial}>{item.userName[0]?.toUpperCase() ?? '?'}</Text>
-            </View>
-          )}
+          <Image source={avatarSource(avatarUri)} style={mb.avatar} />
 
           <View style={mb.info}>
             <Text style={mb.name} numberOfLines={1}>{item.userName}{isMe ? ' (you)' : ''}</Text>
@@ -249,13 +251,7 @@ function MembersSheet({
           style={mb.profileTouch}
           activeOpacity={0.7}
           onPress={() => { onClose(); router.push(`/user/${item.userId}` as any); }}>
-          {avatarUri ? (
-            <Image source={{ uri: avatarUri }} style={mb.avatar} />
-          ) : (
-            <View style={[mb.avatar, mb.avatarFallback]}>
-              <Text style={mb.avatarInitial}>{item.userName[0]?.toUpperCase() ?? '?'}</Text>
-            </View>
-          )}
+          <Image source={avatarSource(avatarUri)} style={mb.avatar} />
           <View style={mb.info}>
             <Text style={mb.name} numberOfLines={1}>{item.userName}</Text>
           </View>
@@ -359,26 +355,36 @@ type MenuKey =
 type MenuVisibility = 'all' | 'hostOnly' | 'managerOnly';
 
 const MENU_ITEMS: {
-  key: MenuKey; icon: keyof typeof Ionicons.glyphMap; label: string; subtitle: string; visibility: MenuVisibility;
+  key: MenuKey; icon: keyof typeof Ionicons.glyphMap; color: string; label: string; subtitle: string; visibility: MenuVisibility;
 }[] = [
-  { key: 'edit-room-name', icon: 'create-outline',       label: 'Chatroom Name',        subtitle: 'View & edit chatroom name',   visibility: 'hostOnly' },
-  { key: 'block-user',     icon: 'ban-outline',           label: 'Block User',           subtitle: 'Manage blocked users',        visibility: 'managerOnly' },
-  { key: 'refresh-room',   icon: 'refresh-outline',       label: 'Refresh Room',         subtitle: 'Reload the room',             visibility: 'all' },
-  { key: 'agency',         icon: 'business-outline',      label: 'Agency',               subtitle: 'Agency details and support',  visibility: 'all' },
-  { key: 'help-support',   icon: 'headset-outline',       label: 'Chatroom Help & Support', subtitle: 'Get help and contact us',  visibility: 'all' },
-  { key: 'email-support',  icon: 'mail-outline',          label: 'Email Support',        subtitle: 'support@raralive.com',        visibility: 'all' },
-  { key: 'report-room',    icon: 'flag-outline',          label: 'Report Chatroom',      subtitle: 'Report inappropriate content', visibility: 'all' },
+  { key: 'edit-room-name', icon: 'create',         color: '#7A0EED', label: 'Chatroom Name',        subtitle: 'View & edit chatroom name',   visibility: 'hostOnly' },
+  { key: 'block-user',     icon: 'ban',            color: '#E14C57', label: 'Block User',           subtitle: 'Manage blocked users',        visibility: 'managerOnly' },
+  { key: 'refresh-room',   icon: 'refresh-circle', color: '#1D6FE0', label: 'Refresh Room',         subtitle: 'Reload seats and chat',             visibility: 'all' },
+  { key: 'agency',         icon: 'business',       color: '#F59E0B', label: 'Agency',               subtitle: 'Open the agency page',  visibility: 'all' },
+  { key: 'help-support',   icon: 'headset',        color: '#0D9488', label: 'Chatroom Help & Support', subtitle: 'Write to our support team',  visibility: 'all' },
+  { key: 'email-support',  icon: 'mail',           color: '#E91E7F', label: 'Email Support',        subtitle: 'tanushinfopvtltd@gmail.com',      visibility: 'all' },
+  { key: 'report-room',    icon: 'warning',        color: '#F97316', label: 'Report Chatroom',      subtitle: 'Report inappropriate content', visibility: 'all' },
 ];
+
+/** The (?) next to Report Chatroom — reports are only for rule-breaking. */
+function showReportHelp() {
+  Alert.alert(
+    'When to report',
+    'Use Report only when this Chat Room breaks the Chat Room rules — for example abuse or hate, sexual content, harassment, spam or scams.\n\nFalse or repeated reports are not counted and may lead to action on your account.',
+  );
+}
 
 type DropdownProps = {
   visible: boolean;
   onClose: () => void;
   isHost: boolean;
   canManage: boolean;
+  /** The room belongs to an agency — otherwise the Agency item is hidden. */
+  hasAgency: boolean;
   onSelect: (key: MenuKey) => void;
 };
 
-function Dropdown({ visible, onClose, isHost, canManage, onSelect }: DropdownProps) {
+function Dropdown({ visible, onClose, isHost, canManage, hasAgency, onSelect }: DropdownProps) {
   const slideAnim = useRef(new Animated.Value(400)).current;
   const opacityAnim = useRef(new Animated.Value(0)).current;
 
@@ -397,6 +403,7 @@ function Dropdown({ visible, onClose, isHost, canManage, onSelect }: DropdownPro
   }, [visible]);
 
   const items = MENU_ITEMS.filter(item => {
+    if (item.key === 'agency' && !hasAgency) return false;
     if (item.visibility === 'hostOnly') return isHost;
     if (item.visibility === 'managerOnly') return canManage;
     return true;
@@ -415,7 +422,7 @@ function Dropdown({ visible, onClose, isHost, canManage, onSelect }: DropdownPro
         <View style={dd.header}>
           <Text style={dd.title}>Room Options</Text>
           <TouchableOpacity onPress={onClose} style={dd.closeBtn} hitSlop={12}>
-            <Ionicons name="close" size={15} color="#60626A" />
+            <BoldIcon name="close" size={20} color="#60626A" />
           </TouchableOpacity>
         </View>
         <ScrollView contentContainerStyle={dd.list} showsVerticalScrollIndicator={false}>
@@ -425,14 +432,19 @@ function Dropdown({ visible, onClose, isHost, canManage, onSelect }: DropdownPro
               onPress={() => { onClose(); onSelect(item.key); }}
               activeOpacity={0.7}
               style={[dd.item, index === items.length - 1 && dd.itemLast]}>
-              <View style={dd.itemIconWrap}>
-                <Ionicons name={item.icon} size={15} color="#7A0EED" />
-              </View>
+              <MenuIcon name={item.icon} color={item.color} />
               <View style={dd.itemTextBlock}>
-                <Text style={dd.itemLabel}>{item.label}</Text>
+                <View style={dd.itemLabelRow}>
+                  <Text style={dd.itemLabel}>{item.label}</Text>
+                  {item.key === 'report-room' && (
+                    <TouchableOpacity onPress={showReportHelp} hitSlop={10} accessibilityLabel="When to report a Chat Room">
+                      <BoldIcon name="help-circle-outline" size={17} color="#8E9099" weight={8} />
+                    </TouchableOpacity>
+                  )}
+                </View>
                 <Text style={dd.itemSubtitle}>{item.subtitle}</Text>
               </View>
-              <Ionicons name="chevron-forward" size={15} color="#C4C5CC" />
+              <BoldIcon name="chevron-forward" size={15} color="#ABADB2" weight={10} />
             </TouchableOpacity>
           ))}
         </ScrollView>
@@ -446,12 +458,13 @@ function Dropdown({ visible, onClose, isHost, canManage, onSelect }: DropdownPro
 export function RoomHeader({
   name, agencyName, agencyId, memberCount, level = 1, roomId = '', roomCode, totalCoins = 0,
   hostName, visibility, onBack, onShare, hasRoomBg, isHost = false, seats = [], onInviteToStage,
-  onRefreshRoom,
+  onRefreshRoom, transparentBg,
 }: RoomHeaderProps) {
   const router = useRouter();
   const [menuVisible, setMenuVisible] = useState(false);
   const [membersVisible, setMembersVisible] = useState(false);
   const [membersInitialTab, setMembersInitialTab] = useState<MembersTab>('online');
+  const [supportKind, setSupportKind] = useState<SupportKind | null>(null);
   const levelAsset = getLevelImage(level);
 
   const currentUserId = authStore.getUserId() ?? '';
@@ -471,17 +484,14 @@ export function RoomHeader({
       case 'block-user':     openMembers('blocked'); break;
       case 'refresh-room':   onRefreshRoom?.(); break;
       case 'agency':
-        router.push({ pathname: '/coming-soon', params: { title: 'Agency', icon: 'business-outline' } } as any);
+        // Same agency page as tapping the agency name in the header
+        if (agencyId) router.push(`/agency/${agencyId}` as any);
         break;
-      case 'help-support':
-        router.push({ pathname: '/coming-soon', params: { title: 'Help & Support', icon: 'help-circle-outline' } } as any);
-        break;
+      case 'help-support':   setSupportKind('help'); break;
       case 'email-support':
-        Linking.openURL('mailto:support@raralive.com').catch(() => {});
+        Linking.openURL('mailto:tanushinfopvtltd@gmail.com').catch(() => {});
         break;
-      case 'report-room':
-        router.push({ pathname: '/coming-soon', params: { title: 'Report Room', icon: 'flag-outline' } } as any);
-        break;
+      case 'report-room':    setSupportKind('report'); break;
     }
   }
 
@@ -489,9 +499,9 @@ export function RoomHeader({
   const iconColor2 = hasRoomBg ? 'rgba(255,255,255,0.85)' : '#60626A';
 
   return (
-    <View style={[styles.container, hasRoomBg && styles.containerBg]}>
+    <View style={[styles.container, (hasRoomBg || transparentBg) && styles.containerBg]}>
       <TouchableOpacity onPress={onBack} style={styles.backBtn} hitSlop={8}>
-        <Ionicons name="arrow-back" size={22} color={iconColor} />
+        <BoldIcon name="arrow-back" size={22} color={iconColor} />
       </TouchableOpacity>
 
       <View style={styles.titleBlock}>
@@ -530,7 +540,7 @@ export function RoomHeader({
 
       <View style={styles.actions}>
         <TouchableOpacity onPress={onShare} style={styles.iconBtn} hitSlop={8}>
-          <Ionicons name="share-social-outline" size={20} color={iconColor2} />
+          <BoldIcon name="arrow-redo-outline" size={22} color={iconColor2} />
         </TouchableOpacity>
 
         <TouchableOpacity
@@ -541,13 +551,14 @@ export function RoomHeader({
 
         <View>
           <TouchableOpacity onPress={() => setMenuVisible(v => !v)} style={styles.iconBtn} hitSlop={8}>
-            <Ionicons name="ellipsis-vertical" size={20} color={iconColor2} />
+            <BoldIcon name="ellipsis-vertical" size={22} color={iconColor2} weight={4} />
           </TouchableOpacity>
           <Dropdown
             visible={menuVisible}
             onClose={() => setMenuVisible(false)}
             isHost={isHost}
             canManage={canManage}
+            hasAgency={!!agencyId}
             onSelect={handleMenuSelect}
           />
         </View>
@@ -563,6 +574,8 @@ export function RoomHeader({
         initialTab={membersInitialTab}
       />
 
+      <SupportSheet kind={supportKind} roomId={roomId} onClose={() => setSupportKind(null)} />
+
     </View>
   );
 }
@@ -572,13 +585,13 @@ export function RoomHeader({
 const styles = StyleSheet.create({
   container: {
     flexDirection: 'row', alignItems: 'center',
-    paddingHorizontal: 16, paddingVertical: 12,
-    backgroundColor: '#FFFFFF', gap: 10,
+    paddingHorizontal: 8, paddingVertical: 6,
+    backgroundColor: '#FFFFFF', gap: 6,
   },
   containerBg: { backgroundColor: 'transparent' },
   backBtn: { width: 36, height: 36, alignItems: 'center', justifyContent: 'center' },
   titleBlock: { flex: 1, gap: 2 },
-  roomName: { fontSize: 17, fontWeight: '800', color: '#1C1E22', letterSpacing: -0.3 },
+  roomName: { fontSize: 16, fontWeight: '700', color: '#1C1E22' },
   roomNameBg: {
     color: '#FFFFFF',
     textShadowColor: 'rgba(0,0,0,0.8)',
@@ -586,16 +599,16 @@ const styles = StyleSheet.create({
     textShadowRadius: 4,
   },
   memberRow: { flexDirection: 'row', alignItems: 'center', gap: 4, maxWidth: '100%' },
-  memberText: { fontSize: 12, color: '#7A0EED', fontWeight: '600' },
-  memberTextBg: { color: 'rgba(255,255,255,0.9)' },
+  memberText: { fontSize: 13, color: RC.number, fontWeight: '500' },
+  memberTextBg: { color: RC.numberOnDark },
   memberTap: { flexDirection: 'row', alignItems: 'center', gap: 4 },
   agencyTap: { flexDirection: 'row', alignItems: 'center', gap: 2, flexShrink: 1 },
   agencyNameText: { flexShrink: 1 },
   dot: { fontSize: 12, color: '#ABADB2' },
   dotBg: { color: 'rgba(255,255,255,0.5)' },
-  actions: { flexDirection: 'row', alignItems: 'center', gap: 6 },
+  actions: { flexDirection: 'row', alignItems: 'center', gap: 4 },
   iconBtn: { width: 34, height: 34, alignItems: 'center', justifyContent: 'center' },
-  levelImage: { width: 30, height: 30 },
+  levelImage: { width: 32, height: 32 },
 });
 
 const dd = StyleSheet.create({
@@ -629,30 +642,25 @@ const dd = StyleSheet.create({
     paddingHorizontal: 16, paddingBottom: 8,
     gap: 8,
   },
-  title: { flex: 1, fontSize: 14.5, fontWeight: '700', color: '#1C1E22', letterSpacing: -0.1 },
+  title: { flex: 1, fontSize: 16, fontWeight: '700', color: '#1C1E22' },
   closeBtn: {
-    width: 24, height: 24, borderRadius: 12,
-    backgroundColor: '#F4EEFF',
+    width: 28, height: 28,
     alignItems: 'center', justifyContent: 'center',
   },
   list: {
     paddingHorizontal: 14, paddingTop: 2, paddingBottom: 20,
   },
   item: {
-    flexDirection: 'row', alignItems: 'center', gap: 10,
-    paddingVertical: 9,
+    flexDirection: 'row', alignItems: 'center', gap: 12,
+    paddingVertical: 10,
     borderBottomWidth: StyleSheet.hairlineWidth,
     borderBottomColor: '#F0EDF8',
   },
   itemLast: { borderBottomWidth: 0 },
-  itemIconWrap: {
-    width: 30, height: 30, borderRadius: 9,
-    backgroundColor: '#F4EEFF',
-    alignItems: 'center', justifyContent: 'center',
-  },
   itemTextBlock: { flex: 1, gap: 1 },
-  itemLabel: { fontSize: 12.5, fontWeight: '700', color: '#1C1E22' },
-  itemSubtitle: { fontSize: 10.5, color: '#8E9099', fontWeight: '500' },
+  itemLabelRow: { flexDirection: 'row', alignItems: 'center', gap: 6 },
+  itemLabel: { fontSize: 14, fontWeight: '600', color: '#1C1E22' },
+  itemSubtitle: { fontSize: 12, color: '#8E9099' },
 });
 
 const mb = StyleSheet.create({
@@ -684,11 +692,11 @@ const mb = StyleSheet.create({
   },
   header: {
     flexDirection: 'row', alignItems: 'center',
-    paddingHorizontal: 20, paddingBottom: 12,
+    paddingHorizontal: 16, paddingBottom: 12,
     borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: '#F0EDF8',
     gap: 8,
   },
-  title: { flex: 1, fontSize: 17, fontWeight: '800', color: '#1C1E22' },
+  title: { flex: 1, fontSize: 16, fontWeight: '800', color: '#1C1E22' },
   closeBtn: { width: 34, height: 34, alignItems: 'center', justifyContent: 'center' },
   loadingWrap: { paddingVertical: 40, alignItems: 'center' },
   emptyWrap: { paddingVertical: 40, alignItems: 'center' },
@@ -703,11 +711,11 @@ const mb = StyleSheet.create({
   profileTouch: {
     flex: 1, flexDirection: 'row', alignItems: 'center', gap: 12,
   },
-  avatar: { width: 44, height: 44, borderRadius: 22 },
+  avatar: { width: 36, height: 36, borderRadius: 18 },
   avatarFallback: {
     backgroundColor: '#EDE8F7', alignItems: 'center', justifyContent: 'center',
   },
-  avatarInitial: { fontSize: 18, fontWeight: '800', color: '#7A0EED' },
+  avatarInitial: { fontSize: 16, fontWeight: '800', color: '#7A0EED' },
   info: { flex: 1, gap: 3 },
   name: { fontSize: 14, fontWeight: '700', color: '#1C1E22' },
   stageBadge: {
@@ -716,7 +724,7 @@ const mb = StyleSheet.create({
     backgroundColor: '#F4EEFF',
     borderRadius: 8, paddingHorizontal: 7, paddingVertical: 2,
   },
-  stageBadgeText: { fontSize: 10, fontWeight: '700', color: '#7A0EED' },
+  stageBadgeText: { fontSize: 11, fontWeight: '700', color: '#7A0EED' },
 
   inviteBtn: { borderRadius: 20, overflow: 'hidden' },
   inviteBtnGrad: {

@@ -1,24 +1,24 @@
 import { Ionicons } from '@expo/vector-icons';
 import { useFocusEffect, useRouter } from 'expo-router';
-import { useCallback, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import {
-  FlatList, Modal, RefreshControl, StyleSheet, Text, TextInput, TouchableOpacity,
+  ActivityIndicator, Alert, FlatList, Image, Modal, RefreshControl, StyleSheet, Text, TextInput, TouchableOpacity,
   TouchableWithoutFeedback, View,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
 import {
-  apiChatAcceptConversation, apiChatConversations, apiChatDeleteConversation, apiChatMarkRead,
-  apiChatMarkUnread, apiChatPin, apiChatRejectConversation, apiChatRequests, apiChatUnpin,
-  type ChatConversation,
+  apiChatBlockedUsers, apiChatConversations, apiChatDeleteConversation, apiChatMarkRead, apiChatMarkUnread, apiChatPin,
+  apiChatUnblockUser, apiChatUnpin, isIncomingChatRequest, resolveImageUrl, type BlockedUser, type ChatConversation,
 } from '@/services/api';
 import { authStore } from '@/store/auth-store';
 import { chatSocketStore, subscribeChatEvents } from '@/store/chat-socket-store';
+import { MenuIcon } from '@/components/ui/menu-icon';
 import { ConversationListItem } from './components/conversation-list-item';
-import { RequestListItem } from './components/request-list-item';
+import { avatarSource } from '@/utils/default-avatar';
 
-type Tab = 'messages' | 'requests';
 type FilterMode = 'all' | 'unread' | 'read';
+type Tab = 'messages' | 'requests';
 
 // ── Long-press quick actions for one conversation ─────────────────────────────
 function ConversationActionSheet({ visible, onClose, conversation, onPin, onUnpin, onMarkUnread, onDelete }: {
@@ -46,17 +46,17 @@ function ConversationActionSheet({ visible, onClose, conversation, onPin, onUnpi
             style={as.row}
             activeOpacity={0.7}
             onPress={() => { onClose(); conversation.pinned ? onUnpin() : onPin(); }}>
-            <Ionicons name="pin" size={18} color="#7A0EED" />
+            <MenuIcon name="pin" color="#7A0EED" />
             <Text style={as.rowText}>{conversation.pinned ? 'Unpin Chat' : 'Pin Chat'}</Text>
           </TouchableOpacity>
 
           <TouchableOpacity style={as.row} activeOpacity={0.7} onPress={() => { onClose(); onMarkUnread(); }}>
-            <Ionicons name="mail-unread-outline" size={18} color="#7A0EED" />
+            <MenuIcon name="mail-unread" color="#1D6FE0" />
             <Text style={as.rowText}>Mark as Unread</Text>
           </TouchableOpacity>
 
           <TouchableOpacity style={as.row} activeOpacity={0.7} onPress={() => { onClose(); onDelete(); }}>
-            <Ionicons name="trash-outline" size={18} color="#E14C57" />
+            <MenuIcon name="trash" color="#E14C57" />
             <Text style={[as.rowText, as.dangerText]}>Delete Chat</Text>
           </TouchableOpacity>
 
@@ -79,7 +79,7 @@ const as = StyleSheet.create({
   title: { fontSize: 13, fontWeight: '700', color: '#9A94AE', paddingHorizontal: 12, paddingTop: 10, paddingBottom: 4 },
   row: {
     flexDirection: 'row', alignItems: 'center', gap: 12,
-    paddingHorizontal: 12, paddingVertical: 13,
+    paddingHorizontal: 12, paddingVertical: 8,
     borderTopWidth: StyleSheet.hairlineWidth, borderTopColor: '#F4F0FF',
   },
   rowText: { fontSize: 14.5, fontWeight: '600', color: '#1A1730' },
@@ -89,16 +89,17 @@ const as = StyleSheet.create({
 });
 
 // ── Header three-dot menu ──────────────────────────────────────────────────────
-const FILTER_OPTIONS: { key: FilterMode; icon: keyof typeof Ionicons.glyphMap; label: string }[] = [
-  { key: 'all',    icon: 'chatbubbles-outline',    label: 'All Chats' },
-  { key: 'unread', icon: 'mail-unread-outline',    label: 'Unread Only' },
-  { key: 'read',   icon: 'mail-open-outline',      label: 'Read Only' },
+const FILTER_OPTIONS: { key: FilterMode; icon: keyof typeof Ionicons.glyphMap; color: string; label: string }[] = [
+  { key: 'all',    icon: 'chatbubbles', color: '#7A0EED', label: 'All Chats' },
+  { key: 'unread', icon: 'mail-unread', color: '#1D6FE0', label: 'Unread Only' },
+  { key: 'read',   icon: 'mail-open',   color: '#0D9488', label: 'Read Only' },
 ];
 
-function HeaderMenu({ visible, onClose, onSelectMessages, filterMode, onSetFilter }: {
+function HeaderMenu({ visible, onClose, onSelectMessages, onBlockedUsers, filterMode, onSetFilter }: {
   visible: boolean;
   onClose: () => void;
   onSelectMessages: () => void;
+  onBlockedUsers: () => void;
   filterMode: FilterMode;
   onSetFilter: (mode: FilterMode) => void;
 }) {
@@ -110,8 +111,12 @@ function HeaderMenu({ visible, onClose, onSelectMessages, filterMode, onSetFilte
       </TouchableWithoutFeedback>
       <View style={hm.menu}>
         <TouchableOpacity style={hm.item} activeOpacity={0.7} onPress={() => { onClose(); onSelectMessages(); }}>
-          <Ionicons name="checkmark-circle-outline" size={18} color="#7A0EED" />
+          <MenuIcon name="checkmark-circle" color="#16A34A" />
           <Text style={hm.itemText}>Select Messages</Text>
+        </TouchableOpacity>
+        <TouchableOpacity style={hm.item} activeOpacity={0.7} onPress={() => { onClose(); onBlockedUsers(); }}>
+          <MenuIcon name="ban" color="#E14C57" />
+          <Text style={hm.itemText}>Blocked Users</Text>
         </TouchableOpacity>
 
         <View style={hm.sectionLabel}>
@@ -123,7 +128,7 @@ function HeaderMenu({ visible, onClose, onSelectMessages, filterMode, onSetFilte
             style={hm.item}
             activeOpacity={0.7}
             onPress={() => { onClose(); onSetFilter(opt.key); }}>
-            <Ionicons name={opt.icon} size={18} color="#7A0EED" />
+            <MenuIcon name={opt.icon} color={opt.color} />
             <Text style={hm.itemText}>{opt.label}</Text>
             {filterMode === opt.key && <Ionicons name="checkmark" size={16} color="#7A0EED" style={hm.itemCheck} />}
           </TouchableOpacity>
@@ -142,24 +147,143 @@ const hm = StyleSheet.create({
     overflow: 'hidden',
     paddingVertical: 4,
   },
-  item: { flexDirection: 'row', alignItems: 'center', gap: 10, paddingHorizontal: 14, paddingVertical: 12 },
+  item: { flexDirection: 'row', alignItems: 'center', gap: 10, paddingHorizontal: 12, paddingVertical: 6 },
   itemText: { flex: 1, fontSize: 14, fontWeight: '600', color: '#1A1730' },
   itemCheck: { marginLeft: 4 },
   sectionLabel: {
     paddingHorizontal: 14, paddingTop: 8, paddingBottom: 2,
     borderTopWidth: StyleSheet.hairlineWidth, borderTopColor: '#F0EDF8', marginTop: 4,
   },
-  sectionLabelText: { fontSize: 10.5, fontWeight: '700', color: '#B5AFC7', letterSpacing: 0.4, textTransform: 'uppercase' },
+  sectionLabelText: { fontSize: 10.5, fontWeight: '700', color: '#B5AFC7', letterSpacing: 0.4, },
+});
+
+// ── Blocked users (⋮ → Blocked Users) ─────────────────────────────────────────
+function BlockedUsersSheet({ visible, onClose, onChanged }: {
+  visible: boolean;
+  onClose: () => void;
+  /** Called after an unblock so the chat list can bring that chat back. */
+  onChanged: () => void;
+}) {
+  const [users, setUsers] = useState<BlockedUser[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [busyId, setBusyId] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (!visible) return;
+    const token = authStore.getToken();
+    if (!token) return;
+    setLoading(true);
+    apiChatBlockedUsers(token).then(r => { if (r.ok) setUsers(r.data); }).finally(() => setLoading(false));
+  }, [visible]);
+
+  const unblock = (u: BlockedUser) => {
+    const name = u.full_name || (u.username ? `@${u.username}` : 'this user');
+    Alert.alert(`Unblock ${name}?`, 'They will be able to message you again.', [
+      { text: 'Cancel', style: 'cancel' },
+      {
+        text: 'Unblock', onPress: async () => {
+          const token = authStore.getToken();
+          if (!token) return;
+          setBusyId(u.id);
+          const r = await apiChatUnblockUser(u.id, token);
+          setBusyId(null);
+          if (!r.ok) { Alert.alert('Could not unblock', r.message); return; }
+          setUsers(prev => prev.filter(x => x.id !== u.id));
+          onChanged();
+        },
+      },
+    ]);
+  };
+
+  if (!visible) return null;
+  return (
+    <Modal visible transparent animationType="slide" onRequestClose={onClose}>
+      <TouchableWithoutFeedback onPress={onClose}>
+        <View style={bu.backdrop} />
+      </TouchableWithoutFeedback>
+      <View style={bu.sheet}>
+        <View style={bu.handle} />
+        <View style={bu.header}>
+          <Text style={bu.title}>Blocked Users</Text>
+          <TouchableOpacity onPress={onClose} hitSlop={8} style={bu.closeBtn}>
+            <Ionicons name="close" size={20} color="#60626A" />
+          </TouchableOpacity>
+        </View>
+        {loading ? (
+          <ActivityIndicator color="#7A0EED" style={{ marginVertical: 40 }} />
+        ) : users.length === 0 ? (
+          <View style={bu.empty}>
+            <Ionicons name="ban-outline" size={40} color="#D0C8F0" />
+            <Text style={bu.emptyText}>You haven&apos;t blocked anyone</Text>
+          </View>
+        ) : (
+          <FlatList
+            data={users}
+            keyExtractor={u => u.id}
+            style={{ maxHeight: 420 }}
+            ItemSeparatorComponent={() => <View style={bu.sep} />}
+            renderItem={({ item }) => {
+              const name = item.full_name || item.username || 'User';
+              const avatar = resolveImageUrl(item.avatar_url);
+              return (
+                <View style={bu.row}>
+                  <Image source={avatarSource(avatar)} style={bu.avatar} />
+                  <View style={{ flex: 1 }}>
+                    <Text style={bu.name} numberOfLines={1}>{name}</Text>
+                    {!!item.username && <Text style={bu.username} numberOfLines={1}>@{item.username}</Text>}
+                  </View>
+                  <TouchableOpacity onPress={() => unblock(item)} disabled={busyId === item.id} activeOpacity={0.8} style={bu.unblockBtn}>
+                    {busyId === item.id
+                      ? <ActivityIndicator size="small" color="#7A0EED" />
+                      : <Text style={bu.unblockText}>Unblock</Text>}
+                  </TouchableOpacity>
+                </View>
+              );
+            }}
+          />
+        )}
+      </View>
+    </Modal>
+  );
+}
+
+const bu = StyleSheet.create({
+  // Transparent — the chat list stays visible; tapping it still closes the sheet
+  backdrop: { ...StyleSheet.absoluteFillObject, backgroundColor: 'transparent' },
+  sheet: {
+    position: 'absolute', left: 0, right: 0, bottom: 0,
+    backgroundColor: '#FFFFFF', borderTopLeftRadius: 24, borderTopRightRadius: 24,
+    paddingHorizontal: 18, paddingTop: 10, paddingBottom: 32,
+    // Lifted off the list by a shadow instead of a dimmed background
+    borderWidth: StyleSheet.hairlineWidth, borderColor: '#ECE8F5',
+    shadowColor: '#1A1730', shadowOpacity: 0.16, shadowRadius: 18, shadowOffset: { width: 0, height: -4 }, elevation: 18,
+  },
+  handle: { alignSelf: 'center', width: 40, height: 4, borderRadius: 2, backgroundColor: '#E0DDED', marginBottom: 10 },
+  header: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: 8 },
+  title: { fontSize: 17, fontWeight: '800', color: '#1A1730' },
+  closeBtn: { width: 32, height: 32, borderRadius: 16, backgroundColor: '#F4F5F8', alignItems: 'center', justifyContent: 'center' },
+  empty: { alignItems: 'center', gap: 10, paddingVertical: 40 },
+  emptyText: { fontSize: 14, color: '#9A94AE', fontWeight: '600' },
+  row: { flexDirection: 'row', alignItems: 'center', gap: 12, paddingVertical: 10 },
+  sep: { height: 1, backgroundColor: '#F4F0FF' },
+  avatar: { width: 44, height: 44, borderRadius: 22 },
+  avatarFallback: { backgroundColor: '#EDE8F7', alignItems: 'center', justifyContent: 'center' },
+  avatarInitial: { fontSize: 17, fontWeight: '700', color: '#7A0EED' },
+  name: { fontSize: 14.5, fontWeight: '700', color: '#1A1730' },
+  username: { fontSize: 12, color: '#9A94AE', marginTop: 1 },
+  unblockBtn: {
+    minWidth: 86, height: 34, borderRadius: 17, paddingHorizontal: 14,
+    borderWidth: 1.5, borderColor: '#7A0EED', alignItems: 'center', justifyContent: 'center',
+  },
+  unblockText: { fontSize: 13, fontWeight: '700', color: '#7A0EED' },
 });
 
 export function ChatListScreen() {
   const router = useRouter();
-  const [tab, setTab] = useState<Tab>('messages');
+  const myUserId = authStore.getUserId();
   const [conversations, setConversations] = useState<ChatConversation[]>([]);
-  const [requests, setRequests] = useState<ChatConversation[]>([]);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
-  const [busyId, setBusyId] = useState<string | null>(null);
 
   const [searchVisible, setSearchVisible] = useState(false);
   const [searchQuery, setSearchQuery] = useState('');
@@ -168,21 +292,21 @@ export function ChatListScreen() {
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
   const [actionSheetTarget, setActionSheetTarget] = useState<ChatConversation | null>(null);
   const [filterMode, setFilterMode] = useState<FilterMode>('all');
+  const [showBlocked, setShowBlocked] = useState(false);
+  const [tab, setTab] = useState<Tab>('messages');
 
   const [onlineMap, setOnlineMap] = useState<Record<string, boolean>>({});
 
   const load = useCallback(async () => {
     const token = authStore.getToken();
     if (!token) return;
-    const [convRes, reqRes] = await Promise.all([
-      apiChatConversations(token),
-      apiChatRequests(token),
-    ]);
+    // Incoming requests are split into the Requests tab below and handled
+    // (Accept / Remove / Block) inside the conversation itself.
+    const convRes = await apiChatConversations(token);
     if (convRes.ok) {
       setConversations(convRes.data);
       convRes.data.forEach(c => chatSocketStore.checkOnline(c.peer_id));
     }
-    if (reqRes.ok) setRequests(reqRes.data);
     setLoading(false);
     setRefreshing(false);
   }, []);
@@ -190,7 +314,7 @@ export function ChatListScreen() {
   useFocusEffect(useCallback(() => { load(); }, [load]));
 
   // Keep the list live while it's open — a new message bumps the peer to the
-  // top, an accept/reject moves them between tabs, and presence updates keep
+  // top, an accept/reject moves it between the tabs, and presence updates keep
   // the online dots current — all without a manual refresh.
   useFocusEffect(useCallback(() => {
     chatSocketStore.connect();
@@ -205,28 +329,6 @@ export function ChatListScreen() {
   }, [load]));
 
   const onRefresh = () => { setRefreshing(true); load(); };
-
-  const handleAccept = async (conversation: ChatConversation) => {
-    const token = authStore.getToken();
-    if (!token) return;
-    setBusyId(conversation.id);
-    const res = await apiChatAcceptConversation(conversation.id, token);
-    setBusyId(null);
-    if (res.ok) {
-      setRequests(prev => prev.filter(r => r.id !== conversation.id));
-      load();
-      router.push(`/chat/${conversation.id}` as any);
-    }
-  };
-
-  const handleReject = async (conversation: ChatConversation) => {
-    const token = authStore.getToken();
-    if (!token) return;
-    setBusyId(conversation.id);
-    const res = await apiChatRejectConversation(conversation.id, token);
-    setBusyId(null);
-    if (res.ok) setRequests(prev => prev.filter(r => r.id !== conversation.id));
-  };
 
   const openConversation = (conversation: ChatConversation) => {
     if (selectMode) {
@@ -307,17 +409,24 @@ export function ChatListScreen() {
     await Promise.all(ids.map(id => apiChatMarkUnread(id, token)));
   }
 
+  const requestCount = useMemo(
+    () => conversations.filter(c => isIncomingChatRequest(c, myUserId)).length,
+    [conversations, myUserId],
+  );
+
   const filteredConversations = useMemo(() => {
     const q = searchQuery.trim().toLowerCase();
     return conversations.filter(c => {
-      if (filterMode === 'unread' && (c.unread_count ?? 0) === 0) return false;
-      if (filterMode === 'read' && (c.unread_count ?? 0) > 0) return false;
+      if (isIncomingChatRequest(c, myUserId) !== (tab === 'requests')) return false;
+      // Read / unread filter belongs to the Messages tab
+      if (tab === 'messages' && filterMode === 'unread' && (c.unread_count ?? 0) === 0) return false;
+      if (tab === 'messages' && filterMode === 'read' && (c.unread_count ?? 0) > 0) return false;
       if (!q) return true;
       const name = (c.peer_name || '').toLowerCase();
       const username = (c.peer_username || '').toLowerCase();
       return name.includes(q) || username.includes(q);
     });
-  }, [conversations, searchQuery, filterMode]);
+  }, [conversations, searchQuery, filterMode, tab, myUserId]);
 
   return (
     <SafeAreaView style={styles.container} edges={['top']}>
@@ -374,8 +483,8 @@ export function ChatListScreen() {
           </TouchableOpacity>
           <TouchableOpacity style={[styles.tab, tab === 'requests' && styles.tabActive]} onPress={() => setTab('requests')} activeOpacity={0.8}>
             <Text style={[styles.tabText, tab === 'requests' && styles.tabTextActive]}>Requests</Text>
-            {requests.length > 0 && (
-              <View style={styles.tabBadge}><Text style={styles.tabBadgeText}>{requests.length}</Text></View>
+            {requestCount > 0 && (
+              <View style={styles.tabBadge}><Text style={styles.tabBadgeText}>{requestCount}</Text></View>
             )}
           </TouchableOpacity>
         </View>
@@ -393,63 +502,41 @@ export function ChatListScreen() {
         </View>
       )}
 
-      {tab === 'messages' ? (
-        <FlatList
-          data={filteredConversations}
-          keyExtractor={(item) => item.id}
-          renderItem={({ item }) => (
-            <ConversationListItem
-              conversation={item}
-              onPress={() => openConversation(item)}
-              onLongPress={() => !selectMode && setActionSheetTarget(item)}
-              selectMode={selectMode}
-              selected={selectedIds.has(item.id)}
-              isOnline={!!onlineMap[item.peer_id]}
+      <FlatList
+        key={tab}
+        data={filteredConversations}
+        keyExtractor={(item) => item.id}
+        renderItem={({ item }) => (
+          <ConversationListItem
+            conversation={item}
+            onPress={() => openConversation(item)}
+            onLongPress={() => !selectMode && setActionSheetTarget(item)}
+            selectMode={selectMode}
+            selected={selectedIds.has(item.id)}
+            isOnline={!!onlineMap[item.peer_id]}
+            isRequest={isIncomingChatRequest(item, myUserId)}
+          />
+        )}
+        refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor="#7A0EED" />}
+        ItemSeparatorComponent={() => <View style={styles.separator} />}
+        ListEmptyComponent={!loading ? (
+          <View style={styles.empty}>
+            <Ionicons
+              name={searchQuery ? 'search-outline' : tab === 'requests' ? 'people-outline' : 'chatbubble-ellipses-outline'}
+              size={48} color="#D0C8F0"
             />
-          )}
-          refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor="#7A0EED" />}
-          ItemSeparatorComponent={() => <View style={styles.separator} />}
-          ListEmptyComponent={!loading ? (
-            <View style={styles.empty}>
-              <Ionicons
-                name={searchQuery ? 'search-outline' : 'chatbubble-ellipses-outline'}
-                size={48} color="#D0C8F0"
-              />
-              <Text style={styles.emptyText}>
-                {searchQuery
-                  ? 'No chats found'
-                  : filterMode === 'unread' ? 'No unread chats'
-                  : filterMode === 'read' ? 'No read chats'
-                  : 'No messages yet'}
-              </Text>
-            </View>
-          ) : null}
-          contentContainerStyle={filteredConversations.length === 0 ? styles.emptyContainer : undefined}
-        />
-      ) : (
-        <FlatList
-          data={requests}
-          keyExtractor={(item) => item.id}
-          renderItem={({ item }) => (
-            <RequestListItem
-              conversation={item}
-              busy={busyId === item.id}
-              onAccept={() => handleAccept(item)}
-              onReject={() => handleReject(item)}
-              onPress={() => openConversation(item)}
-            />
-          )}
-          refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor="#7A0EED" />}
-          ItemSeparatorComponent={() => <View style={styles.separator} />}
-          ListEmptyComponent={!loading ? (
-            <View style={styles.empty}>
-              <Ionicons name="people-outline" size={48} color="#D0C8F0" />
-              <Text style={styles.emptyText}>No message requests</Text>
-            </View>
-          ) : null}
-          contentContainerStyle={requests.length === 0 ? styles.emptyContainer : undefined}
-        />
-      )}
+            <Text style={styles.emptyText}>
+              {searchQuery
+                ? 'No chats found'
+                : tab === 'requests' ? 'No message requests'
+                : filterMode === 'unread' ? 'No unread chats'
+                : filterMode === 'read' ? 'No read chats'
+                : 'No messages yet'}
+            </Text>
+          </View>
+        ) : null}
+        contentContainerStyle={filteredConversations.length === 0 ? styles.emptyContainer : undefined}
+      />
 
       {selectMode && (
         <View style={styles.bulkBar}>
@@ -472,9 +559,12 @@ export function ChatListScreen() {
         visible={headerMenuVisible}
         onClose={() => setHeaderMenuVisible(false)}
         onSelectMessages={() => setSelectMode(true)}
+        onBlockedUsers={() => setShowBlocked(true)}
         filterMode={filterMode}
         onSetFilter={setFilterMode}
       />
+
+      <BlockedUsersSheet visible={showBlocked} onClose={() => setShowBlocked(false)} onChanged={load} />
 
       <ConversationActionSheet
         visible={!!actionSheetTarget}

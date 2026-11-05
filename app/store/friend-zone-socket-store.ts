@@ -1,8 +1,9 @@
 import { AppState, type AppStateStatus } from 'react-native';
 import { io, type Socket } from 'socket.io-client';
 
-import { MEDIA_BASE } from '@/services/api';
+import { MEDIA_BASE, triggerSessionRevoked } from '@/services/api';
 import { authStore } from '@/store/auth-store';
+import { chatroomOwnerStore } from '@/store/chatroom-owner-store';
 
 // Persistent, app-wide socket connection — independent of the room-scoped
 // socket in socket-store.ts. Stays alive across every screen so Friend Zone
@@ -87,6 +88,9 @@ export const friendZoneSocketStore = {
       console.log('[FZ-SOCKET] connect_error:', err.message);
     });
     socket.on('disconnect', (reason) => { state.connected = false; console.log('[FZ-SOCKET] disconnected, reason=', reason); notify(); });
+    // "Log out of all devices" from another device: told live, or refused on reconnect.
+    socket.on('session_revoked', () => triggerSessionRevoked());
+    socket.on('connect_error', (err) => { if (err.message === 'Session revoked') triggerSessionRevoked(); });
 
     socket.on('friend_zone_user_status', ({ userId, isOnline }: { userId: string; isOnline: boolean }) => {
       console.log('[FZ-SOCKET] friend_zone_user_status', userId, isOnline);
@@ -106,6 +110,12 @@ export const friendZoneSocketStore = {
       state.online = data.online;
       state.toggles = data.toggles;
       notify();
+    });
+
+    // Chatroom ownership — the server pushes this on every connect and again
+    // whenever a room is created for this user; cached until logout.
+    socket.on('my_chatroom_status', (data: { hasChatroom: boolean }) => {
+      chatroomOwnerStore.set(data.hasChatroom);
     });
 
     // ── Call signaling ────────────────────────────────────────────────────
@@ -159,6 +169,10 @@ export const friendZoneSocketStore = {
     state.online = {};
     state.toggles = {};
     notify();
+  },
+
+  requestChatroomStatus() {
+    state.socket?.emit('my_chatroom_status_request');
   },
 
   emitToggleUpdate(receiveCalls: boolean, videoCalls: boolean) {

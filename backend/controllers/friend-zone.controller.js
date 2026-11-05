@@ -170,22 +170,10 @@ async function listCalls(req, res, next) {
       limit: parseInt(limit, 10) || 50,
       offset: parseInt(offset, 10) || 0,
     });
-    return res.json({ success: true, data: { calls: result.rows, pagination: { total: result.total } } });
-  } catch (err) { next(err); }
-}
-
-// ── Admin: list all gifts sent during 1:1 calls ───────────────────────────────
-
-async function listCallGifts(req, res, next) {
-  try {
-    const { limit = '50', offset = '0' } = req.query;
-    const result = await friendZoneModel.listCallGifts({
-      limit: parseInt(limit, 10) || 50,
-      offset: parseInt(offset, 10) || 0,
-    });
+    const byType = await friendZoneModel.countCallsByType();
     return res.json({
       success: true,
-      data: { gifts: result.rows, pagination: { total: result.total }, totalCoins: result.totalCoins },
+      data: { calls: result.rows, pagination: { total: result.total }, summary: result.summary, counts: byType },
     });
   } catch (err) { next(err); }
 }
@@ -194,6 +182,11 @@ async function listCallGifts(req, res, next) {
 
 async function getApplication(req, res, next) {
   try {
+    // Non-UUID ids (e.g. a stale /admin/gifts link) would otherwise reach
+    // Postgres as an invalid uuid and surface as a 500.
+    if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(req.params.id)) {
+      return res.status(404).json({ success: false, message: 'Application not found.' });
+    }
     const application = await friendZoneModel.getApplicationById(req.params.id);
     if (!application) return res.status(404).json({ success: false, message: 'Application not found.' });
     return res.json({ success: true, data: application });
@@ -225,5 +218,5 @@ async function updateStatus(req, res, next) {
 
 module.exports = {
   apply, getMyStatus, updateMyApplication, updateMyToggles, getPublicFriends, getCallHistory,
-  listApplications, listCalls, listCallGifts, getApplication, updateStatus,
+  listApplications, listCalls, getApplication, updateStatus,
 };

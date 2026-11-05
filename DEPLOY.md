@@ -105,6 +105,12 @@ JWT_SECRET=REPLACE_WITH_64_CHAR_RANDOM_STRING
 JWT_EXPIRES_IN=7d
 
 ADMIN_SECRET=REPLACE_WITH_YOUR_ADMIN_SECRET
+
+# MSG91 OTP — register + forgot-password SMS. Template must contain ##OTP##
+MSG91_AUTH_KEY=REPLACE_WITH_MSG91_AUTHKEY
+MSG91_OTP_TEMPLATE_ID=REPLACE_WITH_MSG91_TEMPLATE_ID
+# Optional: fixed OTP for the Play reviewer number (never sent by SMS)
+OTP_TEST_NUMBERS=+919999999999:REPLACE_WITH_4_DIGITS
 EOF
 
 # Generate a strong JWT_SECRET (copy the output into .env above)
@@ -112,6 +118,7 @@ node -e "console.log(require('crypto').randomBytes(64).toString('hex'))"
 
 # Run DB migrations (creates all tables)
 npm run db:init
+node database/migrate-all.js
 
 # Start with PM2
 pm2 start server.js --name raralive-api
@@ -281,6 +288,55 @@ scp -r dist/. root@<VPS_IP>:/var/www/raralive/agency/
 
 ---
 
+## PART 11 — LANDING PAGE (raralive.in) + GOOGLE PLAY WEBSITE VERIFICATION
+
+The landing page (`landingpage/`, React + Vite + Tailwind) is served at the root domain.
+It hosts the URLs Google Play Console asks for:
+
+    https://raralive.in/                 → organisation website (Account details)
+    https://raralive.in/privacy-policy   → App content → Privacy policy
+    https://raralive.in/delete-account   → Data safety → Account deletion URL
+    https://raralive.in/child-safety     → App content → Child safety standards
+    https://raralive.in/terms            → Terms of Service
+
+Company name, address, email and phone live in `landingpage/src/company.ts` —
+keep them identical to Play Console → Account details.
+
+1. DNS — add at the registrar:
+
+       A    @      <YOUR_VPS_IP>
+       A    www    <YOUR_VPS_IP>
+
+2. Build & upload (local machine):
+
+   ```bash
+   cd "c:/Users/sivak/Desktop/sowsi/projects/RaraLive/landingpage"
+   npm install
+   npm run build
+   ssh root@<VPS_IP> "mkdir -p /var/www/raralive/landingpage"
+   scp -r dist/. root@<VPS_IP>:/var/www/raralive/landingpage/
+   ```
+
+3. Nginx — copy the `raralive.in www.raralive.in` server block from
+   `raralive.nginx.conf` into `/etc/nginx/sites-available/raralive`, then:
+
+   ```bash
+   nginx -t && systemctl reload nginx
+   certbot --nginx -d raralive.in -d www.raralive.in
+   ```
+
+4. Google Search Console (https://search.google.com/search-console),
+   signed in as tanushinfopvtltd@gmail.com:
+   - Add property → **Domain** → `raralive.in`
+   - Copy the `google-site-verification=...` TXT record → add it at the registrar
+     as a TXT record on `@` → click Verify (can take up to a few hours)
+
+5. Play Console → Account details → Organisation website:
+   - Enter `https://raralive.in` → **Send verification request**
+   - Back in Search Console, approve the request (Settings → Users and permissions / notification)
+
+---
+
 ## CHECKLIST
 
 - [ ] DNS A records added for api, admin, agency
@@ -301,6 +357,9 @@ scp -r dist/. root@<VPS_IP>:/var/www/raralive/agency/
 - [ ] https://api.raralive.in/api/health returns success
 - [ ] https://admin.raralive.in loads
 - [ ] https://agency.raralive.in loads
+- [ ] https://raralive.in landing page loads (+ /privacy-policy, /delete-account, /child-safety)
+- [ ] raralive.in verified in Google Search Console (Domain property)
+- [ ] Play Console organisation website verification request approved
 
 ---
 

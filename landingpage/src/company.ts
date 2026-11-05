@@ -7,15 +7,14 @@ export const COMPANY = {
     'India',
   ],
   email: 'tanushinfopvtltd@gmail.com',
-  phoneHref: 'tel:+919676855851',
 }
 
 export const APP = {
   name: 'Rara Live',
   domain: 'raralive.in',
-  packageId: 'com.sowsitechnologies.raralive',
-  playStoreUrl: 'https://play.google.com/store/apps/details?id=com.sowsitechnologies.raralive',
+  packageId: 'com.tanushssts.raralive',
+  playStoreUrl: 'https://play.google.com/store/apps/details?id=com.tanushssts.raralive',
   minAge: 18,
 }
 
-export const LEGAL_UPDATED = '24 September 2026'
+export const LEGAL_UPDATED = '28 October 2026'

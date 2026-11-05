@@ -1,125 +1,162 @@
 import { Ionicons } from '@expo/vector-icons';
 import { LinearGradient } from 'expo-linear-gradient';
 import { useRouter } from 'expo-router';
-import { Image, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
+import { useEffect, useRef, useState } from 'react';
+import { Alert, Animated, PanResponder, StyleSheet, Text, TouchableOpacity, View, useWindowDimensions } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { agoraStore } from '@/store/agora-store';
 import { roomStore, useMinimizedRoom } from '@/store/room-store';
-import { socketStore } from '@/store/socket-store';
+import { formatRestriction, getActiveRoomId, onJoinBlocked, onKickedFromRoom, socketStore, subscribeSocket, type RoomRestriction } from '@/store/socket-store';
+
+// Floating JOIN bubble for a minimized chat room. Shown only while that room's
+// session is still running in the background (room socket + voice kept alive
+// by the minimize). Tap → back into the same room on the same connection;
+// drag → anywhere on screen. Leaving is done from inside the room (Exit).
+
+const SIZE = 56;
+const EDGE = 8;
+
+// Where the user left the bubble — kept for the app session so it stays put
+// across screens and across separate minimizes.
+let lastPosition: { x: number; y: number } | null = null;
+
+function leaveRoom() {
+  agoraStore.leave();
+  socketStore.leave();
+  roomStore.clear();
+}
 
 export function MiniRoomPlayer() {
   const router = useRouter();
   const insets = useSafeAreaInsets();
+  const { width, height } = useWindowDimensions();
   const minimized = useMinimizedRoom();
 
-  if (!minimized) return null;
+  // Only while the minimized room's socket is still in that room
+  const [activeRoomId, setActiveRoomId] = useState(getActiveRoomId);
+  useEffect(() => subscribeSocket(() => setActiveRoomId(getActiveRoomId())), []);
 
-  const handleExpand = () => {
-    roomStore.clear();
+  // Removed from the room while minimized — end the session and say why
+  useEffect(() => {
+    const end = (message: string, info: RoomRestriction) => {
+      if (!roomStore.getMinimized()) return;
+      leaveRoom();
+      Alert.alert('Chat Room', formatRestriction(message, info.expiresAt));
+    };
+    const unsubKick = onKickedFromRoom(end);
+    const unsubBlock = onJoinBlocked(end);
+    return () => { unsubKick(); unsubBlock(); };
+  }, []);
+
+  // Drag bounds: inside the visible screen, clear of the status bar
+  const bounds = {
+    minX: EDGE,
+    maxX: width - SIZE - EDGE,
+    minY: insets.top + EDGE,
+    maxY: height - SIZE - insets.bottom - EDGE,
+  };
+  const boundsRef = useRef(bounds);
+  boundsRef.current = bounds;
+  const clamp = (x: number, y: number) => {
+    const b = boundsRef.current;
+    return {
+      x: Math.min(Math.max(x, b.minX), b.maxX),
+      y: Math.min(Math.max(y, b.minY), b.maxY),
+    };
+  };
+
+  // First time: bottom-right, just above the tab bar (where the old JOIN button sat)
+  const position = useRef(new Animated.ValueXY(
+    lastPosition ?? clamp(width - SIZE - 20, height - SIZE - insets.bottom - 100),
+  )).current;
+  const current = useRef(lastPosition ?? clamp(width - SIZE - 20, height - SIZE - insets.bottom - 100));
+  const dragStart = useRef(current.current);
+
+  // Screen size changed (rotation, split screen) → pull it back on screen
+  useEffect(() => {
+    const next = clamp(current.current.x, current.current.y);
+    current.current = next;
+    lastPosition = next;
+    position.setValue(next);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [width, height, insets.top, insets.bottom]);
+
+  const panResponder = useRef(PanResponder.create({
+    // Only a real drag takes over — a tap still reaches the buttons
+    onMoveShouldSetPanResponder: (_, g) => Math.abs(g.dx) > 4 || Math.abs(g.dy) > 4,
+    onPanResponderGrant: () => { dragStart.current = current.current; },
+    onPanResponderMove: (_, g) => {
+      const next = clamp(dragStart.current.x + g.dx, dragStart.current.y + g.dy);
+      current.current = next;
+      position.setValue(next);
+    },
+    onPanResponderRelease: () => { lastPosition = current.current; },
+    onPanResponderTerminate: () => { lastPosition = current.current; },
+  })).current;
+
+  if (!minimized || activeRoomId !== minimized.roomId) return null;
+
+  const handleOpen = () => {
+    // Same session: the room socket and voice are still connected, so the
+    // room screen picks its live state straight back up (no new connection).
     router.push({ pathname: '/room/[id]', params: { id: minimized.roomId } });
   };
 
-  const handleClose = () => {
-    agoraStore.leave();
-    socketStore.leave();
-    roomStore.clear();
-  };
-
   return (
-    <View style={[styles.container, { bottom: insets.bottom + 72 }]}>
-      <TouchableOpacity onPress={handleExpand} activeOpacity={0.9} style={styles.pill}>
-        <LinearGradient
-          colors={['#7A0EED', '#B50357']}
-          start={{ x: 0, y: 0 }}
-          end={{ x: 1, y: 0 }}
-          style={styles.gradient}>
-          {/* Avatar */}
-          <View style={styles.avatarWrap}>
-            {minimized.avatarUri ? (
-              <Image source={{ uri: minimized.avatarUri }} style={styles.avatar} />
-            ) : (
-              <View style={[styles.avatar, styles.avatarFallback]}>
-                <Ionicons name="chatbubbles" size={16} color="#FFFFFF" />
-              </View>
-            )}
-            {/* Live pulse dot */}
-            <View style={styles.liveDot} />
-          </View>
-
-          {/* Room name */}
-          <Text style={styles.roomName} numberOfLines={1}>{minimized.roomName}</Text>
-
-          {/* Mic wave icon */}
-          <Ionicons name="radio-outline" size={18} color="rgba(255,255,255,0.8)" />
-
-          {/* Close */}
-          <TouchableOpacity onPress={handleClose} hitSlop={8} style={styles.closeBtn}>
-            <Ionicons name="close" size={16} color="rgba(255,255,255,0.7)" />
-          </TouchableOpacity>
+    <Animated.View
+      {...panResponder.panHandlers}
+      style={[styles.container, { transform: position.getTranslateTransform() }]}>
+      <TouchableOpacity onPress={handleOpen} activeOpacity={0.85} accessibilityLabel={`Rejoin ${minimized.roomName}`}>
+        <LinearGradient colors={['#7A0EED', '#B50357']} start={{ x: 0, y: 0 }} end={{ x: 1, y: 1 }} style={styles.bubble}>
+          <Ionicons name="enter-outline" size={22} color="#FFFFFF" />
+          <Text style={styles.label}>Join</Text>
         </LinearGradient>
+        {/* Room still live in the background */}
+        <View style={styles.liveDot} />
       </TouchableOpacity>
-    </View>
+    </Animated.View>
   );
 }
 
 const styles = StyleSheet.create({
   container: {
     position: 'absolute',
-    left: 16,
-    right: 16,
+    left: 0,
+    top: 0,
+    width: SIZE,
+    height: SIZE,
     zIndex: 999,
   },
-  pill: {
-    borderRadius: 32,
-    overflow: 'hidden',
-    shadowColor: '#7A0EED',
-    shadowOpacity: 0.35,
-    shadowRadius: 12,
-    shadowOffset: { width: 0, height: 4 },
-    elevation: 12,
-  },
-  gradient: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    paddingHorizontal: 12,
-    paddingVertical: 8,
-    gap: 10,
-  },
-  avatarWrap: {
-    position: 'relative',
-  },
-  avatar: {
-    width: 36,
-    height: 36,
-    borderRadius: 18,
-    borderWidth: 2,
-    borderColor: 'rgba(255,255,255,0.4)',
-  },
-  avatarFallback: {
-    backgroundColor: 'rgba(255,255,255,0.2)',
+  bubble: {
+    width: SIZE,
+    height: SIZE,
+    borderRadius: SIZE / 2,
     alignItems: 'center',
     justifyContent: 'center',
+    paddingBottom: 6,
+    elevation: 8,
+    shadowColor: '#7A0EED',
+    shadowOpacity: 0.35,
+    shadowRadius: 8,
+    shadowOffset: { width: 0, height: 3 },
+  },
+  label: {
+    position: 'absolute',
+    bottom: 6,
+    fontSize: 10,
+    fontWeight: '700',
+    color: '#FFFFFF',
   },
   liveDot: {
     position: 'absolute',
-    bottom: 0,
-    right: 0,
-    width: 10,
-    height: 10,
-    borderRadius: 5,
+    bottom: 2,
+    right: 2,
+    width: 12,
+    height: 12,
+    borderRadius: 6,
     backgroundColor: '#22C55E',
     borderWidth: 2,
-    borderColor: '#7A0EED',
-  },
-  roomName: {
-    flex: 1,
-    fontSize: 14,
-    fontWeight: '700',
-    color: '#FFFFFF',
-    letterSpacing: -0.2,
-  },
-  closeBtn: {
-    padding: 2,
+    borderColor: '#FFFFFF',
   },
 });

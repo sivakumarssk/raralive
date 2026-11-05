@@ -2,6 +2,7 @@ import { Ionicons } from '@expo/vector-icons';
 import { useState } from 'react';
 import { Image, ScrollView, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
+import { avatarSource } from '@/utils/default-avatar';
 
 const COIN_IMG = require('@/assets/tabs/coin.png');
 
@@ -50,13 +51,7 @@ function EntryRow({ entry, onPress }: {
 
       <View style={row.topRow}>
         <View style={row.avatarWrap}>
-          {entry.avatarUri ? (
-            <Image source={{ uri: entry.avatarUri }} style={row.avatar} />
-          ) : (
-            <View style={[row.avatar, row.avatarFallback]}>
-              <Text style={row.avatarInitial}>{entry.name[0]?.toUpperCase()}</Text>
-            </View>
-          )}
+          <Image source={avatarSource(entry.avatarUri, entry.gender)} style={row.avatar} />
           {entry.isOnline && <View style={row.onlineDot} />}
         </View>
 

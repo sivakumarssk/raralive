@@ -11,6 +11,7 @@ import {
 } from 'react-native';
 
 import { PhotoCarousel } from '@/components/photo-carousel';
+import { defaultAvatar } from '@/utils/default-avatar';
 
 const ROW_AVATAR_SIZE = 88;
 
@@ -52,6 +53,8 @@ export type MyProfile = {
 };
 
 type FriendZoneScreenProps = {
+  /** Only chatroom owners get the join banner / call toggles — others just see the friends list. */
+  showCreatorOptions?: boolean;
   myProfile: MyProfile;
   onEditProfile?: () => void;
   onJoinPress?: () => void;
@@ -142,9 +145,7 @@ function ProfileHero({
           {coverPhoto ? (
             <Image source={{ uri: coverPhoto }} style={hero.photo} resizeMode="contain" />
           ) : (
-            <View style={[hero.photo, hero.avatarFallback]}>
-              <Text style={hero.avatarInitial}>{profile.name[0]?.toUpperCase()}</Text>
-            </View>
+            <Image source={defaultAvatar(profile.gender)} style={hero.photo} resizeMode="contain" />
           )}
           {profile.isOnline && <View style={hero.onlineDot} />}
         </View>
@@ -228,9 +229,7 @@ function FriendRow({ friend, onAudio, onVideo, onPress }: {
           {photos.length > 0 ? (
             <PhotoCarousel photos={photos} width={ROW_AVATAR_SIZE} height={ROW_AVATAR_SIZE} showDots={false} style={row.avatar} />
           ) : (
-            <View style={[row.avatar, row.avatarFallback]}>
-              <Text style={row.avatarInitial}>{friend.name[0]?.toUpperCase()}</Text>
-            </View>
+            <Image source={defaultAvatar(friend.gender)} style={row.avatar} />
           )}
           {friend.isOnline && <View style={row.onlineDot} />}
         </View>
@@ -269,7 +268,7 @@ function FriendRow({ friend, onAudio, onVideo, onPress }: {
 // ── Main Screen ───────────────────────────────────────────────────────────────
 
 export function FriendZoneScreen({
-  myProfile, onEditProfile, onJoinPress,
+  showCreatorOptions = true, myProfile, onEditProfile, onJoinPress,
   receiveCalls, videoCalls,
   onReceiveCallsToggle, onVideoCallToggle,
   friends, onAudioCall, onVideoCall, onFriendPress, onHistoryPress,
@@ -282,15 +281,17 @@ export function FriendZoneScreen({
       showsVerticalScrollIndicator={false}>
 
       {/* Logged-in user hero */}
-      <ProfileHero
-        profile={myProfile}
-        onEdit={onEditProfile}
-        onJoinPress={onJoinPress}
-        receiveCalls={receiveCalls}
-        videoCalls={videoCalls}
-        onReceiveCallsToggle={onReceiveCallsToggle}
-        onVideoCallToggle={onVideoCallToggle}
-      />
+      {showCreatorOptions && (
+        <ProfileHero
+          profile={myProfile}
+          onEdit={onEditProfile}
+          onJoinPress={onJoinPress}
+          receiveCalls={receiveCalls}
+          videoCalls={videoCalls}
+          onReceiveCallsToggle={onReceiveCallsToggle}
+          onVideoCallToggle={onVideoCallToggle}
+        />
+      )}
 
       {/* Temporary test entry point — jumps straight into the video call
           screen UI (gift bar, chat feed, controls) with no real signaling

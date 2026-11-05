@@ -8,7 +8,7 @@ function mediaUrlFor(req, file) {
 
 /**
  * GET /api/chat/conversations
- * Accepted conversations (+ pending ones I started) — the "Messages" tab.
+ * The single chat list — accepted conversations plus pending requests both ways.
  */
 async function getConversations(req, res, next) {
   try {
@@ -19,7 +19,8 @@ async function getConversations(req, res, next) {
 
 /**
  * GET /api/chat/requests
- * Pending conversations someone else started — the "Requests" tab.
+ * Pending conversations someone else started. The app now shows these inside
+ * the single conversations list; kept for older app builds.
  */
 async function getRequests(req, res, next) {
   try {
@@ -96,6 +97,84 @@ async function rejectConversation(req, res, next) {
       emitToUser(io, peerId, 'chat_request_rejected', { conversationId: id });
     }
 
+    return res.json({ success: true });
+  } catch (error) { next(error); }
+}
+
+// Tell the other person's open chat that they can (no longer) message — it
+// swaps the input for a "You can't send messages" bar in real time.
+function notifyBlockStatus(peerId, conversationId, blocked) {
+  const io = ioInstance.get();
+  if (io && conversationId) emitToUser(io, peerId, 'chat_block_status', { conversationId, blocked });
+}
+
+/**
+ * GET /api/chat/blocks — users I've blocked (chat list ⋮ → Blocked Users).
+ */
+async function getBlockedUsers(req, res, next) {
+  try {
+    const rows = await chatModel.listBlockedUsers(req.user.id);
+    return res.json({ success: true, data: rows });
+  } catch (error) { next(error); }
+}
+
+/**
+ * DELETE /api/chat/blocks/:userId — unblock by user (from the Blocked Users list).
+ */
+async function unblockUserById(req, res, next) {
+  try {
+    const userId = req.user.id;
+    const { userId: blockedId } = req.params;
+    if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(blockedId)) {
+      return res.status(404).json({ success: false, message: 'User not found.' });
+    }
+    await chatModel.unblockUser(userId, blockedId);
+    const conversation = await chatModel.getConversationBetween(userId, blockedId);
+    if (conversation) {
+      await chatModel.unhideForNewMessage(conversation.id, userId);
+      notifyBlockStatus(blockedId, conversation.id, false);
+    }
+    return res.json({ success: true });
+  } catch (error) { next(error); }
+}
+
+/**
+ * POST /api/chat/conversations/:id/block
+ * Blocks the peer: no DMs either way until unblocked, and the conversation
+ * leaves the blocker's list. The blocked user isn't notified.
+ */
+async function blockConversationPeer(req, res, next) {
+  try {
+    const userId = req.user.id;
+    const { id } = req.params;
+    const conversation = await chatModel.getConversationById(id);
+    if (!conversation || (conversation.user_a_id !== userId && conversation.user_b_id !== userId)) {
+      return res.status(404).json({ success: false, message: 'Conversation not found.' });
+    }
+    const peerId = await chatModel.getPeerId(conversation, userId);
+    await chatModel.blockUser(userId, peerId);
+    await chatModel.hideConversation(id, userId);
+    notifyBlockStatus(peerId, id, true);
+    return res.json({ success: true });
+  } catch (error) { next(error); }
+}
+
+/**
+ * DELETE /api/chat/conversations/:id/block
+ * Unblocks the peer and brings the conversation back into the caller's list.
+ */
+async function unblockConversationPeer(req, res, next) {
+  try {
+    const userId = req.user.id;
+    const { id } = req.params;
+    const conversation = await chatModel.getConversationById(id);
+    if (!conversation || (conversation.user_a_id !== userId && conversation.user_b_id !== userId)) {
+      return res.status(404).json({ success: false, message: 'Conversation not found.' });
+    }
+    const peerId = await chatModel.getPeerId(conversation, userId);
+    await chatModel.unblockUser(userId, peerId);
+    await chatModel.unhideForNewMessage(id, userId);
+    notifyBlockStatus(peerId, id, false);
     return res.json({ success: true });
   } catch (error) { next(error); }
 }
@@ -238,6 +317,12 @@ async function sendMediaMessage(req, res, next) {
     if (conversation.user_a_id !== userId && conversation.user_b_id !== userId) {
       return res.status(403).json({ success: false, message: 'Not a participant in this conversation.' });
     }
+    if (conversation.status === 'pending' && conversation.initiated_by !== userId) {
+      return res.status(403).json({ success: false, message: 'Accept the request before replying.' });
+    }
+    if (await chatModel.isBlockedBetween(userId, await chatModel.getPeerId(conversation, userId))) {
+      return res.status(403).json({ success: false, message: "You can't message this user." });
+    }
 
     const message = await chatModel.createMessage({
       conversationId: id,
@@ -270,4 +355,5 @@ module.exports = {
   startConversation, getConversation, acceptConversation, rejectConversation,
   getMessages, markRead, sendMediaMessage,
   pinConversation, unpinConversation, deleteConversation, markUnread,
+  blockConversationPeer, unblockConversationPeer, getBlockedUsers, unblockUserById,
 };

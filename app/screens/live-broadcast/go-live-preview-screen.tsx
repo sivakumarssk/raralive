@@ -15,6 +15,7 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import { StarfieldBackground } from './components/starfield-background';
 import { MEDIA_BASE, apiStartBroadcast } from '@/services/api';
 import { authStore } from '@/store/auth-store';
+import { avatarSource } from '@/utils/default-avatar';
 
 function resolveAvatar(url: string | null | undefined): string | undefined {
   if (!url) return undefined;
@@ -99,13 +100,7 @@ export function GoLivePreviewScreen() {
       <StarfieldBackground />
       <View style={s.avatarCenterWrap}>
         <View style={s.avatarRing}>
-          {resolveAvatar(user?.avatarUrl) ? (
-            <Image source={{ uri: resolveAvatar(user?.avatarUrl) }} style={s.avatarImg} />
-          ) : (
-            <View style={s.avatarInitialWrap}>
-              <Text style={s.avatarInitial}>{(user?.fullName || user?.username || '?')[0]?.toUpperCase()}</Text>
-            </View>
-          )}
+          <Image source={avatarSource(resolveAvatar(user?.avatarUrl), user?.gender)} style={s.avatarImg} />
         </View>
         {!cameraOn && <Text style={s.cameraOffHint}>Camera is off</Text>}
       </View>

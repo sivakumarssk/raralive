@@ -7,12 +7,12 @@ const FEATURES = [
   { icon: '⚔️', title: 'PK battles', text: 'Challenge other hosts to live battles and let your supporters decide the winner.' },
   { icon: '🎁', title: 'Gifts & rewards', text: 'Send animated gifts to your favourite hosts and climb the leaderboards.' },
   { icon: '💬', title: 'Private chat', text: 'Message friends one-to-one and keep the conversation going after the room ends.' },
-  { icon: '🏆', title: 'Levels & badges', text: 'Earn XP, unlock levels and show off your status across the community.' },
+  { icon: '📸', title: 'Photo & video posts', text: 'Share photos and videos to the Home feed, and like, comment on and follow the creators you love.' },
 ]
 
 const SAFETY = [
   { title: 'Report & remove', text: 'Report any user from their profile, and room hosts can remove and block people from their rooms. Our team reviews reports.' },
-  { title: `${APP.minAge}+ only`, text: `${APP.name} is for adults aged ${APP.minAge} and above. Every account is linked to a verified phone number.` },
+  { title: `${APP.minAge}+ only`, text: `${APP.name} is for adults aged ${APP.minAge} and above. Accounts found to belong to minors are removed.` },
   { title: 'Zero tolerance', text: 'Nudity, harassment, hate speech and child exploitation lead to permanent bans.' },
 ]
 

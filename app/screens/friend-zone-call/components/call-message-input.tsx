@@ -1,5 +1,7 @@
 import { useState } from 'react';
-import { Platform, StyleSheet, Text, TextInput, TouchableOpacity, View } from 'react-native';
+import { Platform, StyleSheet, TextInput, View } from 'react-native';
+
+import { SendButton } from '@/components/SendButton';
 
 type Props = {
   onSend: (text: string) => void;
@@ -26,13 +28,7 @@ export function CallMessageInput({ onSend }: Props) {
         returnKeyType="send"
         blurOnSubmit={false}
       />
-      <TouchableOpacity
-        onPress={handleSend}
-        disabled={!text.trim()}
-        style={[s.sendBtn, !text.trim() && s.sendBtnDisabled]}
-        activeOpacity={0.85}>
-        <Text style={s.sendArrow}>➤</Text>
-      </TouchableOpacity>
+      <SendButton onPress={handleSend} disabled={!text.trim()} size={34} />
     </View>
   );
 }
@@ -54,11 +50,4 @@ const s = StyleSheet.create({
     borderWidth: 1,
     borderColor: 'rgba(255,255,255,0.25)',
   },
-  sendBtn: {
-    width: 34, height: 34, borderRadius: 17,
-    backgroundColor: '#7A0EED',
-    alignItems: 'center', justifyContent: 'center',
-  },
-  sendBtnDisabled: { backgroundColor: 'rgba(255,255,255,0.2)' },
-  sendArrow: { fontSize: 13, color: '#FFFFFF' },
 });

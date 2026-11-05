@@ -1,6 +1,6 @@
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import { useEffect, useState } from 'react';
-import { ActivityIndicator, StyleSheet, View } from 'react-native';
+import { ActivityIndicator, Alert, StyleSheet, View } from 'react-native';
 
 import { ChatConversationScreen } from '@/screens/chat/chat-conversation-screen';
 import { apiChatConversation, type ChatConversation } from '@/services/api';
@@ -18,7 +18,7 @@ export default function ChatConversationPage() {
     if (!token) { router.back(); return; }
     apiChatConversation(conversationId, token).then((res) => {
       if (res.ok) setConversation(res.data);
-      else router.back();
+      else { Alert.alert('Could not open chat', res.message); router.back(); }
       setLoading(false);
     });
   }, [conversationId]);

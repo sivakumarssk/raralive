@@ -138,9 +138,11 @@ async function claimReward(req, res, next) {
     if (room_id && (task.reward_bg_url || task.reward_frame_url)) {
       const io = ioInstance.get();
       if (io) {
+        const completedAt = claimed.completed_at ? new Date(claimed.completed_at).getTime() : Date.now();
         io.to(room_id).emit('reward_applied', {
           reward_bg_url: task.reward_bg_url,
           reward_frame_url: task.reward_frame_url,
+          expires_at: new Date(completedAt + 24 * 60 * 60 * 1000).toISOString(),
         });
       }
     }
@@ -201,6 +203,8 @@ async function getActiveReward(req, res, next) {
     return res.json({ success: true, data: row ? {
       reward_bg_url: row.reward_bg_url,
       reward_frame_url: row.reward_frame_url,
+      // Rewards last 24h from completion — the app removes them at this time
+      expires_at: new Date(new Date(row.completed_at).getTime() + 24 * 60 * 60 * 1000).toISOString(),
     } : null });
   } catch (err) { next(err); }
 }

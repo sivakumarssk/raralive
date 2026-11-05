@@ -11,6 +11,8 @@ import {
 } from 'react-native';
 import { MEDIA_BASE } from '@/services/api';
 import type { GiftItem } from '../room-detail.data';
+import { RC } from '../room-ui';
+import { avatarSource } from '@/utils/default-avatar';
 
 const COIN_IMG = require('@/assets/tabs/coin.png');
 
@@ -40,13 +42,7 @@ function resolveImg(url: string | null | undefined) {
 }
 
 function Avatar({ url, name, size = 40 }: { url: string | null; name: string; size?: number }) {
-  const uri = resolveImg(url);
-  if (uri) return <Image source={{ uri }} style={{ width: size, height: size, borderRadius: size / 2 }} />;
-  return (
-    <View style={[s.avatarFallback, { width: size, height: size, borderRadius: size / 2 }]}>
-      <Text style={s.avatarInitial}>{name[0]?.toUpperCase()}</Text>
-    </View>
-  );
+  return <Image source={avatarSource(resolveImg(url))} style={{ width: size, height: size, borderRadius: size / 2 }} />;
 }
 
 export function GiftTargetPicker({ visible, gift, targets, selectedId, onSelect, onSend, onGiftChange, allGifts = [] }: Props) {
@@ -138,7 +134,7 @@ export function GiftTargetPicker({ visible, gift, targets, selectedId, onSelect,
                 <Avatar url={t.avatarUrl} name={t.name} size={42} />
                 {t.isHost && (
                   <View style={s.hostBadge}>
-                    <Text style={s.hostBadgeText}>HOST</Text>
+                    <Text style={s.hostBadgeText}>Host</Text>
                   </View>
                 )}
                 {selected && (
@@ -225,7 +221,7 @@ const s = StyleSheet.create({
   giftName: { fontSize: 13, fontWeight: '700', color: '#1C1E22', maxWidth: 100 },
   coinRow: { flexDirection: 'row', alignItems: 'center', gap: 3, marginTop: 2 },
   coinIcon: { width: 12, height: 12 },
-  coinAmt: { fontSize: 12, fontWeight: '700', color: '#E8944A' },
+  coinAmt: { fontSize: 12, fontWeight: '700', color: RC.number },
 
   // Qty
   qtyRow: {
@@ -241,7 +237,7 @@ const s = StyleSheet.create({
     width: 24, height: 24,
     alignItems: 'center', justifyContent: 'center',
   },
-  qtyLabel: { fontSize: 14, fontWeight: '800', color: '#7A0EED', minWidth: 28, textAlign: 'center' },
+  qtyLabel: { fontSize: 14, fontWeight: '800', color: RC.number, minWidth: 28, textAlign: 'center' },
 
   // Send button
   sendBtn: {
@@ -278,7 +274,7 @@ const s = StyleSheet.create({
     backgroundColor: '#7A0EED',
     borderRadius: 5, paddingHorizontal: 3, paddingVertical: 1,
   },
-  hostBadgeText: { fontSize: 7, fontWeight: '800', color: '#fff' },
+  hostBadgeText: { fontSize: 9, fontWeight: '800', color: '#fff' },
   checkBadge: {
     position: 'absolute', top: -2, right: -2,
     width: 16, height: 16, borderRadius: 8,
@@ -286,7 +282,7 @@ const s = StyleSheet.create({
     alignItems: 'center', justifyContent: 'center',
     borderWidth: 1.5, borderColor: '#fff',
   },
-  targetName: { fontSize: 10, fontWeight: '600', color: '#60626A', textAlign: 'center', maxWidth: 54 },
+  targetName: { fontSize: 11, fontWeight: '600', color: '#60626A', textAlign: 'center', maxWidth: 54 },
   targetNameSelected: { color: '#7A0EED', fontWeight: '700' },
 
   // Gift picker row
@@ -309,5 +305,5 @@ const s = StyleSheet.create({
   giftCellImg: { width: 34, height: 34 },
   giftCellCoin: { flexDirection: 'row', alignItems: 'center', gap: 2 },
   giftCellCoinImg: { width: 10, height: 10 },
-  giftCellCoinText: { fontSize: 10, fontWeight: '700', color: '#1C1E22' },
+  giftCellCoinText: { fontSize: 11, fontWeight: '700', color: RC.number },
 });

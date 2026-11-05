@@ -13,10 +13,18 @@ const shopGiftRoutes = require('./shop-gift.routes');
 const taskRoutes = require('./task.routes');
 const postRoutes = require('./post.routes');
 const battleRoutes = require('./battle.routes');
+const battleTargetRoutes = require('./battle-target.routes');
 const bannerRoutes = require('./banner.routes');
+const stageBgRoutes = require('./stage-bg.routes');
+const supportRoutes = require('./support.routes');
+const reportsRoutes = require('./reports.routes');
 const friendZoneRoutes = require('./friend-zone.routes');
 const chatRoutes = require('./chat.routes');
 const goLiveRoutes = require('./go-live.routes');
+const agencyWalletRoutes = require('./agency-wallet.routes');
+const agencyPortalRoutes = require('./agency-portal.routes');
+const locationRoutes = require('./location.routes');
+const postTagRoutes = require('./post-tag.routes');
 
 const router = express.Router();
 
@@ -48,9 +56,17 @@ router.use('/shop-gifts', shopGiftRoutes);
 router.use('/tasks', taskRoutes);
 router.use('/posts', postRoutes);
 router.use('/battle', battleRoutes);
+router.use('/battle-targets', battleTargetRoutes);
 router.use('/banners', bannerRoutes);
+router.use('/stage-backgrounds', stageBgRoutes);
+router.use('/support', supportRoutes);
+router.use('/reports', reportsRoutes);
 router.use('/friend-zone', friendZoneRoutes);
 router.use('/chat', chatRoutes);
 router.use('/go-live', goLiveRoutes);
+router.use('/agency-wallet', agencyWalletRoutes);
+router.use('/agency-portal', agencyPortalRoutes);
+router.use('/locations', locationRoutes);
+router.use('/post-tags', postTagRoutes);
 
 module.exports = router;

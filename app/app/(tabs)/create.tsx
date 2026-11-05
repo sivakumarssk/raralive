@@ -26,6 +26,7 @@ export default function CreateTab() {
 
   return (
     <CreateScreen
+      initialSelected={selected}
       onNext={(assets) => {
         setSelected(assets);
         setStep('compose');

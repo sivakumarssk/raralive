@@ -2,6 +2,7 @@ import { io, type Socket } from 'socket.io-client';
 
 import { BASE_URL, MEDIA_BASE } from '@/services/api';
 import { authStore } from '@/store/auth-store';
+import { speakingStore } from '@/store/speaking-store';
 import { getUserLevel } from '@/utils/userLevel';
 import type { ChatMessage } from '@/screens/room-detail/room-detail.data';
 import type { SeatSlot, HostStatus, IncomingSeatRequest, SeatRequestResult } from '@/hooks/useRoomSocket';
@@ -11,6 +12,69 @@ export type IncomingStageInvite = {
   hostSocketId: string;
   hostName: string;
   hostAvatarUrl: string | null;
+};
+
+/** Room header data (GET /rooms/:id shape) — pushed by the server on join_room. */
+export type RoomInfoSnapshot = { id: string; [key: string]: unknown };
+
+/** A running battle, as the server sends it (battle_invites row + room names). */
+export type ActiveBattle = {
+  id: string;
+  status: string;
+  from_room_id: string;
+  to_room_id: string;
+  from_user_id: string;
+  to_user_id: string;
+  from_room_name: string;
+  from_room_image_url: string | null;
+  to_room_name: string;
+  to_room_image_url: string | null;
+  started_at: string | null;
+  duration_minutes: number;
+  mode?: 'normal' | 'gifting';
+  from_host_name?: string | null;
+  from_host_username?: string | null;
+  to_host_name?: string | null;
+  to_host_username?: string | null;
+};
+
+export type BattleGifter = {
+  id: string;
+  full_name: string | null;
+  username: string | null;
+  avatar_url: string | null;
+  total_coins: number;
+};
+
+export type BattleResultSide = {
+  room_id: string;
+  room_name: string;
+  room_image_url: string | null;
+  host_user_id: string;
+  host_name: string | null;
+  score: number;
+  /** Top 3 supporters, highest first */
+  supporters: BattleGifter[];
+};
+
+/** Final battle result (battle_ended) — sent when a battle is cancelled or its time runs out. winner null = draw. */
+export type BattleResult = {
+  invite_id: string;
+  /** 'cancelled' (a host ended it) or 'time_up' (the timer ran out) */
+  reason: 'cancelled' | 'time_up' | string;
+  ended_by: string | null;
+  winner: 'from' | 'to' | null;
+  from: BattleResultSide;
+  to: BattleResultSide;
+  /** Built on this device from the last confirmed scores while the server confirms. */
+  provisional?: boolean;
+};
+
+/** left = from_room, right = to_room (server convention). */
+export type BattleState = {
+  battle: ActiveBattle | null;
+  gifters: { left: BattleGifter[]; right: BattleGifter[] };
+  scores: { left: number; right: number } | null;
 };
 
 type SocketState = {
@@ -26,6 +90,7 @@ type SocketState = {
   incomingStageInvite: IncomingStageInvite | null;
   roomLevel: number;
   myCoinsSpent: number;
+  roomInfo: RoomInfoSnapshot | null;
 };
 
 const state: SocketState = {
@@ -41,7 +106,146 @@ const state: SocketState = {
   incomingStageInvite: null,
   roomLevel: 0,
   myCoinsSpent: 0,
+  roomInfo: null,
 };
+
+const EMPTY_BATTLE: BattleState = { battle: null, gifters: { left: [], right: [] }, scores: null };
+// Replaced (never mutated) on change, so subscribers can skip re-rendering
+// when the battle hasn't changed.
+let battleState: BattleState = EMPTY_BATTLE;
+let battleExpiryTimer: ReturnType<typeof setTimeout> | null = null;
+
+export function getBattleEndsAt(battle: ActiveBattle): number | null {
+  if (!battle.started_at) return null;
+  return new Date(battle.started_at).getTime() + (battle.duration_minutes ?? 0) * 60_000;
+}
+
+export function getBattleState(): BattleState { return battleState; }
+
+// Result of the battle that just ended in this room, until dismissed.
+let battleResult: BattleResult | null = null;
+export function getBattleResult(): BattleResult | null { return battleResult; }
+
+// Battle score shown = the server's confirmed totals + this user's own gifts
+// that are still on their way. A sent gift adds to the score the instant it's
+// tapped; the server's battle_scores that first includes it carries its
+// client_gift_id, and the pending entry is removed in that same update — so
+// it's counted once, never twice and never dropped. A failed gift (gift_error)
+// takes its pending amount back out.
+type PendingGift = { inviteId: string; side: 'left' | 'right'; coins: number; timer: ReturnType<typeof setTimeout> };
+const pendingGifts = new Map<string, PendingGift>();
+// Only if the server never answers (lost connection) — a reconnect re-sends battle_state.
+const PENDING_GIFT_TIMEOUT_MS = 20_000;
+let serverScores: { left: number; right: number } | null = null;
+let serverSeq = -1;   // seq of the totals in serverScores — older updates are ignored
+let giftersSeq = -1;
+
+function clearPendingGifts() {
+  pendingGifts.forEach(g => clearTimeout(g.timer));
+  pendingGifts.clear();
+}
+
+function settlePendingGift(clientGiftId: string | null | undefined): boolean {
+  const g = clientGiftId ? pendingGifts.get(clientGiftId) : undefined;
+  if (!g) return false;
+  clearTimeout(g.timer);
+  pendingGifts.delete(clientGiftId!);
+  return true;
+}
+
+/** Recompute the displayed scores (confirmed + pending) into a new battleState. */
+function publishScores() {
+  const battle = battleState.battle;
+  if (!battle) return;
+  let left = serverScores?.left ?? 0;
+  let right = serverScores?.right ?? 0;
+  let hasPending = false;
+  pendingGifts.forEach(g => {
+    if (g.inviteId !== battle.id) return;
+    hasPending = true;
+    if (g.side === 'left') left += g.coins; else right += g.coins;
+  });
+  battleState = { ...battleState, scores: serverScores || hasPending ? { left, right } : null };
+}
+
+function setBattle(
+  battle: ActiveBattle | null,
+  gifters = EMPTY_BATTLE.gifters,
+  scores: BattleState['scores'] = null,
+  seq = -1,
+) {
+  if (battleExpiryTimer) { clearTimeout(battleExpiryTimer); battleExpiryTimer = null; }
+  const endsAt = battle ? getBattleEndsAt(battle) : null;
+  const valid = !!battle && battle.status === 'active'
+    && (battle.from_room_id === state.roomId || battle.to_room_id === state.roomId)
+    && endsAt !== null && endsAt > Date.now();
+  // A fresh snapshot already holds every gift the server has counted
+  clearPendingGifts();
+  serverScores = valid ? scores : null;
+  serverSeq = valid ? seq : -1;
+  giftersSeq = serverSeq;
+  battleState = valid ? { battle, gifters, scores } : EMPTY_BATTLE;
+  // Drop the battle once its time is up. Re-armed in ≤30s steps — RN warns
+  // about (and Android may not honour) single long timers.
+  if (valid) {
+    const check = () => {
+      const left = endsAt! - Date.now();
+      if (left <= 0) { battleExpiryTimer = null; setBattle(null); return; }
+      battleExpiryTimer = setTimeout(check, Math.min(left, 30_000));
+    };
+    check();
+  }
+  notify();
+}
+
+// Last-known header data per room — seeded from the room list so a room's
+// name/image/level render the moment it opens, refreshed by room_info.
+const roomInfoCache = new Map<string, RoomInfoSnapshot>();
+export function primeRoomInfo(room: RoomInfoSnapshot) {
+  roomInfoCache.set(room.id, { ...roomInfoCache.get(room.id), ...room });
+}
+export function getCachedRoomInfo(roomId: string): RoomInfoSnapshot | null {
+  return roomInfoCache.get(roomId) ?? null;
+}
+
+// A connected-but-not-joined socket opened ahead of time (from the room list),
+// so tapping a room only has to send join_room instead of first doing the
+// whole websocket + auth handshake.
+let spare: { socket: Socket; token: string } | null = null;
+
+function openSocket(token: string): Socket {
+  return io(MEDIA_BASE, { auth: { token }, transports: ['websocket'] });
+}
+
+function takeSpare(token: string): Socket | null {
+  const s = spare;
+  spare = null;
+  if (!s) return null;
+  // Stale login, or the server refused it (auth errors don't auto-retry)
+  if (s.token !== token || !s.socket.active) { s.socket.disconnect(); return null; }
+  return s.socket;
+}
+
+function resetRoomState() {
+  speakingStore.clear();
+  state.roomId = null;
+  state.messages = [];
+  state.onlineCount = 0;
+  state.connected = false;
+  state.seats = [];
+  state.hostStatus = { isOnline: false, userName: 'Host', avatarUrl: null };
+  state.incomingRequest = null;
+  state.seatRequestResult = null;
+  state.incomingStageInvite = null;
+  state.roomInfo = null;
+  if (battleExpiryTimer) { clearTimeout(battleExpiryTimer); battleExpiryTimer = null; }
+  clearPendingGifts();
+  serverScores = null;
+  serverSeq = -1;
+  giftersSeq = -1;
+  battleState = EMPTY_BATTLE;
+  battleResult = null;
+}
 
 const listeners = new Set<() => void>();
 function notify() { listeners.forEach(fn => fn()); }
@@ -51,12 +255,36 @@ const coinsGiftedListeners = new Set<(coinsGifted: number) => void>();
 const giftErrorListeners = new Set<(message: string) => void>();
 // Fired only for gifts arriving live (chat_message), never for chat_history replays.
 const liveGiftListeners = new Set<(msg: ChatMessage) => void>();
-const joinBlockedListeners = new Set<(message: string) => void>();
-const kickedListeners = new Set<(message: string) => void>();
+// Someone entered the room — shown as a short welcome toast, not a chat line.
+const userJoinedListeners = new Set<(msg: ChatMessage) => void>();
+/** Why a room refused / removed us. kind: 'user_ban' | 'room_ban' | 'room_block'. */
+export type RoomRestriction = { kind?: string; expiresAt?: string | null };
+const joinBlockedListeners = new Set<(message: string, info: RoomRestriction) => void>();
+const kickedListeners = new Set<(message: string, info: RoomRestriction) => void>();
+
+/**
+ * The server's restriction message, with when access comes back for a 24h ban
+ * — e.g. "Your ID is banned for 24 hours" + "Access returns Oct 23, 10:30 PM".
+ */
+export function formatRestriction(message: string, expiresAt?: string | null): string {
+  if (!expiresAt) return message;
+  const d = new Date(expiresAt);
+  if (Number.isNaN(d.getTime())) return message;
+  const when = d.toLocaleString('en-IN', { day: 'numeric', month: 'short', hour: 'numeric', minute: '2-digit' });
+  return `${message}\n\nAccess returns ${when}`;
+}
 const reopenBattleListeners = new Set<() => void>();
 const levelUpListeners = new Set<(level: number) => void>();
 const taskCompletedListeners = new Set<(data: { task_id: string; title: string; reward_bg_url: string | null; reward_frame_url: string | null }) => void>();
-const rewardAppliedListeners = new Set<(data: { reward_bg_url: string | null; reward_frame_url: string | null; completed_by?: string; task_title?: string }) => void>();
+/** Daily task reward visuals for the room; expires_at = when they're removed (24h after completion). */
+export type RewardAppliedPayload = {
+  reward_bg_url: string | null;
+  reward_frame_url: string | null;
+  completed_by?: string;
+  task_title?: string;
+  expires_at?: string | null;
+};
+const rewardAppliedListeners = new Set<(data: RewardAppliedPayload) => void>();
 
 export type BattleInvitePayload = {
   invite_id: string;
@@ -65,19 +293,22 @@ export type BattleInvitePayload = {
   from_room_image_url: string | null;
   duration_minutes: number;
 };
+export type BattleInviteAcceptedPayload = { invite_id: string; to_room_name: string; battle?: ActiveBattle };
+export type BattleStartedPayload = { invite_id: string; from_room_id: string; to_room_id: string; battle?: ActiveBattle };
 const battleInviteListeners = new Set<(data: BattleInvitePayload) => void>();
-const battleInviteAcceptedListeners = new Set<(data: { invite_id: string; to_room_name: string }) => void>();
+const battleInviteAcceptedListeners = new Set<(data: BattleInviteAcceptedPayload) => void>();
 const battleInviteDeclinedListeners = new Set<(data: { invite_id: string; to_room_name: string }) => void>();
 const battleInviteCancelledListeners = new Set<(data: { invite_id: string; from_room_name: string }) => void>();
 const battleScoresListeners = new Set<(data: { invite_id: string; left: number; right: number }) => void>();
-const battleStartedListeners = new Set<(data: { invite_id: string; from_room_id: string; to_room_id: string }) => void>();
+const battleStartedListeners = new Set<(data: BattleStartedPayload) => void>();
 const removedFromStageListeners = new Set<() => void>();
 const forcedMuteListeners = new Set<(isMuted: boolean) => void>();
 const broadcastLikesListeners = new Set<(likesCount: number) => void>();
 const broadcastLikeStateListeners = new Set<(liked: boolean) => void>();
 const pinnedCommentListeners = new Set<(messageId: string | null) => void>();
 const commentDeletedListeners = new Set<(messageId: string) => void>();
-const reportCommentResultListeners = new Set<(ok: boolean) => void>();
+export type ReportResult = { duplicate?: boolean; message?: string };
+const reportCommentResultListeners = new Set<(ok: boolean, info: ReportResult) => void>();
 
 export function onWalletUpdate(fn: (coins: number) => void) {
   walletBalanceListeners.add(fn);
@@ -92,15 +323,20 @@ export function onGiftError(fn: (message: string) => void) {
   giftErrorListeners.add(fn);
   return () => { giftErrorListeners.delete(fn); };
 }
+export function onUserJoined(fn: (msg: ChatMessage) => void) {
+  userJoinedListeners.add(fn);
+  return () => { userJoinedListeners.delete(fn); };
+}
+
 export function onLiveGift(fn: (msg: ChatMessage) => void) {
   liveGiftListeners.add(fn);
   return () => { liveGiftListeners.delete(fn); };
 }
-export function onJoinBlocked(fn: (message: string) => void) {
+export function onJoinBlocked(fn: (message: string, info: RoomRestriction) => void) {
   joinBlockedListeners.add(fn);
   return () => { joinBlockedListeners.delete(fn); };
 }
-export function onKickedFromRoom(fn: (message: string) => void) {
+export function onKickedFromRoom(fn: (message: string, info: RoomRestriction) => void) {
   kickedListeners.add(fn);
   return () => { kickedListeners.delete(fn); };
 }
@@ -119,7 +355,7 @@ export function onTaskCompleted(fn: (data: { task_id: string; title: string; rew
   taskCompletedListeners.add(fn);
   return () => { taskCompletedListeners.delete(fn); };
 }
-export function onRewardApplied(fn: (data: { reward_bg_url: string | null; reward_frame_url: string | null; completed_by?: string; task_title?: string }) => void) {
+export function onRewardApplied(fn: (data: RewardAppliedPayload) => void) {
   rewardAppliedListeners.add(fn);
   return () => { rewardAppliedListeners.delete(fn); };
 }
@@ -127,7 +363,7 @@ export function onBattleInvite(fn: (data: BattleInvitePayload) => void) {
   battleInviteListeners.add(fn);
   return () => { battleInviteListeners.delete(fn); };
 }
-export function onBattleInviteAccepted(fn: (data: { invite_id: string; to_room_name: string }) => void) {
+export function onBattleInviteAccepted(fn: (data: BattleInviteAcceptedPayload) => void) {
   battleInviteAcceptedListeners.add(fn);
   return () => { battleInviteAcceptedListeners.delete(fn); };
 }
@@ -143,7 +379,7 @@ export function onBattleScores(fn: (data: { invite_id: string; left: number; rig
   battleScoresListeners.add(fn);
   return () => { battleScoresListeners.delete(fn); };
 }
-export function onBattleStarted(fn: (data: { invite_id: string; from_room_id: string; to_room_id: string }) => void) {
+export function onBattleStarted(fn: (data: BattleStartedPayload) => void) {
   battleStartedListeners.add(fn);
   return () => { battleStartedListeners.delete(fn); };
 }
@@ -171,7 +407,7 @@ export function onCommentDeleted(fn: (messageId: string) => void) {
   commentDeletedListeners.add(fn);
   return () => { commentDeletedListeners.delete(fn); };
 }
-export function onReportCommentResult(fn: (ok: boolean) => void) {
+export function onReportCommentResult(fn: (ok: boolean, info: ReportResult) => void) {
   reportCommentResultListeners.add(fn);
   return () => { reportCommentResultListeners.delete(fn); };
 }
@@ -261,16 +497,38 @@ export function subscribeSocket(fn: () => void): () => void {
   return () => { listeners.delete(fn); };
 }
 
+/** The room the room socket is in (null when none) — cheap, no state copy. */
+export function getActiveRoomId(): string | null {
+  return state.roomId;
+}
+
 export function getSocketState(): SocketState {
   return { ...state, messages: [...state.messages], seats: [...state.seats] };
 }
 
 export const socketStore = {
+  /** "Refresh Room": re-sync chat, seats and host status without re-joining. */
+  refreshRoom(roomId: string) {
+    if (state.roomId !== roomId || !state.socket) return;
+    if (state.socket.connected) state.socket.emit('refresh_room', { roomId });
+    else state.socket.connect(); // reconnect re-joins and re-sends everything
+  },
+
   requestRoomState(roomId: string) {
-    // Re-request room state without rejoining — triggers server to re-broadcast host_status, seats, online_count
+    // Re-request room state without rejoining — the server re-sends seats,
+    // host status, chat, battle and room info (no join notice / toast).
     if (state.socket?.connected && state.roomId === roomId) {
-      state.socket.emit('join_room', { roomId });
+      state.socket.emit('refresh_room', { roomId });
     }
+  },
+
+  /** Open a socket ahead of time so the next join() skips the handshake. */
+  prewarm() {
+    const token = authStore.getToken();
+    if (spare && spare.token === token && spare.socket.active) return;
+    if (spare) { spare.socket.disconnect(); spare = null; }
+    if (!token) return;
+    spare = { socket: openSocket(token), token };
   },
 
   join(roomId: string) {
@@ -282,36 +540,41 @@ export const socketStore = {
       state.socket.disconnect();
       state.socket = null;
     }
+    // Switching straight to another room (e.g. the battle opponent's) —
+    // don't show the previous room's chat/seats/battle while the new one loads.
+    if (state.roomId !== roomId) resetRoomState();
 
     const token = authStore.getToken();
     if (!token) return;
 
-    const socket = io(MEDIA_BASE, {
-      auth: { token },
-      transports: ['websocket'],
-    });
+    const socket = takeSpare(token) ?? openSocket(token);
 
     state.socket = socket;
     state.roomId = roomId;
 
-    socket.on('connect', () => {
+    // Cached header data (room list / last visit) until room_info arrives
+    state.roomInfo = roomInfoCache.get(roomId) ?? null;
+
+    const onConnect = () => {
       state.connected = true;
       socket.emit('join_room', { roomId });
       fetchMyCoinsSpent();
       notify();
-    });
+    };
+    socket.on('connect', onConnect);
 
     socket.on('disconnect', () => {
       state.connected = false;
       notify();
     });
 
-    socket.on('join_blocked', ({ message }: { message: string }) => {
-      joinBlockedListeners.forEach(fn => fn(message));
+    // Entry refused: blocked by the host, or a 24h report ban (ID or room)
+    socket.on('join_blocked', ({ message, kind, expiresAt }: { message: string; kind?: string; expiresAt?: string | null }) => {
+      joinBlockedListeners.forEach(fn => fn(message, { kind, expiresAt }));
     });
 
-    socket.on('kicked_from_room', ({ message }: { message: string }) => {
-      kickedListeners.forEach(fn => fn(message));
+    socket.on('kicked_from_room', ({ message, kind, expiresAt }: { message: string; kind?: string; expiresAt?: string | null }) => {
+      kickedListeners.forEach(fn => fn(message, { kind, expiresAt }));
     });
 
     socket.on('chat_history', (history: ChatMessage[]) => {
@@ -319,6 +582,8 @@ export const socketStore = {
       // Deduplicate by ID
       const seen = new Set<string>();
       state.messages = resolved.filter(m => {
+        // Join notices are transient (welcome toast) — never kept in the feed
+        if (m.type === 'join') return false;
         if (!m.id || seen.has(m.id)) return false;
         seen.add(m.id);
         return true;
@@ -336,6 +601,10 @@ export const socketStore = {
       if (msg.id && state.messages.some(m => m.id === msg.id)) return;
 
       let resolved = resolveMessageAvatar(msg);
+      if (resolved.type === 'join') {
+        userJoinedListeners.forEach(fn => fn(resolved));
+        return;
+      }
       const myId = authStore.getUserId();
       const myUser = authStore.getUser();
       const myNames = [myUser?.fullName, myUser?.username].filter(Boolean);
@@ -360,8 +629,16 @@ export const socketStore = {
       setMyCoinsSpent(coins_spent);
     });
 
-    socket.on('gift_error', ({ message }: { message: string }) => {
+    socket.on('gift_error', ({ message, client_gift_id }: { message: string; client_gift_id?: string | null }) => {
+      // Not paid for — take its optimistic battle score back out
+      if (settlePendingGift(client_gift_id)) { publishScores(); notify(); }
       giftErrorListeners.forEach(fn => fn(message));
+    });
+
+    // Server finished with one of our gifts. Normally battle_scores already
+    // settled it; this covers a gift that wasn't counted (e.g. battle just ended).
+    socket.on('gift_ack', ({ client_gift_id }: { client_gift_id: string }) => {
+      if (settlePendingGift(client_gift_id)) { publishScores(); notify(); }
     });
 
     socket.on('room_level_up', ({ level }: { level: number }) => {
@@ -375,7 +652,7 @@ export const socketStore = {
       taskCompletedListeners.forEach(fn => fn(data));
     });
 
-    socket.on('reward_applied', (data: { reward_bg_url: string | null; reward_frame_url: string | null; completed_by?: string; task_title?: string }) => {
+    socket.on('reward_applied', (data: RewardAppliedPayload) => {
       rewardAppliedListeners.forEach(fn => fn(data));
     });
 
@@ -383,7 +660,7 @@ export const socketStore = {
       battleInviteListeners.forEach(fn => fn(data));
     });
 
-    socket.on('battle_invite_accepted', (data: { invite_id: string; to_room_name: string }) => {
+    socket.on('battle_invite_accepted', (data: BattleInviteAcceptedPayload) => {
       battleInviteAcceptedListeners.forEach(fn => fn(data));
     });
 
@@ -395,12 +672,57 @@ export const socketStore = {
       battleInviteCancelledListeners.forEach(fn => fn(data));
     });
 
-    socket.on('battle_scores', (data: { invite_id: string; left: number; right: number }) => {
+    // Sent the moment any gift in either battle room is paid for. Totals are
+    // cumulative; client_gift_id names the gift that produced this update.
+    socket.on('battle_scores', (data: { invite_id: string; left: number; right: number; seq?: number; client_gift_id?: string | null }) => {
+      if (battleState.battle?.id === data.invite_id) {
+        // These totals include our pending gift → swap it for the confirmed
+        // amount in one step, so the score never dips or double-counts.
+        const settled = settlePendingGift(data.client_gift_id);
+        const fresh = data.seq == null || data.seq >= serverSeq;
+        if (fresh) {
+          serverScores = { left: data.left, right: data.right };
+          if (data.seq != null) serverSeq = data.seq;
+        }
+        if (fresh || settled) { publishScores(); notify(); }
+      }
       battleScoresListeners.forEach(fn => fn(data));
     });
 
-    socket.on('battle_started', (data: { invite_id: string; from_room_id: string; to_room_id: string }) => {
+    socket.on('battle_gifters', (data: { invite_id: string; left: BattleGifter[]; right: BattleGifter[]; seq?: number }) => {
+      if (battleState.battle?.id !== data.invite_id) return;
+      if (data.seq != null) {
+        if (data.seq < giftersSeq) return;
+        giftersSeq = data.seq;
+      }
+      battleState = { ...battleState, gifters: { left: data.left ?? [], right: data.right ?? [] } };
+      notify();
+    });
+
+    // Snapshot sent with join_room / refresh_room: the room's running battle or null
+    socket.on('battle_state', (data: { roomId: string; battle: ActiveBattle | null; gifters?: BattleState['gifters']; scores?: BattleState['scores']; seq?: number }) => {
+      if (data.roomId !== state.roomId) return;
+      setBattle(data.battle, data.gifters ?? EMPTY_BATTLE.gifters, data.scores ?? null, data.seq ?? -1);
+    });
+
+    socket.on('battle_started', (data: BattleStartedPayload) => {
+      if (data.battle) setBattle(data.battle);
       battleStartedListeners.forEach(fn => fn(data));
+    });
+
+    // A battle involving this room was cancelled — close it and show the result.
+    socket.on('battle_ended', (result: BattleResult) => {
+      if (result.from?.room_id !== state.roomId && result.to?.room_id !== state.roomId) return;
+      if (battleState.battle?.id === result.invite_id) setBattle(null);
+      battleResult = { ...result, provisional: false };
+      notify();
+    });
+
+    socket.on('room_info', (info: RoomInfoSnapshot) => {
+      if (!info?.id || info.id !== state.roomId) return;
+      primeRoomInfo(info);
+      state.roomInfo = roomInfoCache.get(info.id) ?? info;
+      notify();
     });
 
     socket.on('online_count', ({ count }: { count: number }) => {
@@ -453,15 +775,23 @@ export const socketStore = {
       pinnedCommentListeners.forEach(fn => fn(messageId));
     });
 
+    socket.on('speaking_level', ({ userId, level }: { userId: string; level: number }) => {
+      if (userId) speakingStore.setLevel(userId, level);
+    });
+
     socket.on('comment_deleted', ({ messageId }: { roomId: string; messageId: string }) => {
       state.messages = state.messages.filter(m => m.id !== messageId);
       notify();
       commentDeletedListeners.forEach(fn => fn(messageId));
     });
 
-    socket.on('report_comment_result', ({ ok }: { ok: boolean }) => {
-      reportCommentResultListeners.forEach(fn => fn(ok));
+    socket.on('report_comment_result', ({ ok, duplicate, message }: { ok: boolean; duplicate?: boolean; message?: string }) => {
+      reportCommentResultListeners.forEach(fn => fn(ok, { duplicate, message }));
     });
+
+    // A pre-warmed socket has already fired 'connect' — join right away.
+    if (socket.connected) onConnect();
+    else notify();
   },
 
   leave() {
@@ -469,16 +799,17 @@ export const socketStore = {
       state.socket.disconnect();
       state.socket = null;
     }
-    state.roomId = null;
-    state.messages = [];
-    state.onlineCount = 0;
-    state.connected = false;
-    state.seats = [];
-    state.hostStatus = { isOnline: false, userName: 'Host', avatarUrl: null };
-    state.incomingRequest = null;
-    state.seatRequestResult = null;
-    state.incomingStageInvite = null;
+    resetRoomState();
     notify();
+    // Ready for the next room (no-op once logged out — also drops a stale spare)
+    socketStore.prewarm();
+  },
+
+  /** Own mic level for the stage voice waves (sent only while on a seat). */
+  emitSpeakingLevel(level: number) {
+    const roomId = state.roomId;
+    if (!roomId || !state.socket?.connected) return;
+    state.socket.emit('speaking_level', { roomId, level });
   },
 
   emitMuteState(isMuted: boolean) {
@@ -515,6 +846,31 @@ export const socketStore = {
 
   sendMessage(roomId: string, text: string) {
     state.socket?.emit('send_message', { roomId, text });
+  },
+
+  /**
+   * Send an encoded gift message. During a battle the gift's coins are added
+   * to this room's battle score immediately (see pendingGifts) and swapped for
+   * the server's confirmed total when it arrives.
+   */
+  sendGift(roomId: string, text: string, coins: number) {
+    if (!state.socket) return;
+    const clientGiftId = `${Date.now().toString(36)}${Math.random().toString(36).slice(2, 10)}`;
+    const battle = battleState.battle;
+    if (battle && state.roomId === roomId && coins > 0) {
+      const timer = setTimeout(() => {
+        if (settlePendingGift(clientGiftId)) { publishScores(); notify(); }
+      }, PENDING_GIFT_TIMEOUT_MS);
+      pendingGifts.set(clientGiftId, {
+        inviteId: battle.id,
+        side: roomId === battle.from_room_id ? 'left' : 'right',
+        coins,
+        timer,
+      });
+      publishScores();
+      notify();
+    }
+    state.socket.emit('send_message', { roomId, text, clientGiftId });
   },
 
   requestSeat(roomId: string, slotIndex: number) {
@@ -565,6 +921,14 @@ export const socketStore = {
     notify();
   },
 
+  hostLeaveStage(roomId: string) {
+    state.socket?.emit('host_leave_stage', { roomId });
+  },
+
+  hostReturnStage(roomId: string) {
+    state.socket?.emit('host_return_stage', { roomId });
+  },
+
   leaveStage(roomId: string) {
     state.socket?.emit('leave_stage', { roomId });
   },
@@ -575,6 +939,66 @@ export const socketStore = {
 
   clearSeatRequestResult() {
     state.seatRequestResult = null;
+    notify();
+  },
+
+  /**
+   * Cancel the running battle (either host). The battle closes and the result
+   * shows straight away from the last confirmed scores; the server's
+   * battle_ended then replaces it with the final result. If the server
+   * refuses, the room is re-synced so the battle comes back.
+   */
+  cancelBattle(): Promise<{ ok: boolean; message?: string }> {
+    const { battle, gifters } = battleState;
+    const socket = state.socket;
+    if (!battle || !socket?.connected) {
+      return Promise.resolve({ ok: false, message: 'Not connected. Please try again.' });
+    }
+    // Confirmed totals only — our own gifts still on their way don't decide it
+    const left = serverScores?.left ?? 0;
+    const right = serverScores?.right ?? 0;
+    const side = (prefix: 'from' | 'to', score: number, supporters: BattleGifter[]): BattleResultSide => ({
+      room_id: battle[`${prefix}_room_id`],
+      room_name: battle[`${prefix}_room_name`] ?? '',
+      room_image_url: battle[`${prefix}_room_image_url`] ?? null,
+      host_user_id: battle[`${prefix}_user_id`],
+      host_name: battle[`${prefix}_host_name`] || battle[`${prefix}_host_username`] || null,
+      score,
+      supporters: supporters.slice(0, 3),
+    });
+    battleResult = {
+      invite_id: battle.id,
+      reason: 'cancelled',
+      ended_by: authStore.getUserId(),
+      winner: left > right ? 'from' : right > left ? 'to' : null,
+      from: side('from', left, gifters.left),
+      to: side('to', right, gifters.right),
+      provisional: true,
+    };
+    setBattle(null); // notifies
+
+    return new Promise(resolve => {
+      socket.timeout(10_000).emit('cancel_battle', { inviteId: battle.id }, (err: Error | null, res?: { ok: boolean; message?: string; result?: BattleResult }) => {
+        if (!err && res?.ok) {
+          // battle_ended normally lands first; this covers it arriving late
+          if (res.result && battleResult?.invite_id === battle.id && battleResult.provisional) {
+            battleResult = { ...res.result, provisional: false };
+            notify();
+          }
+          resolve({ ok: true });
+          return;
+        }
+        if (battleResult?.invite_id === battle.id && battleResult.provisional) battleResult = null;
+        notify();
+        // Get the real state back (battle still running, or ended elsewhere)
+        if (state.roomId && socket.connected) socket.emit('refresh_room', { roomId: state.roomId });
+        resolve({ ok: false, message: res?.message ?? 'Could not cancel the battle. Please try again.' });
+      });
+    });
+  },
+
+  dismissBattleResult() {
+    battleResult = null;
     notify();
   },
 };

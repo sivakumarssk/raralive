@@ -25,7 +25,11 @@ export default function Terms() {
       <p>You must not use {APP.name} to post, stream, say or send anything that:</p>
       <ul>
         <li>involves nudity, sexual content or sexual solicitation;</li>
-        <li>involves minors in any way that is sexual, harmful or exploitative (we report this to the authorities);</li>
+        <li>
+          sexually abuses or exploits children (CSAE), including child sexual abuse material, or involves minors in any
+          way that is sexual, harmful or exploitative. We report this to the authorities. See our{' '}
+          <Link to="/child-safety">Child Safety Standards</Link>;
+        </li>
         <li>harasses, bullies, threatens or impersonates anyone;</li>
         <li>promotes hate, violence, self-harm, terrorism, or illegal drugs or weapons;</li>
         <li>is fraudulent, spam, a scam, or promotes gambling;</li>
@@ -46,10 +50,10 @@ export default function Terms() {
 
       <h2>4. Virtual items: coins, gifts and gems</h2>
       <ul>
-        <li><strong>Coins</strong> are purchased through Google Play and used to send virtual gifts and access features. Coins have no cash value, cannot be exchanged for money, and are non-transferable except as gifts inside the app.</li>
+        <li><strong>Coins</strong> are purchased with real money through the payment options offered in the app and used to send virtual gifts and access features. Coins have no cash value, cannot be exchanged for money, and are non-transferable except as gifts inside the app.</li>
         <li><strong>Gifts</strong> are sent at your own choice and are final once sent.</li>
         <li><strong>Gems</strong> are earned by eligible hosts from gifts and activity. Hosts may redeem gems under our host and agency rules, subject to identity verification, minimum thresholds and applicable taxes.</li>
-        <li>Purchases are non-refundable except as required by law or Google Play's refund policy.</li>
+        <li>Purchases are non-refundable except as required by law or by the refund policy of the payment provider you used.</li>
         <li>We may change prices, exchange rates and item availability. Items obtained through fraud, chargebacks or bugs may be removed.</li>
       </ul>
 

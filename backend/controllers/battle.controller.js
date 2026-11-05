@@ -1,7 +1,8 @@
 const db = require('../config/db');
 const battleModel = require('../models/battle.model');
+const battleTargetModel = require('../models/battle-target.model');
 const ioInstance = require('../utils/io-instance');
-const { getHostSocketId } = require('../socket');
+const { getHostSocketId, scheduleBattleEnd } = require('../socket');
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
@@ -10,7 +11,7 @@ const { getHostSocketId } = require('../socket');
  */
 async function getRoomHost(roomId) {
   const r = await db.query(
-    `SELECT host_user_id, room_name FROM rooms WHERE id=$1 AND status='active'`,
+    `SELECT host_user_id, room_name, room_image_url FROM rooms WHERE id=$1 AND status='active'`,
     [roomId]
   );
   return r.rows[0] ?? null;
@@ -20,14 +21,32 @@ async function getRoomHost(roomId) {
 
 /**
  * POST /api/battle/invite
- * Body: { from_room_id, to_room_id, duration_minutes?, mode? }
+ * Body: { from_room_id, to_room_id, duration_minutes?, mode?, target_id? }
+ * target_id (Gifting Battle) is one of the admin's active battle targets.
  */
 async function sendBattleInvite(req, res, next) {
   try {
     const fromUserId = req.user.id;
-    const { from_room_id, to_room_id, duration_minutes = 25, mode = 'normal' } = req.body;
+    const { from_room_id, to_room_id, duration_minutes = 25, mode = 'normal', target_id } = req.body;
     if (!['normal', 'gifting'].includes(mode)) {
       return res.status(400).json({ success: false, message: 'mode must be "normal" or "gifting".' });
+    }
+    // The app offers 5–30 min; up to 60 stays accepted so older app versions
+    // (which offered 45) keep working until users update.
+    const durationMinutes = Number(duration_minutes);
+    if (!Number.isInteger(durationMinutes) || durationMinutes < 1 || durationMinutes > 60) {
+      return res.status(400).json({ success: false, message: 'Invalid battle duration.' });
+    }
+
+    // Gifting Battle target — validated against the admin's active list. Older
+    // app versions send none, so it stays optional.
+    let target = null;
+    await battleTargetModel.ensureTable();
+    if (mode === 'gifting' && target_id) {
+      target = await battleTargetModel.getActiveById(target_id);
+      if (!target) {
+        return res.status(400).json({ success: false, message: 'That gift target is no longer available. Please pick another.' });
+      }
     }
 
     if (!from_room_id || !to_room_id) {
@@ -59,42 +78,46 @@ async function sendBattleInvite(req, res, next) {
       toRoomId: to_room_id,
       fromUserId,
       toUserId,
-      durationMinutes: Number(duration_minutes),
+      durationMinutes,
       mode,
+      targetId: target?.id ?? null,
+      targetCoins: target ? Number(target.coin_amount) : null,
     });
 
-    // Notify target room host via DB notification
-    await battleModel.createNotification({
-      userId: toUserId,
-      type: 'battle_invite',
-      title: '⚔️ Battle Invite!',
-      body: `${fromRoom.room_name} has challenged your room to a battle!`,
-      data: { invite_id: invite.id, from_room_id, from_room_name: fromRoom.room_name },
-    });
-
-    // Emit real-time battle_invite to the target room's host socket
+    // Real-time popup first — the DB notification and detail lookup below
+    // shouldn't delay it.
     const io = ioInstance.get();
     if (io) {
       const hostSocketId = getHostSocketId(to_room_id);
       if (hostSocketId) {
-        // Fetch from room image for the popup
-        const fromRoomData = await db.query(
-          `SELECT room_image_url FROM rooms WHERE id=$1`, [from_room_id]
-        );
         io.to(hostSocketId).emit('battle_invite', {
           invite_id: invite.id,
           from_room_id,
           from_room_name: fromRoom.room_name,
-          from_room_image_url: fromRoomData.rows[0]?.room_image_url ?? null,
-          duration_minutes: Number(duration_minutes),
+          from_room_image_url: fromRoom.room_image_url ?? null,
+          duration_minutes: durationMinutes,
           mode,
+          target_coins: target ? Number(target.coin_amount) : null,
         });
       }
       // Also notify the inviter's room to show waiting state
       io.to(from_room_id).emit('battle_invite_sent', { invite_id: invite.id });
     }
 
-    return res.status(201).json({ success: true, data: invite });
+    // Notify target room host via DB notification. Respond with the full
+    // invite (room names/images) so the app needn't fetch it separately.
+    const [detail] = await Promise.all([
+      battleModel.getInviteById(invite.id),
+      battleModel.createNotification({
+        userId: toUserId,
+        type: 'battle_invite',
+        title: '⚔️ Battle Invite!',
+        body: `${fromRoom.room_name} has challenged your room to a battle!`,
+        data: { invite_id: invite.id, from_room_id, from_room_name: fromRoom.room_name },
+      }),
+    ]);
+
+    return res.status(201).json({ success: true, data: detail ?? invite });
   } catch (error) {
     next(error);
   }
@@ -125,6 +148,21 @@ async function acceptBattleInvite(req, res, next) {
     }
 
     const updated = await battleModel.updateInviteStatus(invite_id, 'accepted');
+    const battle = { ...invite, ...updated };
+
+    // Emit real-time accepted event to the inviter's room host — carries the
+    // full invite so the inviter can start the battle without re-fetching it.
+    const io = ioInstance.get();
+    if (io) {
+      const hostSocketId = getHostSocketId(invite.from_room_id);
+      if (hostSocketId) {
+        io.to(hostSocketId).emit('battle_invite_accepted', {
+          invite_id,
+          to_room_name: invite.to_room_name,
+          battle,
+        });
+      }
+    }
 
     await battleModel.createNotification({
       userId: invite.from_user_id,
@@ -133,18 +171,6 @@ async function acceptBattleInvite(req, res, next) {
       body: `${invite.to_room_name} accepted your battle challenge!`,
       data: { invite_id },
     });
-
-    // Emit real-time accepted event to the inviter's room host
-    const io = ioInstance.get();
-    if (io) {
-      const hostSocketId = getHostSocketId(invite.from_room_id);
-      if (hostSocketId) {
-        io.to(hostSocketId).emit('battle_invite_accepted', {
-          invite_id,
-          to_room_name: invite.to_room_name,
-        });
-      }
-    }
 
     return res.json({ success: true, data: updated });
   } catch (error) {
@@ -234,11 +260,16 @@ async function startBattle(req, res, next) {
     }
 
     const updated = await battleModel.updateInviteStatus(invite_id, 'active', true);
+    // Ends it on time and sends both rooms the winner result
+    scheduleBattleEnd({ ...invite, ...updated });
 
     // Emit battle_started to both rooms so stage UI shows immediately
     const io = ioInstance.get();
     if (io) {
-      const data = { invite_id, from_room_id: invite.from_room_id, to_room_id: invite.to_room_id, mode: invite.mode };
+      // Full battle (room names, images, started_at) so both rooms render the
+      // banner straight from this event — no follow-up HTTP fetch.
+      const battle = { ...invite, ...updated };
+      const data = { invite_id, from_room_id: invite.from_room_id, to_room_id: invite.to_room_id, mode: invite.mode, battle };
       io.to(invite.from_room_id).emit('battle_started', data);
       io.to(invite.to_room_id).emit('battle_started', data);
     }
@@ -330,22 +361,8 @@ async function getBattleScores(req, res, next) {
     if (!invite) return res.status(404).json({ success: false, message: 'Invite not found' });
     if (!invite.started_at) return res.json({ success: true, data: { left: 0, right: 0 } });
 
-    const r = await db.query(
-      `SELECT room_id, COALESCE(SUM(coins * quantity), 0)::int AS total
-       FROM room_gift_events
-       WHERE room_id IN ($1, $2)
-         AND created_at >= $3
-       GROUP BY room_id`,
-      [invite.from_room_id, invite.to_room_id, invite.started_at]
-    );
-
-    let left = 0, right = 0;
-    for (const row of r.rows) {
-      if (row.room_id === invite.from_room_id) left = parseInt(row.total, 10);
-      else if (row.room_id === invite.to_room_id) right = parseInt(row.total, 10);
-    }
-
-    return res.json({ success: true, data: { left, right } });
+    const totals = await battleModel.getBattleTotals(invite);
+    return res.json({ success: true, data: totals });
   } catch (err) { next(err); }
 }
 
@@ -358,29 +375,8 @@ async function getBattleTopGifters(req, res, next) {
     if (!invite) return res.status(404).json({ success: false, message: 'Invite not found' });
     if (!invite.started_at) return res.json({ success: true, data: { left: [], right: [] } });
 
-    const leftR = await db.query(
-      `SELECT u.id, u.full_name, u.username, u.avatar_url,
-              SUM(e.coins * e.quantity)::int AS total_coins
-       FROM room_gift_events e
-       JOIN users u ON u.id = e.sender_id
-       WHERE e.room_id = $1 AND e.created_at >= $2
-       GROUP BY u.id, u.full_name, u.username, u.avatar_url
-       ORDER BY total_coins DESC LIMIT 5`,
-      [invite.from_room_id, invite.started_at]
-    );
-
-    const rightR = await db.query(
-      `SELECT u.id, u.full_name, u.username, u.avatar_url,
-              SUM(e.coins * e.quantity)::int AS total_coins
-       FROM room_gift_events e
-       JOIN users u ON u.id = e.sender_id
-       WHERE e.room_id = $1 AND e.created_at >= $2
-       GROUP BY u.id, u.full_name, u.username, u.avatar_url
-       ORDER BY total_coins DESC LIMIT 5`,
-      [invite.to_room_id, invite.started_at]
-    );
-
-    return res.json({ success: true, data: { left: leftR.rows, right: rightR.rows } });
+    const gifters = await battleModel.getTopGifters(invite);
+    return res.json({ success: true, data: gifters });
   } catch (err) { next(err); }
 }
 

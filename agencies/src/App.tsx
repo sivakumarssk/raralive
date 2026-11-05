@@ -1,18 +1,27 @@
-import { BrowserRouter, Routes, Route, Navigate, useParams } from 'react-router-dom';
+import { BrowserRouter, Routes, Route, Navigate, Outlet, useParams } from 'react-router-dom';
 import { AuthProvider, useAuth } from './context/AuthContext';
+import { PortalLayout } from './components/PortalLayout';
 import { AgencyEntryPage } from './pages/AgencyEntryPage';
 import { LoginPage } from './pages/LoginPage';
 import { ResetPasswordPage } from './pages/ResetPasswordPage';
 import { DashboardPage } from './pages/DashboardPage';
+import { OnboardingPage } from './pages/OnboardingPage';
+import { ServicePage } from './pages/ServicePage';
+import { CoinWalletPage } from './pages/CoinWalletPage';
+import { RechargeUserPage } from './pages/RechargeUserPage';
+import { RechargeHistoryPage } from './pages/RechargeHistoryPage';
+import { ReportsPage } from './pages/ReportsPage';
+import { SupportPage } from './pages/SupportPage';
+import { PocAgenciesPage, PocLoginPage } from './pages/PocPages';
 import { NotFoundPage } from './pages/NotFoundPage';
 
 // Guard: must be logged in. If default password, force reset. Otherwise allow through.
-function RequireAuth({ children }: { children: React.ReactNode }) {
+function RequireAuth() {
   const { code } = useParams<{ code: string }>();
-  const { token, isDefaultPassword } = useAuth();
-  if (!token) return <Navigate to={`/agency/${code}`} replace />;
+  const { token, agency, isDefaultPassword } = useAuth();
+  if (!token || !agency) return <Navigate to={`/agency/${code}`} replace />;
   if (isDefaultPassword) return <Navigate to={`/agency/${code}/reset-password`} replace />;
-  return <>{children}</>;
+  return <Outlet />;
 }
 
 // Guard: must be logged in with default password to access reset page
@@ -35,6 +44,34 @@ function RedirectIfAuth({ children }: { children: React.ReactNode }) {
   return <>{children}</>;
 }
 
+function RequirePoc() {
+  const { token, poc } = useAuth();
+  if (!token || !poc) return <Navigate to="/poc/login" replace />;
+  return <Outlet />;
+}
+
+// A POC works inside one agency they picked; a URL for any other goes back to
+// the list (the server refuses unassigned agencies regardless).
+function RequirePocAgency() {
+  const { agencyId } = useParams<{ agencyId: string }>();
+  const { pocAgency } = useAuth();
+  if (pocAgency?.id !== agencyId) return <Navigate to="/poc/agencies" replace />;
+  return <Outlet />;
+}
+
+// Shared by the agency portal and the POC view (minus the wallet)
+const operationsRoutes = (
+  <Route element={<PortalLayout />}>
+    <Route path="dashboard" element={<DashboardPage />} />
+    <Route path="onboarding" element={<OnboardingPage />} />
+    <Route path="audio-chat-room" element={<ServicePage service="chatroom" />} />
+    <Route path="video-live" element={<ServicePage service="live" />} />
+    <Route path="friend-zone" element={<ServicePage service="friendzone" />} />
+    <Route path="reports" element={<ReportsPage />} />
+    <Route path="support" element={<SupportPage />} />
+  </Route>
+);
+
 function App() {
   return (
     <BrowserRouter>
@@ -53,10 +90,24 @@ function App() {
             <RequireDefaultPassword><ResetPasswordPage /></RequireDefaultPassword>
           } />
 
-          {/* Dashboard — authenticated, password changed */}
-          <Route path="/agency/:code/dashboard" element={
-            <RequireAuth><DashboardPage /></RequireAuth>
-          } />
+          {/* Agency portal — authenticated, password changed */}
+          <Route path="/agency/:code" element={<RequireAuth />}>
+            {operationsRoutes}
+            <Route element={<PortalLayout />}>
+              <Route path="coin-wallet" element={<CoinWalletPage />} />
+              <Route path="recharge-user" element={<RechargeUserPage />} />
+              <Route path="recharge-history" element={<RechargeHistoryPage />} />
+            </Route>
+          </Route>
+
+          {/* POC: assigned agencies only, no wallet */}
+          <Route path="/poc/login" element={<PocLoginPage />} />
+          <Route path="/poc" element={<RequirePoc />}>
+            <Route path="agencies" element={<PocAgenciesPage />} />
+            <Route path=":agencyId" element={<RequirePocAgency />}>
+              {operationsRoutes}
+            </Route>
+          </Route>
 
           {/* Catch-all */}
           <Route path="*" element={<NotFoundPage />} />

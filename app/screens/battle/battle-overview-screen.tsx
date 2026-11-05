@@ -204,7 +204,7 @@ export function BattleOverviewScreen() {
         {/* Status pill */}
         <View style={[s.statusPill, isPending ? s.pendingPill : isAccepted ? s.acceptedPill : s.declinedPill]}>
           <Text style={[s.statusText, isPending ? s.pendingText : isAccepted ? s.acceptedText : s.declinedText]}>
-            {isPending ? 'PENDING' : isAccepted ? 'ACCEPTED' : 'DECLINED'}
+            {isPending ? 'Pending' : isAccepted ? 'Accepted' : 'Declined'}
           </Text>
         </View>
 
@@ -254,7 +254,7 @@ export function BattleOverviewScreen() {
           <TouchableOpacity activeOpacity={0.85} style={s.startBtn} onPress={handleStart}>
             <LinearGradient colors={['#7A0EED', '#B50357']} start={{ x: 0, y: 0 }} end={{ x: 1, y: 0 }} style={s.startGrad}>
               <Ionicons name="flash" size={18} color="#FFFFFF" />
-              <Text style={s.startBtnText}>Start Battle</Text>
+              <Text style={s.startBtnText}>Start battle</Text>
             </LinearGradient>
           </TouchableOpacity>
         )}
@@ -277,7 +277,7 @@ export function BattleOverviewScreen() {
 
 const shield = StyleSheet.create({
   wrap: { flex: 1, alignItems: 'center', gap: 10 },
-  label: { fontSize: 10, fontWeight: '700', color: '#ABADB2', letterSpacing: 1, textTransform: 'uppercase' },
+  label: { fontSize: 10, fontWeight: '700', color: '#ABADB2', letterSpacing: 0.2 },
   ring: {
     width: 84, height: 84, borderRadius: 42, borderWidth: 3,
     alignItems: 'center', justifyContent: 'center',
@@ -317,7 +317,7 @@ const s = StyleSheet.create({
   pendingPill: { backgroundColor: '#FFF8E1', borderColor: '#FBBF24' },
   acceptedPill: { backgroundColor: '#ECFDF5', borderColor: '#22C55E' },
   declinedPill: { backgroundColor: '#FEF2F2', borderColor: '#F87171' },
-  statusText: { fontSize: 11, fontWeight: '800', letterSpacing: 1.5 },
+  statusText: { fontSize: 11, fontWeight: '800', letterSpacing: 0.2 },
   pendingText: { color: '#B45309' },
   acceptedText: { color: '#16A34A' },
   declinedText: { color: '#DC2626' },

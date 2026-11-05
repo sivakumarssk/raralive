@@ -1,4 +1,4 @@
-import React, { useEffect, useRef, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { useRouter } from 'expo-router';
 import {
   Animated,
@@ -17,9 +17,10 @@ import {
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import Svg, { Defs, Ellipse, LinearGradient, Path, RadialGradient, Stop } from 'react-native-svg';
-import { BASE_URL, MEDIA_BASE } from '@/services/api';
-import { authStore } from '@/store/auth-store';
-import { onBattleStarted, onBattleInviteAccepted } from '@/store/socket-store';
+import { MEDIA_BASE } from '@/services/api';
+import { useRoomBattle } from '@/hooks/useRoomSocket';
+import { RC } from '../room-ui';
+import { avatarSource } from '@/utils/default-avatar';
 
 type BattleBannerProps = {
   /**
@@ -64,6 +65,12 @@ type BattleBannerProps = {
    * Set false if the parent/socket controls the timer externally.
    */
   running?: boolean;
+
+  /**
+   * Draw the raised center pill with the VS bolt. Normal battles only —
+   * gifting battles hide it.
+   */
+  showBridge?: boolean;
 
   /**
    * Called when the battle card is pressed.
@@ -237,9 +244,7 @@ function GifterAvatarRow({ avatars, left, right, top, rowHeight, size, align }: 
             zIndex: shown.length - i,
           }}
         >
-          {url ? (
-            <Image source={{ uri: url }} resizeMode="cover" style={{ width: '100%', height: '100%' }} />
-          ) : null}
+          <Image source={avatarSource(url)} resizeMode="cover" style={{ width: '100%', height: '100%' }} />
         </View>
       ))}
     </View>
@@ -294,6 +299,7 @@ function BattleBannerView({
   rightGifterAvatars = [],
   durationSeconds = 0,
   running = false,
+  showBridge = true,
   onPress,
   onOpponentPress,
 }: BattleBannerProps) {
@@ -316,7 +322,7 @@ function BattleBannerView({
   }, [running]);
 
   // Exact client-reference composition: compact full-width strip,
-  // circular edge avatars, red/blue score bars, center VS and two
+  // circular edge avatars, blue (host) / red (opponent) score bars, center VS and two
   // overlapping small avatars per side.
   const height = 132 * scale;
   const avatar = 64 * scale;
@@ -362,34 +368,44 @@ function BattleBannerView({
   const capOffsetY = barTop - svgTop;
   const bridgeOffsetY = bridgeTop - svgTop;
 
+  // Gifting battles have no raised bridge, so the timer drops into the gap
+  // between the capsule necks (where the bridge sat) and the whole banner
+  // lifts up by the now-empty space above the capsules, closer to the stage.
+  const timerLineHeight = barHeight * 0.32;
+  const timerTop = showBridge
+    ? bridgeOffsetY - barHeight * 0.46
+    : capOffsetY + (barHeight - neckHeight - timerLineHeight) / 2;
+  const lift = showBridge ? 0 : barTop - 4 * scale;
+
   return (
     <Pressable disabled={!onPress} onPress={onPress} style={{ width: '100%', height }}>
-      <View style={{ width: '100%', height, position: 'relative', overflow: 'visible' }}>
+      <View style={{ width: '100%', height, position: 'relative', overflow: 'visible', transform: [{ translateY: -lift }] }}>
         {/* Unified capsule + bridge shape: one SVG spanning the full row so
             both capsules and the raised bridge share one coordinate space
             and never show a seam where they meet. */}
         <View pointerEvents="none" style={{ position: 'absolute', left: barStart, top: svgTop, width: rowWidth, height: svgHeight, zIndex: 5 }}>
           <Svg width={rowWidth} height={svgHeight} style={{ position: 'absolute' }}>
             <Defs>
+              {/* Host (left) is blue, opponent (right) is red */}
               <LinearGradient id="leftCap" x1="0" y1="0" x2="1" y2="0">
-                <Stop offset="0" stopColor="#F5273F" />
-                <Stop offset="1" stopColor="#E01238" />
-              </LinearGradient>
-              <LinearGradient id="rightCap" x1="0" y1="0" x2="1" y2="0">
                 <Stop offset="0" stopColor="#215BEA" />
                 <Stop offset="1" stopColor="#1743D6" />
               </LinearGradient>
+              <LinearGradient id="rightCap" x1="0" y1="0" x2="1" y2="0">
+                <Stop offset="0" stopColor="#F5273F" />
+                <Stop offset="1" stopColor="#E01238" />
+              </LinearGradient>
               <LinearGradient id="connectorGrad" x1="0" y1="0" x2="1" y2="0">
-                <Stop offset="0" stopColor="#E01238" />
-                <Stop offset="0.5" stopColor="#E01238" />
+                <Stop offset="0" stopColor="#215BEA" />
                 <Stop offset="0.5" stopColor="#215BEA" />
-                <Stop offset="1" stopColor="#215BEA" />
+                <Stop offset="0.5" stopColor="#E01238" />
+                <Stop offset="1" stopColor="#E01238" />
               </LinearGradient>
               <LinearGradient id="bridgeGrad" x1="0" y1="0" x2="1" y2="0">
-                <Stop offset="0" stopColor="#F8456A" />
-                <Stop offset="0.5" stopColor="#F8456A" />
+                <Stop offset="0" stopColor="#3174F3" />
                 <Stop offset="0.5" stopColor="#3174F3" />
-                <Stop offset="1" stopColor="#3174F3" />
+                <Stop offset="0.5" stopColor="#F8456A" />
+                <Stop offset="1" stopColor="#F8456A" />
               </LinearGradient>
               <LinearGradient id="capShine" x1="0" y1="0" x2="0" y2="1">
                 <Stop offset="0" stopColor="#FFFFFF" stopOpacity={0.5} />
@@ -486,56 +502,61 @@ function BattleBannerView({
               `}
               fill="url(#connectorGrad)"
             />
-            {/* Soft drop shadow under the bridge so it visually lifts off the
-                capsules/background instead of blending flat into them. */}
-            <Ellipse
-              cx={rowCenter}
-              cy={bridgeOffsetY + bridgeHeight}
-              rx={bridgeWidth * 0.56}
-              ry={bridgeHeight * 0.34}
-              fill="url(#bridgeShadow)"
-            />
-            {/* BRIDGE: small raised pill sitting above the shared neck point,
-                drawn in the same coordinate space so it never seams. */}
-            <Path
-              d={`
-                M ${rowCenter - bridgeWidth / 2 + bridgeHeight / 2} ${bridgeOffsetY}
-                H ${rowCenter + bridgeWidth / 2 - bridgeHeight / 2}
-                A ${bridgeHeight / 2} ${bridgeHeight / 2} 0 0 1 ${rowCenter + bridgeWidth / 2 - bridgeHeight / 2} ${bridgeOffsetY + bridgeHeight}
-                H ${rowCenter - bridgeWidth / 2 + bridgeHeight / 2}
-                A ${bridgeHeight / 2} ${bridgeHeight / 2} 0 0 1 ${rowCenter - bridgeWidth / 2 + bridgeHeight / 2} ${bridgeOffsetY}
-                Z
-              `}
-              fill="url(#bridgeGrad)"
-            />
-            {/* Subtle glossy sheen on the bridge's top half — a soft
-                highlight, not a strong white wash */}
-            <Path
-              d={`
-                M ${rowCenter - bridgeWidth / 2 + bridgeHeight / 2} ${bridgeOffsetY}
-                H ${rowCenter + bridgeWidth / 2 - bridgeHeight / 2}
-                A ${bridgeHeight / 2} ${bridgeHeight * 0.5} 0 0 1 ${rowCenter + bridgeWidth / 2 - bridgeHeight / 2} ${bridgeOffsetY + bridgeHeight * 0.5}
-                H ${rowCenter - bridgeWidth / 2 + bridgeHeight / 2}
-                A ${bridgeHeight / 2} ${bridgeHeight * 0.5} 0 0 1 ${rowCenter - bridgeWidth / 2 + bridgeHeight / 2} ${bridgeOffsetY}
-                Z
-              `}
-              fill="url(#bridgeShine)"
-            />
-            {/* VS lightning bolt, centered on the bridge */}
-            <Path
-              d={`
-                M ${rowCenter + bridgeHeight * 0.10} ${bridgeOffsetY + bridgeHeight * 0.08}
-                L ${rowCenter - bridgeHeight * 0.20} ${bridgeOffsetY + bridgeHeight * 0.52}
-                L ${rowCenter - bridgeHeight * 0.02} ${bridgeOffsetY + bridgeHeight * 0.52}
-                L ${rowCenter - bridgeHeight * 0.12} ${bridgeOffsetY + bridgeHeight * 0.94}
-                L ${rowCenter + bridgeHeight * 0.24} ${bridgeOffsetY + bridgeHeight * 0.42}
-                L ${rowCenter + bridgeHeight * 0.04} ${bridgeOffsetY + bridgeHeight * 0.42}
-                Z
-              `}
-              fill="url(#vsGoldGrad)"
-              stroke="#FFFFFF"
-              strokeWidth={Math.max(1, bridgeHeight * 0.045)}
-            />
+            {/* Raised center bridge + VS bolt — normal battles only */}
+            {showBridge && (
+              <>
+                {/* Soft drop shadow under the bridge so it visually lifts off the
+                    capsules/background instead of blending flat into them. */}
+                <Ellipse
+                  cx={rowCenter}
+                  cy={bridgeOffsetY + bridgeHeight}
+                  rx={bridgeWidth * 0.56}
+                  ry={bridgeHeight * 0.34}
+                  fill="url(#bridgeShadow)"
+                />
+                {/* BRIDGE: small raised pill sitting above the shared neck point,
+                    drawn in the same coordinate space so it never seams. */}
+                <Path
+                  d={`
+                    M ${rowCenter - bridgeWidth / 2 + bridgeHeight / 2} ${bridgeOffsetY}
+                    H ${rowCenter + bridgeWidth / 2 - bridgeHeight / 2}
+                    A ${bridgeHeight / 2} ${bridgeHeight / 2} 0 0 1 ${rowCenter + bridgeWidth / 2 - bridgeHeight / 2} ${bridgeOffsetY + bridgeHeight}
+                    H ${rowCenter - bridgeWidth / 2 + bridgeHeight / 2}
+                    A ${bridgeHeight / 2} ${bridgeHeight / 2} 0 0 1 ${rowCenter - bridgeWidth / 2 + bridgeHeight / 2} ${bridgeOffsetY}
+                    Z
+                  `}
+                  fill="url(#bridgeGrad)"
+                />
+                {/* Subtle glossy sheen on the bridge's top half — a soft
+                    highlight, not a strong white wash */}
+                <Path
+                  d={`
+                    M ${rowCenter - bridgeWidth / 2 + bridgeHeight / 2} ${bridgeOffsetY}
+                    H ${rowCenter + bridgeWidth / 2 - bridgeHeight / 2}
+                    A ${bridgeHeight / 2} ${bridgeHeight * 0.5} 0 0 1 ${rowCenter + bridgeWidth / 2 - bridgeHeight / 2} ${bridgeOffsetY + bridgeHeight * 0.5}
+                    H ${rowCenter - bridgeWidth / 2 + bridgeHeight / 2}
+                    A ${bridgeHeight / 2} ${bridgeHeight * 0.5} 0 0 1 ${rowCenter - bridgeWidth / 2 + bridgeHeight / 2} ${bridgeOffsetY}
+                    Z
+                  `}
+                  fill="url(#bridgeShine)"
+                />
+                {/* VS lightning bolt, centered on the bridge */}
+                <Path
+                  d={`
+                    M ${rowCenter + bridgeHeight * 0.10} ${bridgeOffsetY + bridgeHeight * 0.08}
+                    L ${rowCenter - bridgeHeight * 0.20} ${bridgeOffsetY + bridgeHeight * 0.52}
+                    L ${rowCenter - bridgeHeight * 0.02} ${bridgeOffsetY + bridgeHeight * 0.52}
+                    L ${rowCenter - bridgeHeight * 0.12} ${bridgeOffsetY + bridgeHeight * 0.94}
+                    L ${rowCenter + bridgeHeight * 0.24} ${bridgeOffsetY + bridgeHeight * 0.42}
+                    L ${rowCenter + bridgeHeight * 0.04} ${bridgeOffsetY + bridgeHeight * 0.42}
+                    Z
+                  `}
+                  fill="url(#vsGoldGrad)"
+                  stroke="#FFFFFF"
+                  strokeWidth={Math.max(1, bridgeHeight * 0.045)}
+                />
+              </>
+            )}
           </Svg>
           {/* Battle timer — centered above the bridge */}
           <Text
@@ -544,11 +565,11 @@ function BattleBannerView({
               position: 'absolute',
               left: 0,
               width: rowWidth,
-              top: bridgeOffsetY - barHeight * 0.46,
+              top: timerTop,
               textAlign: 'center',
               color: '#3B2A55',
               fontSize: barHeight * 0.28,
-              lineHeight: barHeight * 0.32,
+              lineHeight: timerLineHeight,
               fontWeight: '800',
               includeFontPadding: false,
             }}
@@ -559,7 +580,7 @@ function BattleBannerView({
             numberOfLines={1}
             adjustsFontSizeToFit
             minimumFontScale={0.6}
-            style={{ position: 'absolute', left: barHeight * 0.55, right: rowWidth - leftNeckX + taper, top: capOffsetY + barHeight * 0.18, textAlign: 'center', color: '#FFF', fontSize: 24 * scale, lineHeight: 28 * scale, fontWeight: '900', includeFontPadding: false }}
+            style={{ position: 'absolute', left: barHeight * 0.55, right: rowWidth - leftNeckX + taper, top: capOffsetY + barHeight * 0.18, textAlign: 'center', color: RC.numberOnDark, fontSize: 24 * scale, lineHeight: 28 * scale, fontWeight: '900', includeFontPadding: false }}
           >
             {formatScore(leftScore)}
           </Text>
@@ -567,7 +588,7 @@ function BattleBannerView({
             numberOfLines={1}
             adjustsFontSizeToFit
             minimumFontScale={0.6}
-            style={{ position: 'absolute', left: rightNeckX + taper, right: barHeight * 0.55, top: capOffsetY + barHeight * 0.18, textAlign: 'center', color: '#FFF', fontSize: 24 * scale, lineHeight: 28 * scale, fontWeight: '900', includeFontPadding: false }}
+            style={{ position: 'absolute', left: rightNeckX + taper, right: barHeight * 0.55, top: capOffsetY + barHeight * 0.18, textAlign: 'center', color: RC.numberOnDark, fontSize: 24 * scale, lineHeight: 28 * scale, fontWeight: '900', includeFontPadding: false }}
           >
             {formatScore(rightScore)}
           </Text>
@@ -575,7 +596,7 @@ function BattleBannerView({
 
         {/* LEFT large avatar — sits a bit below the capsule's bottom edge */}
         <View pointerEvents="none" style={{ position: 'absolute', left: edge, top: barTop + barHeight - avatar + avatar * 0.1, width: avatar, height: avatar, zIndex: 50 }}>
-          <BattleAvatar url={leftAvatar} source={leftAvatarSource} name={leftName} size={avatar} borderColor="#F02754" />
+          <BattleAvatar url={leftAvatar} source={leftAvatarSource} name={leftName} size={avatar} borderColor="#2876E6" />
         </View>
 
         {/* RIGHT large avatar (opponent room) — sits a bit below the capsule's
@@ -586,7 +607,7 @@ function BattleBannerView({
           onPress={onOpponentPress}
           activeOpacity={0.8}
           style={{ position: 'absolute', right: edge, top: barTop + barHeight - avatar + avatar * 0.1, width: avatar, height: avatar, zIndex: 50 }}>
-          <BattleAvatar url={rightAvatar} source={rightAvatarSource} name={rightName} size={avatar} borderColor="#2876E6" />
+          <BattleAvatar url={rightAvatar} source={rightAvatarSource} name={rightName} size={avatar} borderColor="#F02754" />
         </TouchableOpacity>
 
         {/* Top gifters (up to 5 per side) — small overlapping circles,
@@ -633,6 +654,7 @@ type BattleInfo = {
   endsAt: string | null;
   startedAt?: string | null;
   durationMinutes?: number;
+  mode?: 'normal' | 'gifting';
 };
 
 type TopGifter = {
@@ -666,13 +688,7 @@ function GifterListRow({ gifter, rank }: { gifter: TopGifter; rank: number }) {
       disabled={!gifter.id}
       onPress={() => gifter.id && router.push(`/user/${gifter.id}` as any)}>
       <Text style={gifterModalStyles.rank}>{rank}</Text>
-      {url ? (
-        <Image source={{ uri: url }} style={gifterModalStyles.avatar} />
-      ) : (
-        <View style={[gifterModalStyles.avatar, gifterModalStyles.avatarFallback]}>
-          <Text style={gifterModalStyles.avatarInitial}>{name[0]?.toUpperCase() ?? '?'}</Text>
-        </View>
-      )}
+      <Image source={avatarSource(url)} style={gifterModalStyles.avatar} />
       <Text style={gifterModalStyles.name} numberOfLines={1}>{name}</Text>
       <View style={gifterModalStyles.coinPill}>
         <Text style={gifterModalStyles.coinText}>🪙 {fmtGifterCoins(Number(gifter.total_coins))}</Text>
@@ -750,18 +766,18 @@ function TopGiftersModal({ visible, onClose, ownName, rivalName, ownGifters, riv
 
         <View style={gifterModalStyles.tabs}>
           <TouchableOpacity
-            style={[gifterModalStyles.tab, activeTab === 'own' && { borderBottomColor: '#DE2850' }]}
+            style={[gifterModalStyles.tab, activeTab === 'own' && { borderBottomColor: '#246CDE' }]}
             onPress={() => setActiveTab('own')}
           >
-            <Text style={[gifterModalStyles.tabText, activeTab === 'own' && { color: '#DE2850' }]} numberOfLines={1}>
+            <Text style={[gifterModalStyles.tabText, activeTab === 'own' && { color: '#246CDE' }]} numberOfLines={1}>
               {ownName || 'You'}
             </Text>
           </TouchableOpacity>
           <TouchableOpacity
-            style={[gifterModalStyles.tab, activeTab === 'rival' && { borderBottomColor: '#246CDE' }]}
+            style={[gifterModalStyles.tab, activeTab === 'rival' && { borderBottomColor: '#DE2850' }]}
             onPress={() => setActiveTab('rival')}
           >
-            <Text style={[gifterModalStyles.tabText, activeTab === 'rival' && { color: '#246CDE' }]} numberOfLines={1}>
+            <Text style={[gifterModalStyles.tabText, activeTab === 'rival' && { color: '#DE2850' }]} numberOfLines={1}>
               {rivalName || 'Opponent'}
             </Text>
           </TouchableOpacity>
@@ -811,7 +827,7 @@ const gifterModalStyles = StyleSheet.create({
   },
   tabText: { fontSize: 14, fontWeight: '700', color: '#999' },
   body: { flex: 1 },
-  bodyContent: { paddingHorizontal: 18, paddingTop: 14, paddingBottom: 12 },
+  bodyContent: { paddingHorizontal: 16, paddingTop: 12, paddingBottom: 12 },
   empty: { fontSize: 12, color: '#999', textAlign: 'center', marginTop: 12 },
   row: {
     flexDirection: 'row',
@@ -820,17 +836,13 @@ const gifterModalStyles = StyleSheet.create({
     gap: 12,
   },
   rank: { width: 20, fontSize: 14, fontWeight: '700', color: '#999' },
-  avatar: { width: 44, height: 44, borderRadius: 22 },
+  avatar: { width: 36, height: 36, borderRadius: 18 },
   avatarFallback: { backgroundColor: '#B9BCC4', alignItems: 'center', justifyContent: 'center' },
-  avatarInitial: { color: '#FFF', fontSize: 17, fontWeight: '800' },
-  name: { flex: 1, fontSize: 15, fontWeight: '600', color: '#333' },
-  coinPill: {
-    backgroundColor: '#FFF4E0',
-    paddingHorizontal: 10,
-    paddingVertical: 5,
-    borderRadius: 12,
-  },
-  coinText: { fontSize: 13, fontWeight: '700', color: '#B8720A' },
+  avatarInitial: { color: '#FFF', fontSize: 14, fontWeight: '800' },
+  name: { flex: 1, fontSize: 14, fontWeight: '600', color: '#333' },
+  // Plain white behind the coin count — no tinted pill
+  coinPill: { paddingVertical: 5 },
+  coinText: { fontSize: 12, fontWeight: '700', color: RC.number },
 });
 
 function resolveBattleEndsAt(info: BattleInfo): number | null {
@@ -853,6 +865,7 @@ function mapBattleApiData(data: Record<string, unknown>): BattleInfo {
     endsAt:           (data.ends_at ?? data.endsAt ?? null) as string | null,
     startedAt:        (data.started_at ?? data.startedAt ?? null) as string | null,
     durationMinutes:  (data.duration_minutes ?? data.durationMinutes ?? null) as number | undefined,
+    mode:             (data.mode ?? 'normal') as 'normal' | 'gifting',
   };
 }
 
@@ -864,81 +877,20 @@ type Props = {
 };
 
 export function BattleBanner({ roomId, onOpponentRoomPress }: Props) {
-  const [battle, setBattle] = useState<BattleInfo | null>(null);
-  const [leftGifters, setLeftGifters] = useState<TopGifter[]>([]);
-  const [rightGifters, setRightGifters] = useState<TopGifter[]>([]);
+  // Battle, top gifters and scores all arrive over the room socket
+  // (battle_state on join, battle_started, then battle_gifters/battle_scores
+  // after every gift) — no HTTP polling, so the banner shows instantly.
+  const { battle: active, gifters, scores } = useRoomBattle();
+  const battle = useMemo(
+    () => (active && (active.from_room_id === roomId || active.to_room_id === roomId)
+      ? mapBattleApiData({ ...active, invite_id: active.id })
+      : null),
+    [active, roomId],
+  );
+  const leftGifters: TopGifter[] = gifters.left;
+  const rightGifters: TopGifter[] = gifters.right;
   const [showGiftersModal, setShowGiftersModal] = useState(false);
   const endsAtMs = battle ? resolveBattleEndsAt(battle) : null;
-
-  // Fetch active battle
-  useEffect(() => {
-    if (!roomId) return;
-    let cancelled = false;
-    const fetchBattle = async () => {
-      const token = authStore.getToken();
-      if (!token) return;
-      try {
-        const nr = await fetch(`${BASE_URL}/battle/notifications`, {
-          headers: { Authorization: `Bearer ${token}` },
-        });
-        const nj = await nr.json();
-        if (cancelled || !nj.success) return;
-
-        const notifs: Array<{ type: string; data: Record<string, string> | null }> = nj.data ?? [];
-        const match = notifs.find(n =>
-          (n.type === 'battle_invite' || n.type === 'battle_accepted' || n.type === 'battle_started') &&
-          n.data?.invite_id
-        );
-        if (!match?.data?.invite_id) { if (!cancelled) setBattle(null); return; }
-
-        const ir = await fetch(`${BASE_URL}/battle/invite/${match.data.invite_id}`, {
-          headers: { Authorization: `Bearer ${token}` },
-        });
-        const ij = await ir.json();
-        if (cancelled || !ij.success || !ij.data) return;
-
-        const d = ij.data;
-        if (d.status !== 'active') { if (!cancelled) setBattle(null); return; }
-        if (d.from_room_id !== roomId && d.to_room_id !== roomId) { if (!cancelled) setBattle(null); return; }
-
-        const startMs = d.started_at ? new Date(d.started_at).getTime() : null;
-        const durMs = (d.duration_minutes ?? 0) * 60_000;
-        const endsMs = startMs ? startMs + durMs : null;
-        if (endsMs && endsMs <= Date.now()) { if (!cancelled) setBattle(null); return; }
-
-        if (!cancelled) setBattle(mapBattleApiData({ ...d, invite_id: match.data.invite_id }));
-      } catch { if (!cancelled) setBattle(null); }
-    };
-    fetchBattle();
-    const id = setInterval(fetchBattle, 15_000);
-    const unsubStarted = onBattleStarted(() => fetchBattle());
-    const unsubAccepted = onBattleInviteAccepted(() => fetchBattle());
-    return () => { cancelled = true; clearInterval(id); unsubStarted(); unsubAccepted(); };
-  }, [roomId]);
-
-  // Fetch top gifters per side — poll every 15s
-  useEffect(() => {
-    if (!battle?.inviteId) return;
-    let cancelled = false;
-    const fetchGifters = async () => {
-      const token = authStore.getToken();
-      if (!token) return;
-      try {
-        const r = await fetch(`${BASE_URL}/battle/top-gifters/${battle.inviteId}`, {
-          headers: { Authorization: `Bearer ${token}` },
-        });
-        const j = await r.json();
-        if (cancelled || !j.success) return;
-        if (!cancelled) {
-          setLeftGifters((j.data.left ?? []).slice(0, 5));
-          setRightGifters((j.data.right ?? []).slice(0, 5));
-        }
-      } catch {}
-    };
-    fetchGifters();
-    const id = setInterval(fetchGifters, 15_000);
-    return () => { cancelled = true; clearInterval(id); };
-  }, [battle?.inviteId]);
 
   if (!battle) return null;
 
@@ -951,8 +903,11 @@ export function BattleBanner({ roomId, onOpponentRoomPress }: Props) {
   // left = from_room, right = to_room (API convention)
   const ownGifters   = isFrom ? leftGifters  : rightGifters;
   const rivalGifters = isFrom ? rightGifters : leftGifters;
-  const ownScore   = ownGifters.reduce((s, g) => s + Number(g.total_coins), 0);
-  const rivalScore = rivalGifters.reduce((s, g) => s + Number(g.total_coins), 0);
+  // Room totals when the server sent them; else the top gifters' sum
+  const ownScore   = scores ? (isFrom ? scores.left : scores.right)
+                            : ownGifters.reduce((s, g) => s + Number(g.total_coins), 0);
+  const rivalScore = scores ? (isFrom ? scores.right : scores.left)
+                            : rivalGifters.reduce((s, g) => s + Number(g.total_coins), 0);
   const durationSeconds = endsAtMs ? Math.max(0, Math.floor((endsAtMs - Date.now()) / 1000)) : 0;
 
   return (
@@ -968,6 +923,7 @@ export function BattleBanner({ roomId, onOpponentRoomPress }: Props) {
         rightGifterAvatars={rivalGifters.map(g => resolveBattleAvatarUrl(g.avatar_url))}
         durationSeconds={durationSeconds}
         running={durationSeconds > 0}
+        showBridge={battle.mode !== 'gifting'}
         onPress={() => setShowGiftersModal(true)}
         onOpponentPress={rivalRoomId ? () => onOpponentRoomPress?.(rivalRoomId) : undefined}
       />

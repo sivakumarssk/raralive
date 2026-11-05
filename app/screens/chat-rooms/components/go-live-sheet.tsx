@@ -285,7 +285,7 @@ export function GoLiveSheet({ visible, onClose, request, onSubmitted }: GoLiveSh
                 contentContainerStyle={sheet.scrollContent}>
 
                 <View style={sheet.field}>
-                  <Text style={sheet.label}>FULL NAME</Text>
+                  <Text style={sheet.label}>Full name</Text>
                   <View style={sheet.inputBox}>
                     <Ionicons name="person-outline" size={18} color="#7A0EED" />
                     <TextInput
@@ -301,7 +301,7 @@ export function GoLiveSheet({ visible, onClose, request, onSubmitted }: GoLiveSh
                 </View>
 
                 <View style={sheet.field}>
-                  <Text style={sheet.label}>DATE OF BIRTH</Text>
+                  <Text style={sheet.label}>Date of birth</Text>
                   <TouchableOpacity style={sheet.inputBox} activeOpacity={0.8} onPress={() => setShowDob(true)}>
                     <Ionicons name="calendar-outline" size={18} color="#7A0EED" />
                     <Text style={[sheet.input, { color: dob ? '#1C1E22' : '#ABADB2' }]}>
@@ -313,7 +313,7 @@ export function GoLiveSheet({ visible, onClose, request, onSubmitted }: GoLiveSh
                 </View>
 
                 <View style={sheet.field}>
-                  <Text style={sheet.label}>LANGUAGE</Text>
+                  <Text style={sheet.label}>Language</Text>
                   <TouchableOpacity style={sheet.inputBox} activeOpacity={0.8} onPress={() => setShowLanguage(true)}>
                     <Ionicons name="language-outline" size={18} color="#7A0EED" />
                     <Text style={[sheet.input, { color: selectedLanguage ? '#1C1E22' : '#ABADB2' }]}>
@@ -387,7 +387,7 @@ const sheet = StyleSheet.create({
   closeBtn: { width: 32, height: 32, borderRadius: 16, backgroundColor: '#F4F5F8', alignItems: 'center', justifyContent: 'center' },
   scrollContent: { gap: 20, paddingBottom: 12 },
   field: { gap: 8 },
-  label: { fontSize: 11, fontWeight: '700', color: '#7A0EED', letterSpacing: 1.2 },
+  label: { fontSize: 12, fontWeight: '700', color: '#7A0EED', letterSpacing: 0.2 },
   inputBox: {
     height: 50, borderRadius: 12, backgroundColor: '#F7F5FF',
     borderWidth: 1, borderColor: 'transparent',

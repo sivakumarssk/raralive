@@ -9,10 +9,14 @@ router.get('/conversations', authenticate, ctrl.getConversations);
 router.post('/conversations', authenticate, ctrl.startConversation);
 router.get('/requests', authenticate, ctrl.getRequests);
 router.get('/unread-count', authenticate, ctrl.getUnreadCount);
+router.get('/blocks', authenticate, ctrl.getBlockedUsers);
+router.delete('/blocks/:userId', authenticate, ctrl.unblockUserById);
 
 router.get('/conversations/:id', authenticate, ctrl.getConversation);
 router.post('/conversations/:id/accept', authenticate, ctrl.acceptConversation);
 router.post('/conversations/:id/reject', authenticate, ctrl.rejectConversation);
+router.post('/conversations/:id/block', authenticate, ctrl.blockConversationPeer);
+router.delete('/conversations/:id/block', authenticate, ctrl.unblockConversationPeer);
 router.get('/conversations/:id/messages', authenticate, ctrl.getMessages);
 router.post('/conversations/:id/read', authenticate, ctrl.markRead);
 router.post('/conversations/:id/unread', authenticate, ctrl.markUnread);

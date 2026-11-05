@@ -3,6 +3,7 @@ import { Image, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
 import { RtcSurfaceView, VideoSourceType } from 'react-native-agora';
 
 import { StarfieldBackground } from './starfield-background';
+import { avatarSource } from '@/utils/default-avatar';
 
 type VideoTileProps = {
   isLocal: boolean;
@@ -44,13 +45,7 @@ export function VideoTile({
           <StarfieldBackground />
           <View style={s.avatarCenterWrap}>
             <View style={[s.avatarRing, fullscreen && s.avatarRingLarge, compact && s.avatarRingCompact]}>
-              {avatarUri ? (
-                <Image source={{ uri: avatarUri }} style={s.avatarImg} />
-              ) : (
-                <View style={s.avatarInitialWrap}>
-                  <Text style={[s.avatarInitial, fullscreen && s.avatarInitialLarge, compact && s.avatarInitialCompact]}>{name[0]?.toUpperCase() ?? '?'}</Text>
-                </View>
-              )}
+              <Image source={avatarSource(avatarUri)} style={s.avatarImg} />
             </View>
           </View>
         </View>
@@ -60,7 +55,7 @@ export function VideoTile({
         <View style={s.nameRow}>
           {isHost && (
             <View style={s.hostBadge}>
-              <Text style={s.hostBadgeText}>HOST</Text>
+              <Text style={s.hostBadgeText}>Host</Text>
             </View>
           )}
           <Text style={s.name} numberOfLines={1}>{name}</Text>

@@ -229,7 +229,7 @@ const s = StyleSheet.create({
   groupLabel: {
     fontSize: 12.5, fontWeight: '700', color: '#9A94AE',
     marginTop: 18, marginBottom: 8, marginLeft: 2,
-    textTransform: 'uppercase', letterSpacing: 0.3,
+    letterSpacing: 0.3,
   },
   row: {
     flexDirection: 'row', alignItems: 'center',

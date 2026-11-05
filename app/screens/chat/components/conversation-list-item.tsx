@@ -4,6 +4,7 @@ import { Image, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
 
 import { resolveImageUrl, type ChatConversation } from '@/services/api';
 import { formatConversationTime } from '../chat.data';
+import { avatarSource } from '@/utils/default-avatar';
 
 type ConversationListItemProps = {
   conversation: ChatConversation;
@@ -12,13 +13,14 @@ type ConversationListItemProps = {
   selectMode?: boolean;
   selected?: boolean;
   isOnline?: boolean;
+  /** An incoming message request — tagged so it stands out in the single list. */
+  isRequest?: boolean;
 };
 
-export function ConversationListItem({ conversation, onPress, onLongPress, selectMode, selected, isOnline }: ConversationListItemProps) {
+export function ConversationListItem({ conversation, onPress, onLongPress, selectMode, selected, isOnline, isRequest }: ConversationListItemProps) {
   const router = useRouter();
   const avatarUri = resolveImageUrl(conversation.peer_avatar_url);
   const name = conversation.peer_name || conversation.peer_username || 'User';
-  const initial = name.charAt(0).toUpperCase();
   const unread = conversation.unread_count ?? 0;
 
   return (
@@ -39,13 +41,7 @@ export function ConversationListItem({ conversation, onPress, onLongPress, selec
         activeOpacity={selectMode ? 1 : 0.7}
         disabled={selectMode}
         onPress={() => conversation.peer_id && router.push(`/user/${conversation.peer_id}` as any)}>
-        {avatarUri ? (
-          <Image source={{ uri: avatarUri }} style={styles.avatar} />
-        ) : (
-          <View style={styles.avatarFallback}>
-            <Text style={styles.avatarInitial}>{initial}</Text>
-          </View>
-        )}
+        <Image source={avatarSource(avatarUri)} style={styles.avatar} />
         {isOnline && <View style={styles.onlineDot} />}
       </TouchableOpacity>
 
@@ -54,6 +50,11 @@ export function ConversationListItem({ conversation, onPress, onLongPress, selec
           <View style={styles.nameRow}>
             {conversation.pinned && <Ionicons name="pin" size={12} color="#7A0EED" style={styles.pinIcon} />}
             <Text style={styles.name} numberOfLines={1}>{name}</Text>
+            {isRequest && (
+              <View style={styles.requestTag}>
+                <Text style={styles.requestTagText}>Request</Text>
+              </View>
+            )}
           </View>
           <Text style={styles.time}>{formatConversationTime(conversation.last_message_at)}</Text>
         </View>
@@ -106,6 +107,11 @@ const styles = StyleSheet.create({
   nameRow: { flexDirection: 'row', alignItems: 'center', flex: 1, marginRight: 8 },
   pinIcon: { marginRight: 4 },
   name: { fontSize: 15, fontWeight: '700', color: '#1A1730', flexShrink: 1 },
+  requestTag: {
+    marginLeft: 6, paddingHorizontal: 7, paddingVertical: 2, borderRadius: 8,
+    backgroundColor: '#FFE8F1',
+  },
+  requestTagText: { fontSize: 10.5, fontWeight: '700', color: '#FF2A76' },
   time: { fontSize: 12, color: '#9A94AE' },
   bottomRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
   preview: { fontSize: 13, color: '#9A94AE', flex: 1, marginRight: 8 },

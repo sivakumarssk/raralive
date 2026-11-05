@@ -15,7 +15,11 @@ import {
 } from 'react-native';
 import { BASE_URL, MEDIA_BASE } from '@/services/api';
 import { authStore } from '@/store/auth-store';
-import { formatCoins } from '@/utils/userLevel';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import { Image as ExpoImage } from 'expo-image';
+import { USER_LEVEL_IMAGES, formatCoins, getUserLevel } from '@/utils/userLevel';
+import { REPORT_GUIDANCE, ReportReasonModal, USER_REPORT_REASONS } from './report-reason-modal';
+import { avatarSource } from '@/utils/default-avatar';
 
 function resolveAvatar(url: string | null | undefined): string | null {
   if (!url) return null;
@@ -24,55 +28,6 @@ function resolveAvatar(url: string | null | undefined): string | null {
 }
 
 type GiftStats = { sent: number; received: number };
-
-const REPORT_REASONS = ['Spam', 'Abuse or harassment', 'Inappropriate content', 'Impersonation', 'Other'];
-
-function ReportPicker({ visible, onClose, onSubmit }: {
-  visible: boolean;
-  onClose: () => void;
-  onSubmit: (reason: string) => void;
-}) {
-  if (!visible) return null;
-  return (
-    <Modal visible transparent animationType="fade" onRequestClose={onClose}>
-      <TouchableWithoutFeedback onPress={onClose}>
-        <View style={rp.backdrop} />
-      </TouchableWithoutFeedback>
-      <View style={rp.cardWrap} pointerEvents="box-none">
-        <View style={rp.card}>
-          <Text style={rp.title}>Report User</Text>
-          {REPORT_REASONS.map(reason => (
-            <TouchableOpacity key={reason} style={rp.reasonRow} activeOpacity={0.7} onPress={() => onSubmit(reason)}>
-              <Text style={rp.reasonText}>{reason}</Text>
-              <Ionicons name="chevron-forward" size={16} color="#ABADB2" />
-            </TouchableOpacity>
-          ))}
-          <TouchableOpacity onPress={onClose} style={rp.cancelBtn} activeOpacity={0.75}>
-            <Text style={rp.cancelText}>Cancel</Text>
-          </TouchableOpacity>
-        </View>
-      </View>
-    </Modal>
-  );
-}
-
-const rp = StyleSheet.create({
-  backdrop: { ...StyleSheet.absoluteFillObject, backgroundColor: 'rgba(0,0,0,0.5)' },
-  cardWrap: { flex: 1, alignItems: 'center', justifyContent: 'center', paddingHorizontal: 32 },
-  card: {
-    width: '100%', backgroundColor: '#FFFFFF', borderRadius: 18, padding: 8,
-    shadowColor: '#000', shadowOpacity: 0.2, shadowRadius: 16, shadowOffset: { width: 0, height: 6 }, elevation: 16,
-  },
-  title: { fontSize: 15, fontWeight: '800', color: '#1C1E22', paddingHorizontal: 12, paddingTop: 10, paddingBottom: 6 },
-  reasonRow: {
-    flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between',
-    paddingHorizontal: 12, paddingVertical: 13,
-    borderTopWidth: StyleSheet.hairlineWidth, borderTopColor: '#F0EDF8',
-  },
-  reasonText: { fontSize: 14, fontWeight: '600', color: '#1C1E22' },
-  cancelBtn: { paddingVertical: 13, alignItems: 'center', borderTopWidth: StyleSheet.hairlineWidth, borderTopColor: '#F0EDF8' },
-  cancelText: { fontSize: 14, fontWeight: '700', color: '#E14C57' },
-});
 
 export type UserProfileSheetTarget = {
   userId: string;
@@ -95,19 +50,33 @@ type Props = {
   onRemoveFromStage: (slotIndex: number) => void;
   onAddToStage: (userId: string) => void;
   onToggleTargetMute: (userId: string, mute: boolean) => void;
+  /** Your own mic state, for the Mute/Unmute row on your own card. */
+  selfIsMuted?: boolean;
+  /** You're in the voice channel (host, or on a seat) — show Mute/Unmute. */
+  selfOnStage?: boolean;
+  /** You're on the stage and can step off it. */
+  canExitStage?: boolean;
+  onToggleSelfMute?: () => void;
+  onExitStage?: () => void;
+  /** You're the host and off the stage — shows the way back. */
+  onReturnToStage?: () => void;
 };
 
 export function UserProfileSheet({
   visible, onClose, roomId, target, canManage, targetIsMuted, onSendGift, onBlock, onRemoveFromStage,
   onAddToStage, onToggleTargetMute,
+  selfIsMuted, selfOnStage, canExitStage, onToggleSelfMute, onExitStage, onReturnToStage,
 }: Props) {
   const router = useRouter();
+  const insets = useSafeAreaInsets();
   const slideAnim = useRef(new Animated.Value(400)).current;
   const opacityAnim = useRef(new Animated.Value(0)).current;
 
   const [giftStats, setGiftStats] = useState<GiftStats | null>(null);
   const [followersCount, setFollowersCount] = useState<number | null>(null);
   const [coverUrl, setCoverUrl] = useState<string | null>(null);
+  const [username, setUsername] = useState<string | null>(null);
+  const [level, setLevel] = useState<number | null>(null);
   const [isFollowing, setIsFollowing] = useState(false);
   const [followBusy, setFollowBusy] = useState(false);
   const [loading, setLoading] = useState(false);
@@ -133,6 +102,8 @@ export function UserProfileSheet({
     setLoading(true);
     setGiftStats(null);
     setCoverUrl(null);
+    setUsername(null);
+    setLevel(null);
 
     Promise.all([
       fetch(`${BASE_URL}/rooms/${roomId}/users/${target.userId}/gift-stats`)
@@ -148,6 +119,8 @@ export function UserProfileSheet({
       if (profileJson?.success) {
         setFollowersCount(profileJson.data.followers_count ?? null);
         setCoverUrl(profileJson.data.cover_url ?? null);
+        setUsername(profileJson.data.username ?? null);
+        if (profileJson.data.coins_gifted != null) setLevel(getUserLevel(Number(profileJson.data.coins_gifted) || 0));
       }
       if (followJson?.success) setIsFollowing(!!followJson.following);
     }).finally(() => setLoading(false));
@@ -178,25 +151,28 @@ export function UserProfileSheet({
     router.push(`/user/${target.userId}` as any);
   }
 
-  async function handleSubmitReport(reason: string) {
-    if (!target) return;
-    setReportVisible(false);
+  // Resolves to null on success, else an error message for the report popup
+  async function handleSubmitReport(reason: string): Promise<string | null> {
+    if (!target) return 'Something went wrong.';
     const token = authStore.getToken();
-    if (!token) return;
+    if (!token) return 'Please log in again.';
     try {
-      await fetch(`${BASE_URL}/auth/users/${target.userId}/report`, {
+      const res = await fetch(`${BASE_URL}/auth/users/${target.userId}/report`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
         body: JSON.stringify({ reason, roomId }),
       });
+      const json = await res.json().catch(() => ({}));
+      return res.ok && json.success !== false ? null : (json.message || 'Could not send. Please try again.');
     } catch {
-      // silent — reporting failures shouldn't block the UI
+      return 'Network error. Please try again.';
     }
   }
 
   if (!target) return null;
-  // Viewing your own profile (e.g. tapped your own avatar in the chat): only the
-  // stats + View Profile make sense — no gifting/following/reporting/managing yourself.
+  // Viewing your own profile (your seat or your chat avatar): stats, View Profile,
+  // and — when you're on stage — Mute/Unmute and Exit Stage. No gifting /
+  // following / reporting / managing yourself.
   const isSelf = target.userId === authStore.getUserId();
   const avatarUri = resolveAvatar(target.avatarUrl);
   const coverUri = resolveAvatar(coverUrl);
@@ -209,10 +185,8 @@ export function UserProfileSheet({
         </TouchableWithoutFeedback>
       </Animated.View>
 
-      <Animated.View style={[ps.sheet, { transform: [{ translateY: slideAnim }] }]}>
-        <View style={ps.handle} />
-
-        {/* Cover banner */}
+      <Animated.View style={[ps.sheet, { paddingBottom: Math.max(insets.bottom, 12) + 8, transform: [{ translateY: slideAnim }] }]}>
+        {/* Cover, full width */}
         <View style={ps.coverWrap}>
           {coverUri ? (
             <Image source={{ uri: coverUri }} style={ps.cover} resizeMode="cover" />
@@ -223,29 +197,36 @@ export function UserProfileSheet({
               style={ps.cover}
             />
           )}
+          <View style={ps.handle} />
         </View>
 
-        {/* Avatar overlapping the banner, left-aligned, name below */}
+        {/* Avatar overlapping the cover (level badge on it) · name + @username beside it */}
         <View style={ps.identityRow}>
-          {avatarUri ? (
-            <Image source={{ uri: avatarUri }} style={ps.avatar} />
-          ) : (
-            <View style={[ps.avatar, ps.avatarFallback]}>
-              <Text style={ps.avatarInitial}>{target.userName[0]?.toUpperCase() ?? '?'}</Text>
+          <View style={ps.avatarWrap}>
+            <Image source={avatarSource(avatarUri)} style={ps.avatar} />
+          </View>
+          <View style={ps.nameBlock}>
+            <View style={ps.nameRow}>
+              <Text style={ps.name} numberOfLines={1}>{target.userName}</Text>
+              {level != null && (
+                <ExpoImage
+                  source={USER_LEVEL_IMAGES[Math.min(level, 100)]}
+                  style={ps.levelBadge}
+                  contentFit="contain"
+                />
+              )}
+              {target.isRoomHost && (
+                <View style={ps.hostPill}>
+                  <Ionicons name="star" size={10} color="#FFB800" />
+                  <Text style={ps.hostPillText}>Host</Text>
+                </View>
+              )}
             </View>
-          )}
+            {!!username && <Text style={ps.username} numberOfLines={1}>@{username}</Text>}
+          </View>
         </View>
 
-        <View style={ps.banner}>
-          <Text style={ps.name} numberOfLines={1}>{target.userName}</Text>
-          {target.isRoomHost && (
-            <View style={ps.hostPill}>
-              <Ionicons name="star" size={11} color="#FFD700" />
-              <Text style={ps.hostPillText}>Host</Text>
-            </View>
-          )}
-        </View>
-
+        {/* Stats */}
         {loading ? (
           <View style={ps.loadingWrap}>
             <ActivityIndicator size="small" color="#7A0EED" />
@@ -269,96 +250,107 @@ export function UserProfileSheet({
           </View>
         )}
 
-        {!isSelf && (
-        <View style={ps.actionsGrid}>
-          <TouchableOpacity
-            style={[ps.actionBtn, ps.actionBtnPrimary]}
-            activeOpacity={0.85}
-            onPress={() => { onClose(); onSendGift(target.userId, target.userName); }}>
-            <Ionicons name="gift" size={18} color="#FFFFFF" />
-            <Text style={ps.actionBtnPrimaryText}>Send Gift</Text>
-          </TouchableOpacity>
+        <View style={ps.divider} />
 
-          <TouchableOpacity
-            style={[ps.actionBtn, isFollowing ? ps.actionBtnGhost : ps.actionBtnSecondary]}
-            activeOpacity={0.85}
-            disabled={followBusy}
-            onPress={handleToggleFollow}>
-            <Ionicons name={isFollowing ? 'checkmark' : 'person-add'} size={18} color={isFollowing ? '#7A0EED' : '#FFFFFF'} />
-            <Text style={isFollowing ? ps.actionBtnGhostText : ps.actionBtnSecondaryText}>
-              {isFollowing ? 'Following' : 'Follow'}
-            </Text>
-          </TouchableOpacity>
-        </View>
-        )}
+        {/* Actions — one rounded row each; Send Gifts highlighted */}
+        <View style={ps.actions}>
+          {!isSelf && (
+            <ActionRow
+              icon="gift" iconColor="#E8944A" label="Send Gifts"
+              onPress={() => { onClose(); onSendGift(target.userId, target.userName); }}
+            />
+          )}
+          {/* Your own card: mic + leave the seat */}
+          {isSelf && selfOnStage && onToggleSelfMute && (
+            <ActionRow
+              icon={selfIsMuted ? 'mic' : 'mic-off'}
+              iconColor={selfIsMuted ? '#7A0EED' : '#E14C57'}
+              label={selfIsMuted ? 'Unmute' : 'Mute'}
+              onPress={() => { onClose(); onToggleSelfMute(); }}
+            />
+          )}
+          {isSelf && canExitStage && onExitStage && (
+            <ActionRow icon="exit" label="Exit Audio" danger onPress={() => { onClose(); onExitStage(); }} />
+          )}
+          {isSelf && onReturnToStage && (
+            <ActionRow icon="mic" iconColor="#7A0EED" label="Join Audio" onPress={() => { onClose(); onReturnToStage(); }} />
+          )}
+          <ActionRow icon="person" label="View Profile" onPress={handleViewProfile} />
+          {!isSelf && (
+            <ActionRow
+              icon={isFollowing ? 'checkmark-circle' : 'person-add'}
+              iconColor={isFollowing ? '#7A0EED' : undefined}
+              label={isFollowing ? 'Following' : 'Follow'}
+              disabled={followBusy}
+              onPress={handleToggleFollow}
+            />
+          )}
 
-        <TouchableOpacity style={ps.listRow} activeOpacity={0.7} onPress={handleViewProfile}>
-          <Ionicons name="person-circle-outline" size={20} color="#60626A" />
-          <Text style={ps.listRowText}>View Profile</Text>
-          <Ionicons name="chevron-forward" size={16} color="#D8D3EC" />
-        </TouchableOpacity>
-
-        {!isSelf && (
-          <TouchableOpacity style={ps.listRow} activeOpacity={0.7} onPress={() => setReportVisible(true)}>
-            <Ionicons name="flag-outline" size={20} color="#60626A" />
-            <Text style={ps.listRowText}>Report</Text>
-            <Ionicons name="chevron-forward" size={16} color="#D8D3EC" />
-          </TouchableOpacity>
-        )}
-
-        {canManage && !isSelf && (
-          <>
-            {target.slotIndex == null ? (
-              <TouchableOpacity
-                style={ps.listRow}
-                activeOpacity={0.7}
-                onPress={() => { onClose(); onAddToStage(target.userId); }}>
-                <Ionicons name="person-add-outline" size={20} color="#60626A" />
-                <Text style={ps.listRowText}>Add to Stage</Text>
-                <Ionicons name="chevron-forward" size={16} color="#D8D3EC" />
-              </TouchableOpacity>
+          {canManage && !isSelf && (
+            target.slotIndex == null ? (
+              <ActionRow
+                icon="mic-circle" label="Add to Stage"
+                onPress={() => { onClose(); onAddToStage(target.userId); }}
+              />
             ) : (
               <>
-                <TouchableOpacity
-                  style={ps.listRow}
-                  activeOpacity={0.7}
-                  onPress={() => { onClose(); onToggleTargetMute(target.userId, !targetIsMuted); }}>
-                  <Ionicons name={targetIsMuted ? 'mic-off-outline' : 'mic-outline'} size={20} color="#60626A" />
-                  <Text style={ps.listRowText}>{targetIsMuted ? 'Unmute' : 'Mute'}</Text>
-                  <Ionicons name="chevron-forward" size={16} color="#D8D3EC" />
-                </TouchableOpacity>
-
-                <TouchableOpacity
-                  style={ps.listRow}
-                  activeOpacity={0.7}
-                  onPress={() => { onClose(); onRemoveFromStage(target.slotIndex!); }}>
-                  <Ionicons name="exit-outline" size={20} color="#E14C57" />
-                  <Text style={[ps.listRowText, ps.dangerText]}>Remove from Audio Box</Text>
-                  <Ionicons name="chevron-forward" size={16} color="#D8D3EC" />
-                </TouchableOpacity>
+                <ActionRow
+                  icon={targetIsMuted ? 'mic' : 'mic-off'}
+                  iconColor={targetIsMuted ? '#7A0EED' : '#E14C57'}
+                  label={targetIsMuted ? 'Unmute' : 'Mute'}
+                  onPress={() => { onClose(); onToggleTargetMute(target.userId, !targetIsMuted); }}
+                />
+                <ActionRow
+                  icon="exit" label="Remove from Audio Box" danger
+                  onPress={() => { onClose(); onRemoveFromStage(target.slotIndex!); }}
+                />
               </>
-            )}
+            )
+          )}
 
-            <TouchableOpacity
-              style={ps.listRow}
-              activeOpacity={0.7}
-              onPress={() => { onClose(); onBlock(target.userId); }}>
-              <Ionicons name="ban-outline" size={20} color="#E14C57" />
-              <Text style={[ps.listRowText, ps.dangerText]}>Block</Text>
-              <Ionicons name="chevron-forward" size={16} color="#D8D3EC" />
-            </TouchableOpacity>
-          </>
-        )}
+          {!isSelf && (
+            <ActionRow icon="warning" label="Report" onPress={() => setReportVisible(true)} />
+          )}
+          {canManage && !isSelf && (
+            <ActionRow icon="ban" label="Block" danger onPress={() => { onClose(); onBlock(target.userId); }} />
+          )}
+        </View>
       </Animated.View>
 
-      <ReportPicker
+      <ReportReasonModal
         visible={reportVisible}
+        title="Report User"
+        subtitle={`Why are you reporting ${target.userName}?`}
+        notice={REPORT_GUIDANCE}
+        reasons={USER_REPORT_REASONS}
         onClose={() => setReportVisible(false)}
         onSubmit={handleSubmitReport}
       />
     </Modal>
   );
 }
+
+function ActionRow({ icon, iconColor, label, onPress, danger, disabled }: {
+  icon: keyof typeof Ionicons.glyphMap;
+  iconColor?: string;
+  label: string;
+  onPress: () => void;
+  danger?: boolean;
+  disabled?: boolean;
+}) {
+  return (
+    <TouchableOpacity
+      activeOpacity={0.75}
+      disabled={disabled}
+      onPress={onPress}
+      style={ps.actionRow}>
+      <Ionicons name={icon} size={20} color={danger ? '#E14C57' : iconColor ?? '#1C1E22'} />
+      <Text style={[ps.actionText, danger && ps.dangerText]}>{label}</Text>
+    </TouchableOpacity>
+  );
+}
+
+const AVATAR = 72;
 
 const ps = StyleSheet.create({
   backdrop: {
@@ -370,67 +362,49 @@ const ps = StyleSheet.create({
     position: 'absolute',
     bottom: 0, left: 0, right: 0,
     backgroundColor: '#FFFFFF',
-    borderTopLeftRadius: 24, borderTopRightRadius: 24,
-    paddingTop: 10,
-    paddingBottom: 28,
+    borderTopLeftRadius: 20, borderTopRightRadius: 20,
     overflow: 'hidden',
     zIndex: 11,
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: -4 },
-    shadowOpacity: 0.12,
-    shadowRadius: 16,
     elevation: 24,
   },
-  handle: {
-    width: 40, height: 4, borderRadius: 2,
-    backgroundColor: '#E0DDED',
-    alignSelf: 'center',
-    marginBottom: 14,
-    zIndex: 1,
-  },
 
-  // Cover banner — full-bleed, edge to edge
+  // Cover — full-bleed; the drag handle sits on it
   coverWrap: { width: '100%', height: 110 },
   cover: { width: '100%', height: '100%' },
+  handle: {
+    position: 'absolute', top: 8, alignSelf: 'center',
+    width: 36, height: 4, borderRadius: 2, backgroundColor: 'rgba(255,255,255,0.85)',
+  },
 
-  // Avatar overlaps the bottom of the banner, left-aligned
-  identityRow: { paddingHorizontal: 20, marginTop: -38 },
-  avatar: { width: 76, height: 76, borderRadius: 38, borderWidth: 3, borderColor: '#FFFFFF' },
+  // Avatar overlaps the cover's bottom edge; the name block starts just below the
+  // cover (never over it), however many lines it has
+  identityRow: { flexDirection: 'row', alignItems: 'flex-start', gap: 12, paddingHorizontal: 16, marginTop: -AVATAR / 2 },
+  avatarWrap: { width: AVATAR, alignItems: 'center' },
+  avatar: { width: AVATAR, height: AVATAR, borderRadius: AVATAR / 2, borderWidth: 3, borderColor: '#FFFFFF', backgroundColor: '#FFFFFF' },
   avatarFallback: { backgroundColor: '#EDE8F7', alignItems: 'center', justifyContent: 'center' },
-  avatarInitial: { fontSize: 28, fontWeight: '800', color: '#7A0EED' },
-
-  banner: { flexDirection: 'row', alignItems: 'center', gap: 8, paddingHorizontal: 20, marginTop: 10, marginBottom: 16 },
-  name: { fontSize: 17, fontWeight: '800', color: '#1C1E22', maxWidth: '70%' },
+  avatarInitial: { fontSize: 24, fontWeight: '800', color: '#7A0EED' },
+  // Small level pill on the name line (same size as in chat messages)
+  levelBadge: { width: 44, height: 16 },
+  nameBlock: { flex: 1, paddingTop: AVATAR / 2 + 6, gap: 2 },
+  nameRow: { flexDirection: 'row', alignItems: 'center', gap: 6 },
+  name: { flexShrink: 1, fontSize: 16, fontWeight: '700', color: '#1C1E22' },
+  username: { fontSize: 12, color: '#8A8C93' },
   hostPill: {
-    flexDirection: 'row', alignItems: 'center', gap: 4,
-    backgroundColor: '#FFF8E1', borderRadius: 10, paddingHorizontal: 8, paddingVertical: 3,
+    flexDirection: 'row', alignItems: 'center', gap: 3,
+    backgroundColor: '#FFF6DC', borderRadius: 9, paddingHorizontal: 7, paddingVertical: 2,
   },
   hostPillText: { fontSize: 11, fontWeight: '700', color: '#B8860B' },
-  loadingWrap: { paddingVertical: 24, alignItems: 'center' },
-  statsRow: {
-    flexDirection: 'row', justifyContent: 'space-around',
-    backgroundColor: '#FAF8FF', borderRadius: 14, paddingVertical: 12, marginHorizontal: 20, marginBottom: 16,
-  },
-  statBox: { alignItems: 'center', gap: 2 },
-  statValue: { fontSize: 15, fontWeight: '800', color: '#1C1E22' },
-  statLabel: { fontSize: 11, color: '#60626A', fontWeight: '500' },
-  actionsGrid: { flexDirection: 'row', gap: 10, marginBottom: 8, paddingHorizontal: 20 },
-  actionBtn: {
-    flex: 1, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 6,
-    borderRadius: 14, paddingVertical: 12,
-  },
-  actionBtnPrimary: { backgroundColor: '#7A0EED' },
-  actionBtnPrimaryText: { fontSize: 14, fontWeight: '700', color: '#FFFFFF' },
-  actionBtnSecondary: { backgroundColor: '#B50357' },
-  actionBtnSecondaryText: { fontSize: 14, fontWeight: '700', color: '#FFFFFF' },
-  actionBtnGhost: { backgroundColor: '#F3EFFE', borderWidth: 1, borderColor: '#D8C8F5' },
-  actionBtnGhostText: { fontSize: 14, fontWeight: '700', color: '#7A0EED' },
-  listRow: {
-    flexDirection: 'row', alignItems: 'center', gap: 12,
-    paddingVertical: 13,
-    paddingHorizontal: 20,
-    borderTopWidth: StyleSheet.hairlineWidth, borderTopColor: '#F0EDF8',
-  },
-  listRowText: { flex: 1, fontSize: 14, fontWeight: '600', color: '#1C1E22' },
+
+  loadingWrap: { paddingVertical: 22, alignItems: 'center' },
+  statsRow: { flexDirection: 'row', justifyContent: 'space-around', paddingHorizontal: 16, paddingTop: 14, paddingBottom: 12 },
+  statBox: { flex: 1, alignItems: 'center', gap: 2 },
+  statValue: { fontSize: 18, fontWeight: '700', color: '#1C1E22' },
+  statLabel: { fontSize: 12, color: '#8A8C93' },
+  divider: { height: StyleSheet.hairlineWidth, backgroundColor: '#ECE9F4', marginHorizontal: 16, marginBottom: 12 },
+
+  // Action rows — plain, straight on the white sheet
+  actions: { paddingHorizontal: 16 },
+  actionRow: { flexDirection: 'row', alignItems: 'center', gap: 14, height: 46, paddingHorizontal: 4 },
+  actionText: { fontSize: 14, fontWeight: '600', color: '#1C1E22' },
   dangerText: { color: '#E14C57' },
 });

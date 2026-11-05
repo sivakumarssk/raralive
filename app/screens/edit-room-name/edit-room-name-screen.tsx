@@ -257,11 +257,11 @@ const s = StyleSheet.create({
   flex: { flex: 1 },
   header: {
     flexDirection: 'row', alignItems: 'center',
-    paddingHorizontal: 16, paddingVertical: 14,
-    gap: 10,
+    paddingHorizontal: 12, paddingVertical: 10,
+    gap: 8,
   },
   backBtn: { width: 36, height: 36, alignItems: 'center', justifyContent: 'center' },
-  headerTitle: { flex: 1, fontSize: 18, fontWeight: '700', color: '#1C1E22' },
+  headerTitle: { flex: 1, fontSize: 20, fontWeight: '700', color: '#1C1E22' },
 
   scrollContent: { paddingHorizontal: 16, paddingBottom: 24, gap: 16 },
 
@@ -270,7 +270,7 @@ const s = StyleSheet.create({
     paddingHorizontal: 14, paddingVertical: 12, gap: 4,
   },
   currentLabel: { fontSize: 11, fontWeight: '500', color: '#8A8299' },
-  currentValue: { fontSize: 15, fontWeight: '700', color: '#1C1E22' },
+  currentValue: { fontSize: 14, fontWeight: '700', color: '#1C1E22' },
 
   sectionLabel: { fontSize: 12, fontWeight: '500', color: '#8A8C94', marginBottom: 8 },
 
@@ -282,10 +282,10 @@ const s = StyleSheet.create({
     backgroundColor: '#FFFFFF', alignItems: 'center', gap: 4,
   },
   durationCardActive: { borderColor: '#7A0EED' },
-  durationLabel: { fontSize: 11.5, fontWeight: '600', color: '#1C1E22' },
+  durationLabel: { fontSize: 12, fontWeight: '600', color: '#1C1E22' },
   durationLabelActive: { color: '#7A0EED' },
   coinIcon: { width: 16, height: 16 },
-  priceText: { fontSize: 11.5, fontWeight: '700', color: '#8A8C94' },
+  priceText: { fontSize: 12, fontWeight: '700', color: '#8A8C94' },
   priceTextActive: { color: '#1C1E22' },
 
   inputRow: { flexDirection: 'row', alignItems: 'stretch' },
@@ -303,14 +303,14 @@ const s = StyleSheet.create({
   input: { fontSize: 14, color: '#1C1E22', padding: 0 },
   charCount: {
     position: 'absolute', right: 12, bottom: 6,
-    fontSize: 10, color: '#B8B4C4',
+    fontSize: 11, color: '#B8B4C4',
   },
 
   errorCard: {
     flexDirection: 'row', alignItems: 'center', gap: 6,
     backgroundColor: '#FFF0F0', borderRadius: 8, paddingHorizontal: 10, paddingVertical: 7,
   },
-  errorText: { flex: 1, fontSize: 11.5, color: '#E14C57', fontWeight: '500' },
+  errorText: { flex: 1, fontSize: 12, color: '#E14C57', fontWeight: '500' },
 
   noteCard: {
     flexDirection: 'row', gap: 8,
@@ -325,10 +325,10 @@ const s = StyleSheet.create({
   bottomBar: { paddingHorizontal: 16, paddingTop: 10, paddingBottom: 16 },
   okBtn: {
     borderRadius: 24, backgroundColor: '#4A09B6',
-    paddingVertical: 14, alignItems: 'center', justifyContent: 'center',
+    paddingVertical: 11, alignItems: 'center', justifyContent: 'center',
   },
   okBtnDisabled: { backgroundColor: '#D9D3EC' },
-  okBtnText: { fontSize: 14.5, fontWeight: '700', color: '#FFFFFF', letterSpacing: 0.3 },
+  okBtnText: { fontSize: 14, fontWeight: '700', color: '#FFFFFF', letterSpacing: 0.3 },
 });
 
 // ── Success / insufficient-coins modals ──────────────────────────────────────
@@ -354,9 +354,9 @@ const m = StyleSheet.create({
     alignItems: 'center', justifyContent: 'center',
     marginBottom: 14,
   },
-  successTitle: { fontSize: 17, fontWeight: '800', color: '#1C1E22', letterSpacing: -0.2, textAlign: 'center' },
+  successTitle: { fontSize: 16, fontWeight: '800', color: '#1C1E22', letterSpacing: -0.2, textAlign: 'center' },
   successMessage: {
-    marginTop: 6, fontSize: 12.5, fontWeight: '500', color: '#8A8C94',
+    marginTop: 6, fontSize: 12, fontWeight: '500', color: '#8A8C94',
     textAlign: 'center', lineHeight: 18,
   },
 
@@ -365,20 +365,20 @@ const m = StyleSheet.create({
     backgroundColor: '#F4F1FA', borderRadius: 12,
     paddingHorizontal: 14, paddingVertical: 12, gap: 3,
   },
-  resultLabel: { fontSize: 10.5, fontWeight: '500', color: '#8A8299' },
+  resultLabel: { fontSize: 11, fontWeight: '500', color: '#8A8299' },
   resultNameRow: { flexDirection: 'row', alignItems: 'center', gap: 6 },
-  resultName: { flex: 1, fontSize: 15, fontWeight: '700', color: '#1C1E22' },
+  resultName: { flex: 1, fontSize: 14, fontWeight: '700', color: '#1C1E22' },
   validTillLabel: { marginTop: 8 },
   validTillRow: { flexDirection: 'row', alignItems: 'center', gap: 6 },
-  validTillText: { fontSize: 12.5, fontWeight: '600', color: '#1C1E22' },
-  validTillDuration: { fontSize: 11.5, color: '#8A8C94' },
+  validTillText: { fontSize: 12, fontWeight: '600', color: '#1C1E22' },
+  validTillDuration: { fontSize: 12, color: '#8A8C94' },
 
   okBtn: {
     marginTop: 20, width: '100%',
     flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8,
-    backgroundColor: '#4A09B6', borderRadius: 24, paddingVertical: 14,
+    backgroundColor: '#4A09B6', borderRadius: 24, paddingVertical: 11,
   },
-  okBtnText: { fontSize: 14.5, fontWeight: '700', color: '#FFFFFF', letterSpacing: 0.3 },
+  okBtnText: { fontSize: 14, fontWeight: '700', color: '#FFFFFF', letterSpacing: 0.3 },
   dismissBtn: { marginTop: 6, paddingVertical: 10 },
   dismissBtnText: { fontSize: 13, fontWeight: '700', color: '#8B8D96' },
 });

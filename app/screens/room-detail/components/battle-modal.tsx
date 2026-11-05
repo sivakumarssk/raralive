@@ -15,25 +15,41 @@ import {
   TextInput,
   TouchableOpacity,
   View,
+  useWindowDimensions,
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { BASE_URL, MEDIA_BASE } from '@/services/api';
 import { authStore } from '@/store/auth-store';
 import { GradientButton } from '@/components/ui/gradient-button';
 import { onBattleInviteAccepted, onBattleInviteDeclined } from '@/store/socket-store';
+import { RC } from '../room-ui';
 
 const { height: SCREEN_H } = Dimensions.get('window');
 const SHEET_NORMAL  = SCREEN_H * 0.60;
 const SHEET_GIFTING = SCREEN_H * 0.78;
 const SHEET_WAITING = SCREEN_H * 0.80;
-const TIME_OPTIONS = [10, 15, 20, 30, 45];
-const TARGET_OPTIONS = [
-  { label: '5K',   value: 5_000 },
-  { label: '20K',  value: 20_000 },
-  { label: '50K',  value: 50_000 },
-  { label: '100K', value: 100_000 },
-  { label: '200K', value: 200_000 },
-];
+// Battle lengths on offer (minutes) — fixed by product, not admin-managed.
+const DURATION_OPTIONS = [5, 10, 15, 20, 25, 30];
+
+/** Gifting Battle target, managed in the admin panel (GET /battle-targets). */
+type BattleTarget = {
+  id: string;
+  label: string | null;
+  coin_amount: string | number;
+  image_url: string | null;
+  description: string | null;
+};
+
+/** 5000 → "5K", 1500000 → "1.5M". */
+function shortCoins(n: number) {
+  if (n >= 1_000_000) return `${+(n / 1_000_000).toFixed(1)}M`;
+  if (n >= 1_000) return `${+(n / 1_000).toFixed(1)}K`;
+  return String(n);
+}
+
+function targetLabel(t: BattleTarget) {
+  return t.label || shortCoins(Number(t.coin_amount));
+}
 
 type Room = { id: string; room_name: string; room_image_url: string | null };
 type Page = 'setup' | 'invite' | 'waiting';
@@ -79,7 +95,12 @@ export function BattleModal({ visible, onClose, roomId, roomImageUrl }: Props) {
   const [page, setPage] = useState<Page>('setup');
   const [selectedTime, setSelectedTime] = useState(30);
   const [battleMode, setBattleMode] = useState<BattleMode>('normal');
-  const [selectedTarget, setSelectedTarget] = useState(5_000);
+  // Gifting Battle targets come from the admin panel, refreshed each time the sheet opens
+  const [targets, setTargets] = useState<BattleTarget[]>([]);
+  const [targetsLoading, setTargetsLoading] = useState(false);
+  const [targetsError, setTargetsError] = useState(false);
+  const [selectedTargetId, setSelectedTargetId] = useState<string | null>(null);
+  const selectedTarget = targets.find(t => t.id === selectedTargetId) ?? null;
   const [rooms, setRooms] = useState<Room[]>([]);
   const [loadingRooms, setLoadingRooms] = useState(false);
   const [invitedId, setInvitedId] = useState<string | null>(null);
@@ -88,6 +109,10 @@ export function BattleModal({ visible, onClose, roomId, roomImageUrl }: Props) {
   const [searchQuery, setSearchQuery] = useState('');
   const [pendingInvite, setPendingInvite] = useState<InviteDetail | null>(null);
   const pendingInviteIdRef = useRef<string | null>(null);
+  // Auto-start after the opponent accepts: guards against starting twice, and
+  // holds the error (with a Retry) if the start request fails.
+  const startingRef = useRef(false);
+  const [startError, setStartError] = useState<string | null>(null);
 
   const panResponder = useRef(
     PanResponder.create({
@@ -113,12 +138,35 @@ export function BattleModal({ visible, onClose, roomId, roomImageUrl }: Props) {
     setSearchQuery('');
     setPendingInvite(null);
     pendingInviteIdRef.current = null;
-    translateY.setValue(SHEET_NORMAL);
+    startingRef.current = false;
+    setStartError(null);
+    loadTargets();
+    translateY.setValue(SCREEN_H);
     Animated.spring(translateY, { toValue: 0, useNativeDriver: true, tension: 60, friction: 12 }).start();
   }
 
   function close() {
-    Animated.timing(translateY, { toValue: getSheetHeight(), duration: 220, useNativeDriver: true }).start(onClose);
+    Animated.timing(translateY, { toValue: SCREEN_H, duration: 220, useNativeDriver: true }).start(onClose);
+  }
+
+  async function loadTargets() {
+    setTargetsLoading(true);
+    setTargetsError(false);
+    try {
+      const r = await fetch(`${BASE_URL}/battle-targets`);
+      const json = await r.json();
+      if (json.success) {
+        const list: BattleTarget[] = json.data ?? [];
+        setTargets(list);
+        // Keep the host's pick if it still exists, else preselect the first
+        setSelectedTargetId(prev => (prev && list.some(t => t.id === prev) ? prev : list[0]?.id ?? null));
+      } else {
+        setTargetsError(true);
+      }
+    } catch {
+      setTargetsError(true);
+    }
+    setTargetsLoading(false);
   }
 
   function goInvite() {
@@ -156,29 +204,24 @@ export function BattleModal({ visible, onClose, roomId, roomImageUrl }: Props) {
           to_room_id: toRoomId,
           duration_minutes: selectedTime,
           mode: battleMode,
+          ...(battleMode === 'gifting' && selectedTarget ? { target_id: selectedTarget.id } : {}),
         }),
       });
       const json = await r.json();
       if (json.success && json.data) {
         const inviteId = json.data.id;
         pendingInviteIdRef.current = inviteId;
-        // Fetch full invite (with room names) since createInvite returns raw row
-        const fullRes = await fetch(`${BASE_URL}/battle/invite/${inviteId}`, {
-          headers: token ? { Authorization: `Bearer ${token}` } : {},
-        });
-        const fullJson = await fullRes.json();
-        if (fullJson.success) setPendingInvite(fullJson.data as InviteDetail);
+        // The invite response already carries room names/images
+        setPendingInvite(json.data as InviteDetail);
         setPage('waiting');
         // subscribe to socket events
-        const unsubA = onBattleInviteAccepted(async ({ invite_id }) => {
+        const unsubA = onBattleInviteAccepted(({ invite_id, battle }) => {
           if (invite_id !== pendingInviteIdRef.current) return;
-          const token2 = authStore.getToken();
-          const res = await fetch(`${BASE_URL}/battle/invite/${invite_id}`, {
-            headers: token2 ? { Authorization: `Bearer ${token2}` } : {},
-          });
-          const j = await res.json();
-          if (j.success) setPendingInvite(j.data as InviteDetail);
           unsubA();
+          setPendingInvite(prev => (battle as InviteDetail | undefined) ?? (prev ? { ...prev, status: 'accepted' } : prev));
+          // No Start button — the battle begins as soon as the opponent accepts.
+          // Started straight from the socket event; /battle/start validates the status.
+          startBattle();
         });
         const unsubD = onBattleInviteDeclined(async ({ invite_id }) => {
           if (invite_id !== pendingInviteIdRef.current) return;
@@ -215,7 +258,9 @@ export function BattleModal({ visible, onClose, roomId, roomImageUrl }: Props) {
   }
 
   async function startBattle() {
-    if (!pendingInviteIdRef.current) return;
+    if (!pendingInviteIdRef.current || startingRef.current) return;
+    startingRef.current = true;
+    setStartError(null);
     try {
       const token = authStore.getToken();
       const r = await fetch(`${BASE_URL}/battle/start`, {
@@ -225,10 +270,15 @@ export function BattleModal({ visible, onClose, roomId, roomImageUrl }: Props) {
       });
       const json = await r.json();
       if (json.success) {
-        // Battle banner in the room picks up the newly-started battle via its own polling
+        // Banner + VS bar appear from the battle_started socket event
         close();
+        return;
       }
-    } catch {}
+      setStartError(json.message || 'Could not start the battle.');
+    } catch {
+      setStartError('Network error. Could not start the battle.');
+    }
+    startingRef.current = false;
   }
 
   const filteredRooms = rooms.filter(r =>
@@ -248,8 +298,10 @@ export function BattleModal({ visible, onClose, roomId, roomImageUrl }: Props) {
       <Animated.View
         style={[
           s.sheet,
-          // white bg for waiting page
-          { height: currentHeight, paddingBottom: insets.bottom + 8, transform: [{ translateY }] },
+          // Setup / waiting pages wrap their content (no empty gap at the bottom);
+          // the invite page is a scrolling list, so it keeps a fixed height.
+          page === 'invite' ? { height: currentHeight } : { maxHeight: SCREEN_H * 0.9 },
+          { paddingBottom: insets.bottom + 8, transform: [{ translateY }] },
         ]}>
 
         {/* Drag handle */}
@@ -268,17 +320,17 @@ export function BattleModal({ visible, onClose, roomId, roomImageUrl }: Props) {
               <View style={s.headerBtn} />
             )}
             <Text style={s.title}>
-              {page === 'invite' ? 'Invite Room' : 'BATTLE ROOM'}
+              {page === 'invite' ? 'Invite Room' : 'Battle room'}
             </Text>
             <TouchableOpacity onPress={close} style={s.headerBtn} hitSlop={8}>
-              <Ionicons name="close" size={22} color="#7A0EED" />
+              <Ionicons name="close" size={20} color="#7A0EED" />
             </TouchableOpacity>
           </View>
         )}
         {/* Close button only for waiting page */}
         {page === 'waiting' && (
           <TouchableOpacity onPress={close} style={s.waitingClose} hitSlop={8}>
-            <Ionicons name="close" size={22} color="#7A0EED" />
+            <Ionicons name="close" size={20} color="#7A0EED" />
           </TouchableOpacity>
         )}
 
@@ -294,8 +346,12 @@ export function BattleModal({ visible, onClose, roomId, roomImageUrl }: Props) {
             setSelectedTime={setSelectedTime}
             battleMode={battleMode}
             setBattleMode={setBattleMode}
-            selectedTarget={selectedTarget}
-            setSelectedTarget={setSelectedTarget}
+            targets={targets}
+            targetsLoading={targetsLoading}
+            targetsError={targetsError}
+            onRetryTargets={loadTargets}
+            selectedTargetId={selectedTargetId}
+            setSelectedTargetId={setSelectedTargetId}
             onStart={goInvite}
             roomImageUrl={roomImageUrl ?? null}
           />
@@ -313,12 +369,13 @@ export function BattleModal({ visible, onClose, roomId, roomImageUrl }: Props) {
           <WaitingPage
             invite={pendingInvite}
             onGoBack={() => setPage('invite')}
-            onStart={startBattle}
+            onRetryStart={startBattle}
+            startError={startError}
             battleMode={battleMode}
             selectedTarget={selectedTarget}
           />
         ) : (
-          <View style={{ flex: 1, alignItems: 'center', justifyContent: 'center' }}>
+          <View style={{ paddingVertical: 48, alignItems: 'center', justifyContent: 'center' }}>
             <ActivityIndicator color="#B06EFF" size="large" />
           </View>
         )}
@@ -329,180 +386,221 @@ export function BattleModal({ visible, onClose, roomId, roomImageUrl }: Props) {
 
 // ── Setup page ────────────────────────────────────────────────────────────────
 
+const H_PAD = 16;      // sheet side padding
+const GRID_GAP = 8;    // gap between time chips / target cards
+
 function SetupPage({
   selectedTime, setSelectedTime,
   battleMode, setBattleMode,
-  selectedTarget, setSelectedTarget,
+  targets, targetsLoading, targetsError, onRetryTargets,
+  selectedTargetId, setSelectedTargetId,
   onStart, roomImageUrl,
 }: {
   selectedTime: number;
   setSelectedTime: (t: number) => void;
   battleMode: BattleMode;
   setBattleMode: (m: BattleMode) => void;
-  selectedTarget: number;
-  setSelectedTarget: (v: number) => void;
+  targets: BattleTarget[];
+  targetsLoading: boolean;
+  targetsError: boolean;
+  onRetryTargets: () => void;
+  selectedTargetId: string | null;
+  setSelectedTargetId: (id: string) => void;
   onStart: () => void;
   roomImageUrl: string | null;
 }) {
-  const resolvedImage = roomImageUrl
-    ? roomImageUrl.startsWith('http') ? roomImageUrl : `${MEDIA_BASE}/${roomImageUrl.replace(/^\//, '')}`
-    : null;
+  const { width } = useWindowDimensions();
+  // Everything scales with the screen width so it fits small and large phones
+  const avatarSize = Math.round(Math.min(72, Math.max(54, width * 0.17)));
+  const vsWidth = Math.round(Math.min(96, Math.max(68, width * 0.22)));
+
+  const resolvedImage = resolveUrl(roomImageUrl);
+  const selectedTarget = targets.find(t => t.id === selectedTargetId) ?? null;
+  const isGifting = battleMode === 'gifting';
+  const canStart = !isGifting || !!selectedTarget;
 
   return (
-    <View style={s.setupWrap}>
+    <ScrollView
+      style={s.setupScroll}
+      contentContainerStyle={s.setupWrap}
+      showsVerticalScrollIndicator={false}
+      bounces={false}>
       {/* ── VS hero ── */}
       <View style={s.vsRow}>
         <View style={s.avatarCol}>
-          <View style={s.avatarRing}>
-            <View style={s.avatar}>
-              {resolvedImage ? (
-                <Image source={{ uri: resolvedImage }} style={s.avatarImg} resizeMode="cover" />
-              ) : (
-                <Image source={require('@/assets/images/raralogo.png')} style={s.avatarImg} resizeMode="contain" />
-              )}
-            </View>
+          <View style={[s.avatarRing, { width: avatarSize, height: avatarSize, borderRadius: avatarSize / 2 }]}>
+            {resolvedImage ? (
+              <Image source={{ uri: resolvedImage }} style={s.avatarImg} resizeMode="cover" />
+            ) : (
+              <Image source={require('@/assets/images/raralogo.png')} style={s.avatarImg} resizeMode="contain" />
+            )}
           </View>
           <View style={s.youBadge}>
-            <Text style={s.youBadgeText}>YOU</Text>
+            <Text style={s.youBadgeText} numberOfLines={1}>You</Text>
           </View>
         </View>
 
         <Image
           source={require('@/assets/tabs/chatroom/vsimage.png')}
-          style={{ width: 100, height: 80 }}
+          style={{ width: vsWidth, height: Math.round(vsWidth * 0.75) }}
           resizeMode="contain"
         />
 
         <View style={s.avatarCol}>
-          <View style={s.avatarRingDashed}>
-            <Text style={s.plusSign}>+</Text>
+          <View style={[s.avatarRingDashed, { width: avatarSize, height: avatarSize, borderRadius: avatarSize / 2 }]}>
+            <Ionicons name="add" size={Math.round(avatarSize * 0.36)} color="#C084FC" />
           </View>
           <View style={[s.youBadge, s.opponentBadge]}>
-            <Text style={s.youBadgeText}>OPPONENT</Text>
+            <Text style={s.youBadgeText} numberOfLines={1}>Opponent</Text>
           </View>
         </View>
       </View>
 
-      {/* ── Battle mode tabs ── */}
+      {/* ── Battle type: two equal segments ── */}
       <View style={s.modeTabRow}>
-        <TouchableOpacity
-          activeOpacity={0.85}
-          onPress={() => setBattleMode('normal')}
-          style={s.modeTab}>
-          {battleMode === 'normal' ? (
-            <LinearGradient colors={['#7A0EED', '#A020C8']} start={{ x: 0, y: 0 }} end={{ x: 1, y: 0 }} style={s.modeTabInner}>
-              <Text style={[s.modeTabText, s.modeTabTextActive]}>NORMAL BATTLE</Text>
-            </LinearGradient>
-          ) : (
-            <View style={s.modeTabInnerInactive}>
-              <Text style={s.modeTabText}>NORMAL BATTLE</Text>
-            </View>
-          )}
-        </TouchableOpacity>
-        <TouchableOpacity
-          activeOpacity={0.85}
-          onPress={() => setBattleMode('gifting')}
-          style={s.modeTab}>
-          {battleMode === 'gifting' ? (
-            <LinearGradient colors={['#C0186A', '#EC4899']} start={{ x: 0, y: 0 }} end={{ x: 1, y: 0 }} style={s.modeTabInner}>
-              <Text style={s.giftEmoji}>🎁</Text>
-              <Text style={[s.modeTabText, s.modeTabTextActive]}>GIFTING BATTLE</Text>
-            </LinearGradient>
-          ) : (
-            <View style={s.modeTabInnerInactive}>
-              <Text style={s.modeTabText}>GIFTING BATTLE</Text>
-            </View>
-          )}
-        </TouchableOpacity>
-      </View>
-
-      {/* ── Select Time ── */}
-      <View style={s.sectionRow}>
-        <Ionicons name="time-outline" size={15} color="#7A0EED" />
-        <Text style={s.sectionTitle}>SELECT TIME</Text>
-      </View>
-      <View style={s.timeRow}>
-        {TIME_OPTIONS.map(t => {
-          const active = selectedTime === t;
+        {(['normal', 'gifting'] as const).map(mode => {
+          const active = battleMode === mode;
+          const label = mode === 'normal' ? 'Normal Battle' : 'Gifting Battle';
+          const icon = mode === 'normal' ? 'flash' : 'gift';
           return (
             <TouchableOpacity
-              key={t}
-              onPress={() => setSelectedTime(t)}
-              activeOpacity={0.8}
-              style={[s.timeChip, active && s.timeChipActive]}>
+              key={mode}
+              activeOpacity={0.85}
+              onPress={() => setBattleMode(mode)}
+              style={s.modeTab}
+              accessibilityRole="button"
+              accessibilityState={{ selected: active }}>
               {active ? (
                 <LinearGradient
-                  colors={['#7A0EED', '#C0186A']}
-                  start={{ x: 0, y: 0 }} end={{ x: 1, y: 1 }}
-                  style={s.timeChipGradient}>
-                  <Text style={[s.timeChipNum, s.timeChipNumActive]}>{t}</Text>
-                  <Text style={[s.timeChipUnit, s.timeChipUnitActive]}>Mins</Text>
+                  colors={mode === 'normal' ? ['#7A0EED', '#A020C8'] : ['#C0186A', '#EC4899']}
+                  start={{ x: 0, y: 0 }} end={{ x: 1, y: 0 }}
+                  style={[s.modeTabInner, s.modeTabInnerActive]}>
+                  <Ionicons name={icon} size={14} color="#FFFFFF" />
+                  <Text style={[s.modeTabText, s.modeTabTextActive]} numberOfLines={1}>{label}</Text>
                 </LinearGradient>
               ) : (
-                <>
-                  <Text style={s.timeChipNum}>{t}</Text>
-                  <Text style={s.timeChipUnit}>Mins</Text>
-                </>
+                <View style={s.modeTabInner}>
+                  <Ionicons name={`${icon}-outline`} size={14} color="#9B6FE0" />
+                  <Text style={s.modeTabText} numberOfLines={1}>{label}</Text>
+                </View>
               )}
             </TouchableOpacity>
           );
         })}
       </View>
 
-      {/* ── Gifting battle: Select Target ── */}
-      {battleMode === 'gifting' && (
+      {/* ── Select time: six equal chips in one row ── */}
+      <View style={s.sectionRow}>
+        <Ionicons name="time-outline" size={15} color="#7A0EED" />
+        <Text style={s.sectionTitle}>Select time</Text>
+      </View>
+      <View style={s.timeRow}>
+        {DURATION_OPTIONS.map(t => {
+          const active = selectedTime === t;
+          return (
+            <TouchableOpacity
+              key={t}
+              onPress={() => setSelectedTime(t)}
+              activeOpacity={0.8}
+              style={[s.timeChip, active && s.timeChipActive]}
+              accessibilityLabel={`${t} minutes`}>
+              {active ? (
+                <LinearGradient colors={['#7A0EED', '#C0186A']} start={{ x: 0, y: 0 }} end={{ x: 1, y: 1 }} style={s.timeChipFill}>
+                  <Text style={[s.timeChipNum, s.timeChipNumActive]}>{t}</Text>
+                  <Text style={[s.timeChipUnit, s.timeChipUnitActive]}>min</Text>
+                </LinearGradient>
+              ) : (
+                <View style={s.timeChipFill}>
+                  <Text style={s.timeChipNum}>{t}</Text>
+                  <Text style={s.timeChipUnit}>min</Text>
+                </View>
+              )}
+            </TouchableOpacity>
+          );
+        })}
+      </View>
+
+      {/* ── Gifting Battle only: admin-configured coin targets ── */}
+      {isGifting && (
         <>
           <View style={s.sectionRow}>
-            <Text style={s.sectionIcon}>🎁</Text>
-            <Text style={s.sectionTitle}>SELECT TARGET</Text>
-            <Text style={s.sectionSub}> (Total Gifts Target)</Text>
+            <Ionicons name="gift-outline" size={15} color="#7A0EED" />
+            <Text style={s.sectionTitle}>Select coins</Text>
+            <Text style={s.sectionSub}>(total gifts target)</Text>
           </View>
-          <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={s.targetRow}>
-            {TARGET_OPTIONS.map(opt => {
-              const isActive = selectedTarget === opt.value;
-              return (
-                <TouchableOpacity
-                  key={opt.value}
-                  onPress={() => setSelectedTarget(opt.value)}
-                  activeOpacity={0.8}
-                  style={[s.targetChip, isActive && s.targetChipActive]}>
-                  {isActive && (
-                    <View style={s.targetCheck}>
-                      <Ionicons name="checkmark" size={9} color="#fff" />
-                    </View>
-                  )}
-                  <Text style={s.coinEmoji}>🪙</Text>
-                  <Text style={[s.targetLabel, isActive && s.targetLabelActive]}>{opt.label}</Text>
-                  <Text style={[s.targetSub, isActive && s.targetSubActive]}>Coins</Text>
-                </TouchableOpacity>
-              );
-            })}
-          </ScrollView>
-          <View style={s.infoRow}>
-            <Ionicons name="information-circle-outline" size={13} color="#9B6FE0" />
-            <Text style={s.infoText}>First player to reach the target wins.</Text>
-          </View>
+
+          {targetsLoading && targets.length === 0 ? (
+            <View style={s.targetState}><ActivityIndicator color="#7A0EED" /></View>
+          ) : targetsError && targets.length === 0 ? (
+            <TouchableOpacity style={s.targetState} onPress={onRetryTargets} activeOpacity={0.7}>
+              <Text style={s.targetStateText}>Couldn't load targets. Tap to retry.</Text>
+            </TouchableOpacity>
+          ) : targets.length === 0 ? (
+            <View style={s.targetState}>
+              <Text style={s.targetStateText}>No gift targets are available right now.</Text>
+            </View>
+          ) : (
+            <ScrollView
+              horizontal
+              showsHorizontalScrollIndicator={false}
+              style={s.targetScroll}
+              contentContainerStyle={s.targetRow}>
+              {targets.map(t => {
+                const active = t.id === selectedTargetId;
+                const img = resolveUrl(t.image_url);
+                return (
+                  <TouchableOpacity
+                    key={t.id}
+                    onPress={() => setSelectedTargetId(t.id)}
+                    activeOpacity={0.8}
+                    style={[s.targetCard, active && s.targetCardActive]}
+                    accessibilityLabel={`${Number(t.coin_amount).toLocaleString()} coins target`}>
+                    {active && (
+                      <View style={s.targetCheck}>
+                        <Ionicons name="checkmark" size={10} color="#fff" />
+                      </View>
+                    )}
+                    {img
+                      ? <Image source={{ uri: img }} style={s.targetImg} resizeMode="contain" />
+                      : <Text style={s.coinEmoji}>🪙</Text>}
+                    <Text style={[s.targetLabel, active && s.targetLabelActive]} numberOfLines={1}>{targetLabel(t)}</Text>
+                    <Text style={[s.targetSub, active && s.targetSubActive]}>coins</Text>
+                  </TouchableOpacity>
+                );
+              })}
+            </ScrollView>
+          )}
+
+          {targets.length > 0 && (
+            <View style={s.infoRow}>
+              <Ionicons name="information-circle-outline" size={14} color="#9B6FE0" />
+              <Text style={s.infoText} numberOfLines={2}>
+                {selectedTarget?.description || 'First room to reach the target wins.'}
+              </Text>
+            </View>
+          )}
         </>
       )}
 
-      {/* ── Start Battle button ── */}
+      {/* ── Start battle ── */}
       <View style={s.bottomArea}>
         <GradientButton
-          label="START BATTLE"
+          label="Start battle"
           onPress={onStart}
+          disabled={!canStart}
           colors={['#7A0EED', '#C0186A', '#F5A623']}
-          iconNode={<Text style={{ fontSize: 18 }}>⚔️</Text>}
-          height={52}
-          borderRadius={14}
-          fontSize={16}
-          textStyle={{ fontWeight: '900', letterSpacing: 1.2 }}
+          iconNode={<Text style={{ fontSize: 14 }}>⚔️</Text>}
+          height={46}
+          borderRadius={23}
+          fontSize={15}
+          textStyle={{ fontWeight: '900', letterSpacing: 0.3 }}
         />
         <View style={s.fairRow}>
           <Ionicons name="shield-checkmark-outline" size={13} color="#9B6FE0" />
-          <Text style={s.fairText}>Fair Battle System  •  Real-time Results</Text>
+          <Text style={s.fairText}>Fair battle system  •  Real-time results</Text>
         </View>
       </View>
-    </View>
+    </ScrollView>
   );
 }
 
@@ -546,7 +644,7 @@ function InvitePage({
         </View>
       ) : rooms.length === 0 ? (
         <View style={inv.center}>
-          <Ionicons name="chatbubbles-outline" size={40} color="#DDDAE8" />
+          <Ionicons name="chatbubbles-outline" size={32} color="#DDDAE8" />
           <Text style={inv.emptyText}>No online rooms available</Text>
         </View>
       ) : (
@@ -596,8 +694,8 @@ const s = StyleSheet.create({
     position: 'absolute',
     bottom: 0, left: 0, right: 0,
     backgroundColor: '#FFFFFF',
-    borderTopLeftRadius: 28,
-    borderTopRightRadius: 28,
+    borderTopLeftRadius: 20,
+    borderTopRightRadius: 20,
   },
   sheetDark: { backgroundColor: '#0F1225' },
   handleArea: { alignItems: 'center', paddingTop: 10, paddingBottom: 2 },
@@ -608,19 +706,19 @@ const s = StyleSheet.create({
     flexDirection: 'row', alignItems: 'center',
     paddingHorizontal: 16, paddingVertical: 8,
   },
-  headerBtn: { width: 36, height: 36, alignItems: 'center', justifyContent: 'center' },
+  headerBtn: { width: 32, height: 32, alignItems: 'center', justifyContent: 'center' },
   title: {
     flex: 1, textAlign: 'center',
-    fontSize: 18, fontWeight: '900', color: '#1C1E22', letterSpacing: 1.5,
+    fontSize: 16, fontWeight: '800', color: '#1C1E22', letterSpacing: 0.2,
   },
   titleDark: { color: '#FFFFFF' },
   waitingClose: {
     position: 'absolute', top: 14, right: 16, zIndex: 10,
-    width: 36, height: 36, alignItems: 'center', justifyContent: 'center',
+    width: 32, height: 32, alignItems: 'center', justifyContent: 'center',
   },
 
   toastBanner: {
-    marginHorizontal: 20, marginBottom: 8,
+    marginHorizontal: 16, marginBottom: 8,
     backgroundColor: '#ECFDF5', borderRadius: 10,
     paddingVertical: 8, paddingHorizontal: 14,
     borderWidth: 1, borderColor: '#6EE7B7',
@@ -629,123 +727,112 @@ const s = StyleSheet.create({
 
   scrollContent: { paddingHorizontal: 16, paddingBottom: 8 },
 
-  setupWrap: { flex: 1, paddingHorizontal: 16, justifyContent: 'space-between' },
+  // Scrolls only if a very short screen can't fit everything
+  setupScroll: { flexGrow: 0 },
+  setupWrap: { paddingHorizontal: H_PAD, paddingBottom: 4 },
 
-  // VS hero
+  // VS hero — sizes set inline from the screen width
   vsRow: {
     flexDirection: 'row', alignItems: 'center',
-    justifyContent: 'center', marginBottom: 10, gap: 20
+    justifyContent: 'space-evenly', marginBottom: 14,
   },
-  avatarCol: { alignItems: 'center', gap: 5 },
+  avatarCol: { alignItems: 'center', gap: 6, minWidth: 72 },
   avatarRing: {
-    width: 68, height: 68, borderRadius: 34,
-    borderWidth: 2, borderColor: '#7A0EED',
-    alignItems: 'center', justifyContent: 'center',
-    backgroundColor: '#F3EEFF',
+    borderWidth: 2, borderColor: '#7A0EED', padding: 3,
+    backgroundColor: '#F3EEFF', overflow: 'hidden',
   },
-  avatar: {
-    width: 58, height: 58, borderRadius: 29,
-    overflow: 'hidden', backgroundColor: '#7A0EED',
-    alignItems: 'center', justifyContent: 'center',
-  },
-  avatarImg: { width: 58, height: 58 },
+  avatarImg: { width: '100%', height: '100%', borderRadius: 999, backgroundColor: '#7A0EED' },
   avatarRingDashed: {
-    width: 68, height: 68, borderRadius: 34,
-    borderWidth: 2, borderColor: '#C084FC',
-    borderStyle: 'dashed',
-    alignItems: 'center', justifyContent: 'center',
-    backgroundColor: '#FAFAFF',
+    borderWidth: 2, borderColor: '#C084FC', borderStyle: 'dashed',
+    alignItems: 'center', justifyContent: 'center', backgroundColor: '#FAFAFF',
   },
-  plusSign: { fontSize: 26, color: '#C084FC', fontWeight: '300' },
   youBadge: {
     backgroundColor: '#7A0EED',
-    paddingHorizontal: 10, paddingVertical: 3, borderRadius: 20,
+    paddingHorizontal: 12, paddingVertical: 3, borderRadius: 20,
   },
   opponentBadge: { backgroundColor: '#EC4899' },
-  youBadgeText: { fontSize: 10, fontWeight: '800', color: '#fff', letterSpacing: 0.5 },
+  youBadgeText: { fontSize: 11, fontWeight: '800', color: '#fff', letterSpacing: 0.2 },
 
-  // Mode tabs
+  // Battle type — compact segmented control, two equal halves
   modeTabRow: {
-    flexDirection: 'row', backgroundColor: '#F3EEFF',
-    borderRadius: 12, padding: 3, marginBottom: 12,
+    flexDirection: 'row', backgroundColor: '#F4EEFF',
+    borderRadius: 999, padding: 3, marginBottom: 16, gap: 3,
+    borderWidth: 1, borderColor: '#EADDFF',
   },
-  modeTab: { flex: 1, borderRadius: 10, overflow: 'hidden' },
+  modeTab: { flex: 1, borderRadius: 999, overflow: 'hidden' },
   modeTabInner: {
-    flexDirection: 'row', alignItems: 'center', justifyContent: 'center',
-    gap: 4, paddingVertical: 10, borderRadius: 10,
-    shadowColor: '#7A0EED', shadowOpacity: 0.3, shadowRadius: 6,
-    shadowOffset: { width: 0, height: 3 }, elevation: 4,
+    height: 36, borderRadius: 999,
+    flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 5,
+    paddingHorizontal: 8,
   },
-  modeTabInnerInactive: {
-    flexDirection: 'row', alignItems: 'center', justifyContent: 'center',
-    gap: 4, paddingVertical: 10, borderRadius: 10,
+  modeTabInnerActive: {
+    shadowColor: '#7A0EED', shadowOpacity: 0.25, shadowRadius: 6,
+    shadowOffset: { width: 0, height: 2 }, elevation: 3,
   },
-  modeTabActive: {},
-  modeTabGiftingActive: {},
-  modeTabText: { fontSize: 11, fontWeight: '700', color: '#9B6FE0', letterSpacing: 0.3 },
+  modeTabText: { fontSize: 13, fontWeight: '700', color: '#8A63D2', flexShrink: 1 },
   modeTabTextActive: { color: '#FFFFFF' },
-  giftEmoji: { fontSize: 12 },
 
   // Section header
-  sectionRow: { flexDirection: 'row', alignItems: 'center', gap: 5, marginBottom: 8 },
-  sectionIcon: { fontSize: 14 },
-  sectionTitle: { fontSize: 12, fontWeight: '800', color: '#7A0EED', letterSpacing: 0.5 },
-  sectionSub: { fontSize: 11, fontWeight: '500', color: '#9B6FE0' },
+  sectionRow: { flexDirection: 'row', alignItems: 'center', gap: 6, marginBottom: 8 },
+  sectionTitle: { fontSize: 14, fontWeight: '700', color: '#2C1A4D' },
+  sectionSub: { fontSize: 12, color: '#9B6FE0' },
 
-  // Time chips — bigger, more readable
-  timeRow: { flexDirection: 'row', justifyContent: 'space-between', marginBottom: 14 },
+  // Time — six equal chips in one row (flex, so they always fit)
+  timeRow: { flexDirection: 'row', gap: GRID_GAP, marginBottom: 16 },
   timeChip: {
-    width: 58, height: 58, borderRadius: 29,
+    flex: 1, height: 50, borderRadius: 14,
     borderWidth: 1.5, borderColor: '#E8D5FF',
-    alignItems: 'center', justifyContent: 'center',
     backgroundColor: '#fff', overflow: 'hidden',
   },
   timeChipActive: {
     borderColor: '#7A0EED',
-    shadowColor: '#7A0EED', shadowOpacity: 0.4, shadowRadius: 8,
-    shadowOffset: { width: 0, height: 3 }, elevation: 5,
+    shadowColor: '#7A0EED', shadowOpacity: 0.3, shadowRadius: 6,
+    shadowOffset: { width: 0, height: 2 }, elevation: 4,
   },
-  timeChipGradient: {
-    width: 58, height: 58, borderRadius: 29,
-    alignItems: 'center', justifyContent: 'center',
-  },
-  timeChipNum: { fontSize: 16, fontWeight: '800', color: '#333', lineHeight: 20 },
+  timeChipFill: { flex: 1, alignItems: 'center', justifyContent: 'center' },
+  timeChipNum: { fontSize: 16, fontWeight: '800', color: '#2C2F33', lineHeight: 19 },
   timeChipNumActive: { color: '#fff' },
-  timeChipUnit: { fontSize: 9, fontWeight: '600', color: '#ABADB2', lineHeight: 11 },
-  timeChipUnitActive: { color: 'rgba(255,255,255,0.8)' },
+  timeChipUnit: { fontSize: 10, fontWeight: '600', color: '#9A9CA5', lineHeight: 12 },
+  timeChipUnitActive: { color: 'rgba(255,255,255,0.85)' },
 
-  // Target row (horizontal scroll) — shorter chips
-  targetRow: { flexDirection: 'row', gap: 8, paddingBottom: 4, paddingHorizontal: 2 },
-  targetChip: {
-    width: 66, paddingVertical: 7, paddingHorizontal: 4,
-    borderRadius: 10, borderWidth: 1.5, borderColor: '#E8D5FF',
+  // Targets — one compact row that scrolls sideways; bleeds to the sheet
+  // edges so cards slide under them instead of being cut at the padding
+  targetScroll: { marginHorizontal: -H_PAD, marginBottom: 10, flexGrow: 0 },
+  targetRow: { flexDirection: 'row', gap: 6, paddingHorizontal: H_PAD },
+  targetCard: {
+    minWidth: 58, paddingVertical: 6, paddingHorizontal: 8,
+    borderRadius: 12, borderWidth: 1.5, borderColor: '#E8D5FF',
     alignItems: 'center', justifyContent: 'center',
-    backgroundColor: '#fff', position: 'relative',
+    backgroundColor: '#fff',
   },
-  targetChipActive: { borderColor: '#7A0EED', borderWidth: 2 },
+  targetCardActive: { borderColor: '#7A0EED', backgroundColor: '#FBF7FF' },
   targetCheck: {
-    position: 'absolute', top: 4, right: 4,
+    position: 'absolute', top: 3, right: 3,
     width: 14, height: 14, borderRadius: 7,
     backgroundColor: '#7A0EED', alignItems: 'center', justifyContent: 'center',
   },
-  coinEmoji: { fontSize: 18, marginBottom: 2 },
-  targetCustomIcon: { fontSize: 18, marginBottom: 2 },
-  targetLabel: { fontSize: 12, fontWeight: '800', color: '#1C1E22' },
+  targetImg: { width: 22, height: 22, marginBottom: 2 },
+  coinEmoji: { fontSize: 17, lineHeight: 22, marginBottom: 2 },
+  targetLabel: { fontSize: 13, fontWeight: '800', color: '#1C1E22' },
   targetLabelActive: { color: '#7A0EED' },
-  targetSub: { fontSize: 10, fontWeight: '500', color: '#ABADB2' },
+  targetSub: { fontSize: 10, color: '#9A9CA5' },
   targetSubActive: { color: '#9B6FE0' },
+  targetState: {
+    height: 72, borderRadius: 14, borderWidth: 1, borderColor: '#EFE7FF', borderStyle: 'dashed',
+    alignItems: 'center', justifyContent: 'center', marginBottom: 10, paddingHorizontal: 12,
+  },
+  targetStateText: { fontSize: 13, color: '#8A63D2', textAlign: 'center' },
 
   infoRow: {
-    flexDirection: 'row', alignItems: 'center', gap: 5,
-    backgroundColor: '#F7F3FF', borderRadius: 8,
-    paddingHorizontal: 10, paddingVertical: 7, marginBottom: 0,
+    flexDirection: 'row', alignItems: 'center', gap: 6,
+    backgroundColor: '#F7F3FF', borderRadius: 10,
+    paddingHorizontal: 12, paddingVertical: 8,
   },
-  infoText: { fontSize: 11, color: '#7A0EED', fontWeight: '500', flex: 1 },
+  infoText: { fontSize: 12, color: '#6B3FC0', flex: 1 },
 
-  // Bottom area — tight, no extra gap
-  bottomArea: { paddingHorizontal: 16, paddingTop: 12, paddingBottom: 4, gap: 8 },
+  bottomArea: { paddingTop: 16, gap: 8 },
   fairRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 5 },
-  fairText: { fontSize: 11, color: '#9B6FE0', fontWeight: '500' },
+  fairText: { fontSize: 12, color: '#9B6FE0' },
 });
 
 const inv = StyleSheet.create({
@@ -753,21 +840,21 @@ const inv = StyleSheet.create({
   emptyText: { fontSize: 14, color: '#ABADB2', fontWeight: '500' },
   searchWrap: {
     flexDirection: 'row', alignItems: 'center',
-    marginHorizontal: 20, marginBottom: 10,
+    marginHorizontal: 16, marginBottom: 10,
     backgroundColor: '#F7F5FF', borderRadius: 12,
     borderWidth: 1, borderColor: '#E8E6F0',
     paddingHorizontal: 12, paddingVertical: 8, gap: 8,
   },
   searchInput: { flex: 1, fontSize: 14, color: '#1C1E22', paddingVertical: 0 },
-  list: { paddingHorizontal: 20, paddingTop: 4, paddingBottom: 16 },
+  list: { paddingHorizontal: 16, paddingTop: 4, paddingBottom: 16 },
   separator: { height: StyleSheet.hairlineWidth, backgroundColor: '#F0EDF8' },
-  row: { flexDirection: 'row', alignItems: 'center', paddingVertical: 12, gap: 12 },
+  row: { flexDirection: 'row', alignItems: 'center', paddingVertical: 10, gap: 12 },
   roomAvatarFallback: { backgroundColor: '#EDE8F7', alignItems: 'center', justifyContent: 'center' },
   roomAvatarInitial: { fontWeight: '700', color: '#7A0EED' },
   roomName: { flex: 1, fontSize: 14, fontWeight: '600', color: '#1C1E22' },
   inviteBtn: {
-    paddingHorizontal: 18, paddingVertical: 8,
-    borderRadius: 20, backgroundColor: '#7A0EED',
+    paddingHorizontal: 16, paddingVertical: 7,
+    borderRadius: 16, backgroundColor: '#7A0EED',
     minWidth: 72, alignItems: 'center',
   },
   invitedBtn: { backgroundColor: '#F3EEFF', borderWidth: 1, borderColor: '#7A0EED' },
@@ -779,13 +866,15 @@ const inv = StyleSheet.create({
 // ── Waiting page ──────────────────────────────────────────────────────────────
 
 function WaitingPage({
-  invite, onStart, onGoBack, battleMode, selectedTarget,
+  invite, onRetryStart, startError, onGoBack, battleMode, selectedTarget,
 }: {
   invite: InviteDetail;
-  onStart: () => void;
+  /** Only shown if the automatic start after acceptance failed. */
+  onRetryStart: () => void;
+  startError: string | null;
   onGoBack: () => void;
   battleMode: BattleMode;
-  selectedTarget: number;
+  selectedTarget: BattleTarget | null;
 }) {
   const flipAnim = useRef(new Animated.Value(0)).current;
   const [countdown, setCountdown] = useState(10);
@@ -830,7 +919,6 @@ function WaitingPage({
 
   const fromImg = resolveUrl(invite.from_room_image_url);
   const toImg = resolveUrl(invite.to_room_image_url);
-  const targetLabel = selectedTarget >= 1000 ? `${selectedTarget / 1000}K` : String(selectedTarget);
   const OWN_FRAME  = require('@/assets/tabs/chatroom/battleownframe.png');
   const OPP_FRAME  = require('@/assets/tabs/chatroom/battleaoppfrme.png');
 
@@ -842,19 +930,19 @@ function WaitingPage({
         <Text style={w.star}>★</Text>
         <View style={[w.badge, isAccepted ? w.badgeAccepted : isDeclined ? w.badgeDeclined : w.badgePending]}>
           <Text style={[w.badgeText, isAccepted ? w.badgeTextAccepted : isDeclined ? w.badgeTextDeclined : null]}>
-            {isAccepted ? 'ACCEPTED' : isDeclined ? 'DECLINED' : 'PENDING'}
+            {isAccepted ? 'Accepted' : isDeclined ? 'Declined' : 'Pending'}
           </Text>
         </View>
         <Text style={w.star}>★</Text>
       </View>
 
       {/* ── Title ── */}
-      <Text style={w.titleMain}>{invite.duration_minutes} MIN BATTLE</Text>
+      <Text style={w.titleMain}>{invite.duration_minutes} min battle</Text>
 
       {/* ── Target chip (gifting mode) ── */}
-      {battleMode === 'gifting' && (
+      {battleMode === 'gifting' && selectedTarget && (
         <View style={w.targetChip}>
-          <Text style={w.targetChipText}>🪙 {targetLabel} Coins Target</Text>
+          <Text style={w.targetChipText}>🪙 {targetLabel(selectedTarget)} coins target</Text>
         </View>
       )}
 
@@ -907,23 +995,24 @@ function WaitingPage({
           {isPending
             ? 'Waiting for the other room to accept...'
             : isAccepted
-              ? '🎉 Accepted! Ready to start.'
+              ? (startError ? `⚠️ ${startError}` : '🎉 Accepted! Starting battle…')
               : '❌ Invite was declined.'}
         </Text>
+        {isAccepted && !startError && <ActivityIndicator size="small" color="#16A34A" />}
         {isPending && <Text style={w.countdownText}>{countdown}s</Text>}
       </View>
 
       {/* ── Actions ── */}
-      {isAccepted && (
+      {isAccepted && !!startError && (
         <GradientButton
-          label="START BATTLE"
-          onPress={onStart}
+          label="Retry"
+          onPress={onRetryStart}
           colors={['#7A0EED', '#C0186A', '#F5A623']}
-          iconNode={<Text style={{ fontSize: 16 }}>⚔️</Text>}
-          height={52}
-          borderRadius={14}
-          fontSize={16}
-          textStyle={{ fontWeight: '900', letterSpacing: 1 }}
+          iconNode={<Text style={{ fontSize: 14 }}>⚔️</Text>}
+          height={44}
+          borderRadius={22}
+          fontSize={14}
+          textStyle={{ fontWeight: '900', letterSpacing: 0.3 }}
           style={{ marginTop: 4 }}
         />
       )}
@@ -936,32 +1025,38 @@ function WaitingPage({
   );
 }
 
+// Battle frame size. The avatar offsets below were measured against a 140px
+// frame (see comment in frameWrap); f() scales them so the avatar still lands
+// exactly inside the shield at any FRAME size.
+const FRAME = 124;
+const f = (px: number) => Math.round((px * FRAME) / 140);
+
 const w = StyleSheet.create({
   // full-height container — no background (sheet is dark navy)
   outer: {
-    flex: 1, alignItems: 'center',
-    paddingHorizontal: 20, paddingTop: 4, paddingBottom: 12, gap: 12,
+    alignItems: 'center',
+    paddingHorizontal: 16, paddingTop: 4, paddingBottom: 12, gap: 12,
   },
   center: { flex: 1, alignItems: 'center', justifyContent: 'center' },
 
   // ── PENDING badge row ──
-  badgeRow: { flexDirection: 'row', alignItems: 'center', gap: 8, marginTop: 44 },
+  badgeRow: { flexDirection: 'row', alignItems: 'center', gap: 8, marginTop: 28 },
   star: { fontSize: 14, color: '#D97706' },
-  badge: { paddingHorizontal: 16, paddingVertical: 5, borderRadius: 20, borderWidth: 1.5 },
+  badge: { paddingHorizontal: 14, paddingVertical: 4, borderRadius: 20, borderWidth: 1.5 },
   badgePending:  { backgroundColor: '#FFF8EC', borderColor: '#F5A623' },
   badgeAccepted: { backgroundColor: '#ECFDF5', borderColor: '#16A34A' },
   badgeDeclined: { backgroundColor: '#FEF2F2', borderColor: '#DC2626' },
-  badgeText: { fontSize: 13, fontWeight: '900', color: '#D97706', letterSpacing: 1.5 },
+  badgeText: { fontSize: 12, fontWeight: '800', color: '#D97706', letterSpacing: 0.2 },
   badgeTextAccepted: { color: '#16A34A' },
   badgeTextDeclined: { color: '#DC2626' },
 
   // ── Title ──
-  titleMain: { fontSize: 24, fontWeight: '900', color: '#1C1E22', letterSpacing: 1 },
+  titleMain: { fontSize: 18, fontWeight: '800', color: '#1C1E22', letterSpacing: 0.5 },
 
   // ── Target chip ──
   targetChip: {
     backgroundColor: '#F3EEFF', borderRadius: 20,
-    paddingHorizontal: 14, paddingVertical: 5,
+    paddingHorizontal: 12, paddingVertical: 4,
     borderWidth: 1, borderColor: '#E8D5FF',
   },
   targetChipText: { fontSize: 13, fontWeight: '700', color: '#7A0EED' },
@@ -988,43 +1083,43 @@ const w = StyleSheet.create({
   // over both frame PNGs — earlier passes assumed a shared circle radius and
   // measured out to the ring's outer trim, which left a visible gap.
   frameWrap: {
-    width: 140, height: 140,
+    width: FRAME, height: FRAME,
     alignItems: 'center', justifyContent: 'center',
     position: 'relative',
   },
   avatarOwn: {
-    width: 97, height: 102, borderRadius: 51,
-    position: 'absolute', top: 15, left: 22, overflow: 'hidden',
+    width: f(97), height: f(102), borderRadius: f(51),
+    position: 'absolute', top: f(15), left: f(22), overflow: 'hidden',
   },
   avatarOpponent: {
-    width: 100, height: 107, borderRadius: 54,
-    position: 'absolute', top: 12, left: 21, overflow: 'hidden',
+    width: f(100), height: f(107), borderRadius: f(54),
+    position: 'absolute', top: f(12), left: f(21), overflow: 'hidden',
   },
   avatarFallbackBlue:   { backgroundColor: '#1A3BB5', alignItems: 'center', justifyContent: 'center' },
   avatarFallbackPurple: { backgroundColor: '#6D28D9', alignItems: 'center', justifyContent: 'center' },
   avatarFallbackGold:   { backgroundColor: '#B45309', alignItems: 'center', justifyContent: 'center' },
-  avatarInitial: { fontSize: 32, fontWeight: '900', color: '#FFFFFF' },
+  avatarInitial: { fontSize: 22, fontWeight: '800', color: '#FFFFFF' },
   // frame overlays exactly the frameWrap size
-  frame: { width: 140, height: 140, position: 'absolute', top: 0, left: 0 },
+  frame: { width: FRAME, height: FRAME, position: 'absolute', top: 0, left: 0 },
 
   // ribbon
   ribbon: {
     alignSelf: 'stretch', borderRadius: 10,
-    paddingVertical: 8, paddingHorizontal: 10,
+    paddingVertical: 6, paddingHorizontal: 8,
     alignItems: 'center',
   },
-  ribbonUsername: { fontSize: 14, fontWeight: '800', color: '#FFFFFF' },
+  ribbonUsername: { fontSize: 13, fontWeight: '700', color: '#FFFFFF' },
   ribbonSub: { fontSize: 11, fontWeight: '500', color: 'rgba(255,255,255,0.75)' },
 
   // VS image
-  vsImg: { width: 70, height: 56, marginHorizontal: 2 },
+  vsImg: { width: 60, height: 48, marginHorizontal: 2 },
 
   // ── Status bar ──
   statusBar: {
     marginTop: 14,
     flexDirection: 'row', alignItems: 'center', justifyContent: 'center',
     gap: 8, width: '100%', borderRadius: 14,
-    paddingHorizontal: 16, paddingVertical: 12,
+    paddingHorizontal: 14, paddingVertical: 10,
   },
   statusBarDark: {
     backgroundColor: '#F3EEFF',
@@ -1038,12 +1133,12 @@ const w = StyleSheet.create({
   },
   statusBarTextGreen: { color: '#16A34A' },
   statusBarTextRed:   { color: '#DC2626' },
-  timerEmoji: { fontSize: 22 },
-  countdownText: { fontSize: 14, fontWeight: '900', color: '#D97706', minWidth: 30, textAlign: 'right' },
+  timerEmoji: { fontSize: 16 },
+  countdownText: { fontSize: 14, fontWeight: '800', color: RC.number, minWidth: 30, textAlign: 'right' },
 
   // ── Decline close button ──
   closeBtn: {
-    width: '100%', paddingVertical: 14, borderRadius: 14,
+    width: '100%', height: 44, justifyContent: 'center', borderRadius: 22,
     borderWidth: 1.5, borderColor: '#EDE8F7',
     alignItems: 'center', backgroundColor: '#FAFAFF',
   },

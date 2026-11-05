@@ -154,6 +154,7 @@ async function createAgency(req, res, next) {
       phone: phone.trim(),
       passwordHash,
       fullName: personName.trim(),
+      usernameSeed: agencyName.trim(),
     });
 
     return res.status(201).json({
@@ -281,6 +282,7 @@ async function adminResetAgencyPassword(req, res, next) {
       phone: agency.phone,
       passwordHash,
       fullName: null,
+      usernameSeed: agency.agency_name,
     });
 
     return res.json({

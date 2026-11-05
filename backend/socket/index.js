@@ -1,5 +1,5 @@
 const { Server } = require('socket.io');
-const jwt = require('jsonwebtoken');
+const { verifyUserToken } = require('../middleware/auth.middleware');
 const crypto = require('crypto');
 const db = require('../config/db');
 const walletModel = require('../models/wallet.model');
@@ -10,13 +10,21 @@ const taskModel = require('../models/task.model');
 const { getUserLevelFromDb } = require('../utils/user-levels');
 const { coinsPerTickForMinute, gemsForCoins, TICK_SECONDS } = require('../utils/friend-zone-pricing');
 const chatModel = require('../models/chat.model');
+const earningSlabs = require('../utils/earning-slabs');
 const liveBroadcastModel = require('../models/live-broadcast.model');
+const battleModel = require('../models/battle.model');
+const roomModel = require('../models/room.model');
+const moderationModel = require('../models/moderation.model');
 
 // ── In-memory state ───────────────────────────────────────────────────────────
 const roomSockets     = new Map(); // roomId -> Set<socketId>
 const roomMessages    = new Map(); // roomId -> last 100 msgs (in-memory cache)
 const roomHosts       = new Map(); // roomId -> hostUserId
 const roomHostSockets = new Map(); // roomId -> hostSocketId
+// Rooms whose host chose to leave the audio stage. They stay connected (chat,
+// seat requests, battle invites still reach them via roomHostSockets), but the
+// stage shows them offline until they come back.
+const roomHostOffStage = new Set();
 const roomSeats       = new Map(); // roomId -> SeatSlot[]
 const roomUsers       = new Map(); // roomId -> Map<socketId, {userId, userName, avatarUrl}>
 const broadcastLikers = new Map(); // roomId -> Set<userId> who currently have the broadcast liked (toggle, not a tap counter)
@@ -29,7 +37,6 @@ const friendZoneOnlineUsers = new Map(); // userId -> Set<socketId> (connections
 // Friend Zone 1:1 calls — billed every 5 seconds (see
 // utils/friend-zone-pricing.js for the per-minute rate schedule that each
 // tick's cost is looked up from).
-const FZ_CALL_GEMS_PER_COIN = 5; // matches the room-gift conversion rate — callee earns gems, not coins
 const FZ_CALL_TICK_MS = TICK_SECONDS * 1000;
 const friendZoneActiveCalls = new Map(); // callId -> { callerId, calleeId, callType, tickIndex, coinsCharged, gemsEarned, chargeTimer }
 
@@ -37,7 +44,16 @@ const friendZoneActiveCalls = new Map(); // callId -> { callerId, calleeId, call
 
 function onlineCount(roomId) { return roomSockets.get(roomId)?.size ?? 0; }
 function getSeats(roomId)    { return roomSeats.get(roomId) ?? []; }
-function isHostOnline(roomId){ return !!roomHostSockets.get(roomId); }
+function isHostOnline(roomId){ return !!roomHostSockets.get(roomId) && !roomHostOffStage.has(roomId); }
+function hostStatusFor(roomId) {
+  const hostSeat = getSeats(roomId).find(s => s.slotIndex === 0);
+  return {
+    isOnline: isHostOnline(roomId),
+    offStage: roomHostOffStage.has(roomId),
+    userName: hostSeat?.userName ?? 'Host',
+    avatarUrl: hostSeat?.avatarUrl ?? null,
+  };
+}
 function serializeSeats(roomId) { return getSeats(roomId); }
 function isFriendZoneUserOnline(userId) { return (friendZoneOnlineUsers.get(userId)?.size ?? 0) > 0; }
 function debugFriendZonePresence() {
@@ -59,6 +75,21 @@ function emitToFriendZoneUser(io, userId, event, payload) {
 // connect (see io.on('connection') below), so this just targets that room.
 function emitToUser(io, userId, event, payload) {
   io.to(`user_${userId}`).emit(event, payload);
+}
+
+// Whether a user has created a chatroom — gates the creator-only options in
+// the app (Go Live, Friend Zone call toggles). Go-Live sessions also create
+// a `rooms` row for the host, so those broadcast rooms don't count.
+async function userHasChatroom(userId) {
+  const r = await db.query(
+    `SELECT EXISTS (
+       SELECT 1 FROM rooms r
+       WHERE r.host_user_id = $1 AND r.status = 'active'
+         AND NOT EXISTS (SELECT 1 FROM live_broadcasts lb WHERE lb.room_id = r.id)
+     ) AS has_chatroom`,
+    [userId]
+  );
+  return r.rows[0].has_chatroom;
 }
 
 const TICKS_PER_MINUTE = Math.round(60 / TICK_SECONDS);
@@ -86,7 +117,7 @@ async function startFriendZoneCallBilling(io, call) {
     entry.tickIndex += 1;
     const minuteNumber = Math.floor((entry.tickIndex - 1) / TICKS_PER_MINUTE) + 1;
     const coins = coinsPerTickForMinute({ callType: entry.callType, minuteNumber });
-    const gems = gemsForCoins(coins);
+    const gems = await gemsForCoins(coins);
 
     await walletModel.debitCoins(entry.callerId, coins, `Friend Zone ${entry.callType} call`, call.id);
     entry.coinsCharged += coins;
@@ -193,29 +224,252 @@ async function loadMessages(roomId) {
       [roomId]
     );
     const { getUserLevel } = require('../utils/user-levels');
-    return r.rows.reverse().map(row => ({
-      id: row.id,
-      type: row.type,
-      text: row.type === 'message' ? row.content : undefined,
-      content: row.content,
-      createdAt: row.created_at,
-      user: row.user_id ? {
-        id: row.user_id,
-        name: row.full_name || row.username || 'User',
-        avatarUri: row.avatar_url ?? '',
-        level: getUserLevel(parseInt(row.coins_gifted ?? 0, 10)),
-      } : undefined,
-    }));
+    return r.rows.reverse().map(row => {
+      // Gift rows are stored as the raw encoded payload; rebuild the same
+      // fields the live gift message carries, or the card falls back to
+      // defaults (no recipient, placeholder image) after a reload.
+      const gift = row.type === 'gift' ? parseGiftPayload(row.content ?? '') : null;
+      return {
+        id: row.id,
+        type: row.type,
+        text: row.type === 'message' ? row.content : undefined,
+        content: row.content,
+        createdAt: row.created_at,
+        user: row.user_id ? {
+          id: row.user_id,
+          name: row.full_name || row.username || 'User',
+          avatarUri: row.avatar_url ?? '',
+          level: getUserLevel(parseInt(row.coins_gifted ?? 0, 10)),
+        } : undefined,
+        ...(gift && {
+          giftName: gift.giftName,
+          giftTo: gift.toName,
+          giftImageUrl: gift.imgUrl,
+          giftBgColor: gift.bgColor,
+          giftCoins: gift.coins,
+          giftQty: gift.qty,
+          giftRecipientId: gift.giftForUserId || gift.recipientId,
+          giftId: gift.giftId,
+          giftForId: gift.giftForUserId || gift.recipientId,
+        }),
+      };
+    });
   } catch { return []; }
 }
 
 // Save a message to DB and prune old ones (keep 200 per room)
-async function saveMessage(roomId, userId, type, content) {
+// Returns the new row's id (or null), so a live message can carry the same id
+// it will have when chat history is later reloaded from the DB.
+// Chat history + pinned message are cached in memory per room after the
+// first join; this loads whichever is missing.
+async function ensureRoomCache(roomId) {
+  await Promise.all([
+    roomMessages.has(roomId) ? null : loadMessages(roomId).then(msgs => {
+      if (!roomMessages.has(roomId)) roomMessages.set(roomId, msgs);
+    }),
+    roomPinnedMessageId.has(roomId) ? null : db.query(`SELECT pinned_message_id FROM rooms WHERE id = $1`, [roomId])
+      .then(r => r.rows[0]?.pinned_message_id ?? null)
+      .catch(() => null)
+      .then(id => { if (!roomPinnedMessageId.has(roomId)) roomPinnedMessageId.set(roomId, id); }),
+  ]);
+}
+
+// The room's running battle (or null) with the scores and top gifters so
+// far — sent on join so the battle banner shows with the rest of the room.
+async function getBattleSnapshot(roomId) {
   try {
-    await db.query(
-      `INSERT INTO chat_messages (room_id, user_id, type, content) VALUES ($1, $2, $3, $4)`,
+    const battle = await battleModel.getActiveBattleForRoom(roomId);
+    if (!battle) return { roomId, battle: null };
+    const live = await ensureLiveBattle(battle);
+    return {
+      roomId, battle,
+      gifters: topBattleGifters(live),
+      scores: { left: live.left, right: live.right },
+      seq: live.seq,
+    };
+  } catch (e) {
+    console.error('battle snapshot error:', e.message);
+    return { roomId, battle: null };
+  }
+}
+
+// ── Live battle tally ─────────────────────────────────────────────────────────
+// Battle scores + top gifters kept in memory per running battle, so a gift
+// updates both rooms the moment its wallet transaction commits instead of
+// after re-summing room_gift_events. Each gift is counted by its
+// room_gift_events id: the tally is seeded from the DB once, and a gift that
+// landed in both the seed and the live path is still counted exactly once.
+const liveBattles = new Map();     // inviteId -> tally (see newLiveBattle)
+const liveBattleLoads = new Map(); // inviteId -> Promise<tally> while seeding
+const LIVE_BATTLE_KEEP_MS = 10 * 60_000; // drop a tally this long after its battle ends
+
+function newLiveBattle(battle) {
+  const startedAt = new Date(battle.started_at).getTime();
+  return {
+    id: battle.id,
+    fromRoomId: battle.from_room_id,
+    toRoomId: battle.to_room_id,
+    startedAt,
+    endsAt: startedAt + (battle.duration_minutes ?? 0) * 60_000,
+    left: 0,
+    right: 0,
+    seq: 0,               // bumped per counted gift — lets clients drop stale updates
+    ended: false,         // set when the battle is cancelled — the totals are final
+    counted: new Set(),   // room_gift_events ids already in the totals
+    gifters: { left: new Map(), right: new Map() }, // senderId -> gifter row
+  };
+}
+
+/** Add one gift event to the tally; false if it was already counted or doesn't belong. */
+function countBattleGift(live, ev) {
+  if (live.ended || !ev?.id || live.counted.has(ev.id)) return false;
+  const side = ev.room_id === live.fromRoomId ? 'left' : ev.room_id === live.toRoomId ? 'right' : null;
+  const at = new Date(ev.created_at).getTime();
+  if (!side || at < live.startedAt || at >= live.endsAt) return false;
+  const total = Number(ev.total) || 0;
+  live.counted.add(ev.id);
+  live[side] += total;
+  const g = live.gifters[side].get(ev.sender_id)
+    ?? { id: ev.sender_id, full_name: ev.full_name ?? null, username: ev.username ?? null, avatar_url: ev.avatar_url ?? null, total_coins: 0 };
+  g.total_coins += total;
+  live.gifters[side].set(ev.sender_id, g);
+  live.seq += 1;
+  return true;
+}
+
+function topBattleGifters(live) {
+  const top = map => [...map.values()].sort((a, b) => b.total_coins - a.total_coins).slice(0, 5);
+  return { left: top(live.gifters.left), right: top(live.gifters.right) };
+}
+
+function pruneLiveBattles() {
+  const cutoff = Date.now() - LIVE_BATTLE_KEEP_MS;
+  for (const [id, live] of liveBattles) if (live.endsAt < cutoff) liveBattles.delete(id);
+}
+
+/** The in-memory tally for a battle, seeding it from the DB on first use. */
+function ensureLiveBattle(battle) {
+  const existing = liveBattles.get(battle.id);
+  if (existing) return Promise.resolve(existing);
+  if (!liveBattleLoads.has(battle.id)) {
+    const load = battleModel.getBattleGiftEvents(battle)
+      .then(rows => {
+        pruneLiveBattles();
+        const live = newLiveBattle(battle);
+        rows.forEach(r => countBattleGift(live, r));
+        liveBattles.set(battle.id, live);
+        scheduleBattleEnd(battle);
+        return live;
+      })
+      .finally(() => liveBattleLoads.delete(battle.id));
+    liveBattleLoads.set(battle.id, load);
+  }
+  return liveBattleLoads.get(battle.id);
+}
+
+function emitBattleUpdate(io, live, clientGiftId) {
+  const scoreData = { invite_id: live.id, left: live.left, right: live.right, seq: live.seq, client_gift_id: clientGiftId ?? null };
+  const giftersData = { invite_id: live.id, seq: live.seq, ...topBattleGifters(live) };
+  for (const roomId of [live.fromRoomId, live.toRoomId]) {
+    io.to(roomId).emit('battle_scores', scoreData);
+    io.to(roomId).emit('battle_gifters', giftersData);
+  }
+}
+
+/**
+ * Final result from the tally's confirmed totals. winner is 'from' / 'to', or
+ * null when the scores are equal (a draw). Top 3 supporters per side.
+ */
+function buildBattleResult(battle, live, { reason, endedBy }) {
+  const top = topBattleGifters(live);
+  const side = (prefix, score, supporters) => ({
+    room_id: battle[`${prefix}_room_id`],
+    room_name: battle[`${prefix}_room_name`] ?? '',
+    room_image_url: battle[`${prefix}_room_image_url`] ?? null,
+    host_user_id: battle[`${prefix}_user_id`],
+    host_name: battle[`${prefix}_host_name`] || battle[`${prefix}_host_username`] || null,
+    score,
+    supporters: supporters.slice(0, 3),
+  });
+  return {
+    invite_id: battle.id,
+    reason,
+    ended_by: endedBy ?? null,
+    winner: live.left > live.right ? 'from' : live.right > live.left ? 'to' : null,
+    from: side('from', live.left, top.left),
+    to: side('to', live.right, top.right),
+  };
+}
+
+/**
+ * End a running battle and send both rooms the result (battle_ended).
+ * Used for Cancel Battle and when the timer runs out. Returns null if it
+ * had already ended (the DB status guard makes a second end a no-op).
+ */
+async function endBattle(battleOrId, { reason, endedBy = null }) {
+  const battle = typeof battleOrId === 'string' ? await battleModel.getInviteById(battleOrId) : battleOrId;
+  if (!battle || battle.status !== 'active' || !battle.started_at) return null;
+  // Seed the tally first (if this server hasn't yet), so the result has
+  // every gift confirmed up to now.
+  const live = await ensureLiveBattle(battle);
+  const ended = await battleModel.finishBattle(battle.id);
+  if (!ended) return null;
+
+  live.ended = true; // gifts paid for from here on no longer count
+  clearBattleEndTimer(battle.id);
+  const result = buildBattleResult(battle, live, { reason, endedBy });
+  if (_io) {
+    _io.to(battle.from_room_id).emit('battle_ended', result);
+    _io.to(battle.to_room_id).emit('battle_ended', result);
+  }
+  return result;
+}
+
+// Time-up: every running battle has a timer that ends it and sends the
+// result. A short grace lets gifts paid in the last moment (whose wallet
+// transaction is still committing) count — anything created after the end
+// time is excluded by countBattleGift regardless.
+const battleEndTimers = new Map(); // inviteId -> Timeout
+const BATTLE_END_GRACE_MS = 1500;
+
+function clearBattleEndTimer(inviteId) {
+  const t = battleEndTimers.get(inviteId);
+  if (t) { clearTimeout(t); battleEndTimers.delete(inviteId); }
+}
+
+function scheduleBattleEnd(battle) {
+  if (!battle?.started_at || battleEndTimers.has(battle.id)) return;
+  const endsAt = new Date(battle.started_at).getTime() + (battle.duration_minutes ?? 0) * 60_000;
+  const delay = Math.max(0, endsAt - Date.now()) + BATTLE_END_GRACE_MS;
+  battleEndTimers.set(battle.id, setTimeout(() => {
+    battleEndTimers.delete(battle.id);
+    // Re-read: it may have been cancelled meanwhile
+    endBattle(battle.id, { reason: 'time_up' })
+      .catch(e => console.error('battle time-up end error:', e.message));
+  }, delay));
+}
+
+/** On boot: re-arm timers for running battles; end any that ran out while down. */
+async function resumeBattleTimers() {
+  try {
+    const battles = await battleModel.getActiveBattles();
+    battles.forEach(scheduleBattleEnd);
+    if (battles.length) console.log(`[BATTLE] resumed ${battles.length} battle timer(s)`);
+  } catch (e) { console.error('resumeBattleTimers error:', e.message); }
+}
+
+async function getRoomInfoSafe(roomId) {
+  try { return await roomModel.getRoomDetail(roomId); } catch { return null; }
+}
+
+async function saveMessage(roomId, userId, type, content) {
+  let id = null;
+  try {
+    const ins = await db.query(
+      `INSERT INTO chat_messages (room_id, user_id, type, content) VALUES ($1, $2, $3, $4) RETURNING id`,
       [roomId, userId || null, type, content]
     );
+    id = ins.rows[0]?.id ?? null;
     // Prune to keep only latest 200
     await db.query(
       `DELETE FROM chat_messages WHERE room_id = $1
@@ -226,6 +480,7 @@ async function saveMessage(roomId, userId, type, content) {
       [roomId]
     );
   } catch (e) { console.error('saveMessage error:', e.message); }
+  return id;
 }
 
 // Parse gift payload from encoded message text
@@ -247,7 +502,22 @@ function parseGiftPayload(text) {
 // Process a gift: debit sender, credit host wallet, save gift event, update room total
 async function processGift({ roomId, senderId, recipientId, giftId, giftName, giftImageUrl, coins, qty, targetUserId }) {
   const totalCoins = coins * qty;
-  const client = await db.pool.connect();
+  // Read-only lookups run alongside getting a pool client, not inside the
+  // transaction — every round trip here delays the gift for the whole room.
+  const [clientRes, liveRoomRes, configRes] = await Promise.allSettled([
+    db.pool.connect(),
+    db.query(`SELECT 1 FROM live_broadcasts WHERE room_id = $1 LIMIT 1`, [roomId]),
+    earningSlabs.loadConfigVersions(),
+  ]);
+  if (clientRes.status === 'rejected' || liveRoomRes.status === 'rejected' || configRes.status === 'rejected') {
+    if (clientRes.status === 'fulfilled') clientRes.value.release();
+    const failed = [clientRes, liveRoomRes, configRes].find(r => r.status === 'rejected');
+    console.error('processGift error:', failed.reason?.message);
+    return { ok: false, message: 'Gift processing failed.' };
+  }
+  const client = clientRes.value;
+  const liveRoom = liveRoomRes.value;
+  const configVersions = configRes.value;
   try {
     await client.query('BEGIN');
 
@@ -270,17 +540,24 @@ async function processGift({ roomId, senderId, recipientId, giftId, giftName, gi
       [senderId, totalCoins, senderBalance, `Gift: ${qty}x ${giftName} to room`]
     );
 
-    // 3. Award gems to recipient (1 coin = 5 gems) — host receives only gems, not coins
-    await client.query(
-      `INSERT INTO wallets (user_id, gems) VALUES ($1, $2)
-       ON CONFLICT (user_id) DO UPDATE SET gems = wallets.gems + $2, updated_at = NOW()`,
-      [recipientId, totalCoins * 5]
+    // 3. Award gems to recipient at the admin's gem value for this service
+    //    (Video Live for Go-Live rooms, else Audio Chat) — host receives only gems
+    const giftGems = earningSlabs.gemsForCoins(
+      configVersions, liveRoom.rows.length ? 'live' : 'chatroom', new Date(), totalCoins,
     );
+    if (giftGems > 0) {
+      await client.query(
+        `INSERT INTO wallets (user_id, gems) VALUES ($1, $2)
+         ON CONFLICT (user_id) DO UPDATE SET gems = wallets.gems + $2, updated_at = NOW()`,
+        [recipientId, giftGems]
+      );
+    }
 
     // 5. Save gift event record
-    await client.query(
+    const giftEventResult = await client.query(
       `INSERT INTO room_gift_events (room_id, sender_id, recipient_id, gift_id, gift_name, gift_image_url, coins, quantity, target_user_id)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)`,
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+       RETURNING id, room_id, sender_id, (coins * quantity)::int AS total, created_at`,
       [roomId, senderId, recipientId, giftId || null, giftName, giftImageUrl || null, coins, qty, targetUserId || recipientId]
     );
 
@@ -295,7 +572,10 @@ async function processGift({ roomId, senderId, recipientId, giftId, giftName, gi
     const { total_coins_received, current_level } = roomResult.rows[0];
 
     await client.query('COMMIT');
-    return { ok: true, senderBalance, totalCoins: total_coins_received, currentLevel: current_level };
+    return {
+      ok: true, senderBalance, totalCoins: total_coins_received, currentLevel: current_level,
+      giftEvent: giftEventResult.rows[0],
+    };
   } catch (err) {
     await client.query('ROLLBACK');
     console.error('processGift error:', err.message);
@@ -312,17 +592,21 @@ function setupSocket(httpServer) {
     cors: { origin: '*', methods: ['GET', 'POST'] },
   });
 
-  io.use((socket, next) => {
+  io.use(async (socket, next) => {
     const token = socket.handshake.auth?.token || socket.handshake.query?.token;
     if (!token) return next(new Error('Missing token'));
     try {
-      const payload = jwt.verify(token, process.env.JWT_SECRET);
+      const { payload, revoked } = await verifyUserToken(token);
+      // The app logs out on this message (see the chat/Friend Zone socket stores).
+      if (revoked) return next(new Error('Session revoked'));
+      if (!payload) return next(new Error('Invalid token'));
       socket.userId = payload.sub;
       next();
     } catch { next(new Error('Invalid token')); }
   });
 
   setIo(io);
+  resumeBattleTimers();
 
   io.on('connection', async (socket) => {
     const userId = socket.userId;
@@ -330,6 +614,15 @@ function setupSocket(httpServer) {
     // Every authenticated connection joins its own private room — used for
     // generic per-user delivery (chat) instead of a dedicated presence map.
     socket.join(`user_${userId}`);
+
+    // ── Chatroom ownership ───────────────────────────────────────────────────
+    // Pushed on every connect so the app's cached flag stays correct even if
+    // a room was created (e.g. by an admin) while the user was offline.
+    const sendChatroomStatus = () => userHasChatroom(userId)
+      .then(hasChatroom => socket.emit('my_chatroom_status', { hasChatroom }))
+      .catch(e => console.error('my_chatroom_status error:', e.message));
+    sendChatroomStatus();
+    socket.on('my_chatroom_status_request', sendChatroomStatus);
 
     // ── Friend Zone global presence ──────────────────────────────────────────
     // Every authenticated connection is considered "online" for Friend Zone,
@@ -479,14 +772,20 @@ function setupSocket(httpServer) {
         const totalCoins = gift.coins * quantity;
 
         const senderBalance = await walletModel.debitCoins(userId, totalCoins, `Call gift: ${quantity}x ${gift.name}`, callId);
+        let callGiftGems = 0;
         try {
-          await walletModel.creditGems(recipientId, totalCoins * FZ_CALL_GEMS_PER_COIN);
+          // Callee earns gems (not coins) at the admin's Friend Zone gem value
+          const gems = await gemsForCoins(totalCoins);
+          if (gems > 0) {
+            await walletModel.creditGems(recipientId, gems);
+            callGiftGems = gems;
+          }
         } catch (e) { console.error('friend_zone_call_send_gift gems credit error:', e.message); }
 
         await friendZoneModel.logCallGift({
           callId, senderId: userId, recipientId,
           giftId: gift.id, giftName: gift.name, giftImageUrl: gift.image_url,
-          coins: gift.coins, qty: quantity,
+          coins: gift.coins, qty: quantity, gems: callGiftGems,
         });
 
         const payload = {
@@ -546,6 +845,12 @@ function setupSocket(httpServer) {
           return;
         }
 
+        const peerId = await chatModel.getPeerId(conversation, userId);
+        if (await chatModel.isBlockedBetween(userId, peerId)) {
+          socket.emit('chat_error', { conversationId, message: "You can't message this user." });
+          return;
+        }
+
         let message;
         if (type === 'sticker') {
           if (!stickerId) return;
@@ -559,7 +864,6 @@ function setupSocket(httpServer) {
         const preview = type === 'sticker' ? '🎉 Sticker' : message.text;
         await chatModel.touchConversation(conversationId, preview);
 
-        const peerId = await chatModel.getPeerId(conversation, userId);
         // If the recipient had hidden (deleted-for-me) this conversation, a new
         // message brings it back into their list — same as most chat apps.
         await chatModel.unhideForNewMessage(conversationId, peerId);
@@ -600,35 +904,45 @@ function setupSocket(httpServer) {
     socket.on('join_room', async ({ roomId }) => {
       if (!roomId) return;
 
-      // Check if user is blocked from this room
-      try {
-        const blockCheck = await db.query(
-          `SELECT 1 FROM room_blocked_users WHERE room_id = $1 AND user_id = $2`,
-          [roomId, userId]
-        );
-        if (blockCheck.rows.length > 0) {
-          socket.emit('join_blocked', { message: 'You are blocked from this room' });
-          return;
-        }
-      } catch { /* non-fatal, allow join */ }
+      // Every lookup the join needs runs in parallel — run one after another
+      // they added up to the noticeable wait when opening a room.
+      const [entryBan, blocked, userRow, userLevel, hostUserId, roomInfo, battleSnapshot] = await Promise.all([
+        // 24h report ban on this user's ID or on this room — enforced here, so
+        // switching rooms, reconnecting or restarting the app can't get past it
+        moderationModel.getEntryBan(userId, roomId).catch(e => {
+          console.error('ban check error:', e.message);
+          return null;
+        }),
+        db.query(`SELECT 1 FROM room_blocked_users WHERE room_id = $1 AND user_id = $2`, [roomId, userId])
+          .then(r => r.rows.length > 0)
+          .catch(() => false), // non-fatal, allow join
+        db.query(`SELECT full_name, username, avatar_url FROM users WHERE id = $1`, [userId])
+          .then(r => r.rows[0] ?? null)
+          .catch(() => null),
+        getUserLevelFromDb(db, userId),
+        getHostUserId(roomId),
+        getRoomInfoSafe(roomId),
+        getBattleSnapshot(roomId),
+        ensureRoomCache(roomId),
+      ]);
 
-      let userName = 'Someone', avatarUrl = null;
-      try {
-        const r = await db.query(
-          `SELECT full_name, username, avatar_url FROM users WHERE id = $1`, [userId]
-        );
-        if (r.rows.length) {
-          const u = r.rows[0];
-          userName = u.full_name || u.username || 'Someone';
-          avatarUrl = u.avatar_url || null;
-        }
-      } catch { /* non-fatal */ }
+      if (entryBan) {
+        socket.emit('join_blocked', { message: entryBan.message, kind: `${entryBan.kind}_ban`, expiresAt: entryBan.expiresAt });
+        return;
+      }
+      if (blocked) {
+        socket.emit('join_blocked', { message: 'You are blocked from this room', kind: 'room_block' });
+        return;
+      }
+
+      const userName = userRow?.full_name || userRow?.username || 'Someone';
+      const avatarUrl = userRow?.avatar_url || null;
 
       socket.join(roomId);
       socket.currentRoomId = roomId;
       socket.userName = userName;
       socket.avatarUrl = avatarUrl;
-      socket.userLevel = await getUserLevelFromDb(db, userId);
+      socket.userLevel = userLevel;
 
       if (!roomSockets.has(roomId)) roomSockets.set(roomId, new Set());
       roomSockets.get(roomId).add(socket.id);
@@ -636,7 +950,6 @@ function setupSocket(httpServer) {
       if (!roomUsers.has(roomId)) roomUsers.set(roomId, new Map());
       roomUsers.get(roomId).set(socket.id, { userId, userName, avatarUrl });
 
-      const hostUserId = await getHostUserId(roomId);
       const userIsHost = hostUserId === userId;
       socket.isHost = userIsHost;
 
@@ -646,7 +959,7 @@ function setupSocket(httpServer) {
         const hostSlot = seats.find(s => s.slotIndex === 0);
         if (!hostSlot) seats.unshift({ slotIndex: 0, userId, userName, avatarUrl, isHost: true });
         else { hostSlot.userName = userName; hostSlot.avatarUrl = avatarUrl; }
-        io.to(roomId).emit('host_status', { isOnline: true, userName, avatarUrl });
+        io.to(roomId).emit('host_status', hostStatusFor(roomId));
 
         // Host reconnected within the grace period — cancel the pending auto-end.
         const pendingTimer = pendingBroadcastEndTimers.get(roomId);
@@ -656,25 +969,11 @@ function setupSocket(httpServer) {
         }
       }
 
-      // Load messages from DB (or use cache if already loaded this session)
-      if (!roomMessages.has(roomId)) {
-        const dbMsgs = await loadMessages(roomId);
-        roomMessages.set(roomId, dbMsgs);
-      }
-      if (!roomPinnedMessageId.has(roomId)) {
-        try {
-          const r = await db.query(`SELECT pinned_message_id FROM rooms WHERE id = $1`, [roomId]);
-          roomPinnedMessageId.set(roomId, r.rows[0]?.pinned_message_id ?? null);
-        } catch { roomPinnedMessageId.set(roomId, null); }
-      }
-
-      socket.emit('chat_history', roomMessages.get(roomId) ?? []);
+      if (roomInfo) socket.emit('room_info', roomInfo);
       socket.emit('seats_update', serializeSeats(roomId));
-      socket.emit('host_status', {
-        isOnline: isHostOnline(roomId),
-        userName: getSeats(roomId).find(s => s.slotIndex === 0)?.userName ?? 'Host',
-        avatarUrl: getSeats(roomId).find(s => s.slotIndex === 0)?.avatarUrl ?? null,
-      });
+      socket.emit('host_status', hostStatusFor(roomId));
+      socket.emit('battle_state', battleSnapshot);
+      socket.emit('chat_history', roomMessages.get(roomId) ?? []);
       socket.emit('broadcast_like_state', { roomId, liked: broadcastLikers.get(roomId)?.has(userId) ?? false });
       socket.emit('pinned_comment_update', { roomId, messageId: roomPinnedMessageId.get(roomId) ?? null });
 
@@ -683,7 +982,7 @@ function setupSocket(httpServer) {
       // Send active reward to the joining user (so BG applies immediately on join/re-join)
       try {
         const rewardRow = await db.query(
-          `SELECT t.reward_bg_url, t.reward_frame_url
+          `SELECT t.reward_bg_url, t.reward_frame_url, tp.completed_at
            FROM task_progress tp
            JOIN tasks t ON t.id = tp.task_id
            WHERE tp.reward_claimed = TRUE
@@ -702,26 +1001,65 @@ function setupSocket(httpServer) {
           [roomId]
         );
         if (rewardRow.rows.length) {
-          const { reward_bg_url, reward_frame_url } = rewardRow.rows[0];
+          const { reward_bg_url, reward_frame_url, completed_at } = rewardRow.rows[0];
           console.log(`[SOCKET] sending active reward on join to ${userId}: bg=${reward_bg_url}`);
-          socket.emit('reward_applied', { reward_bg_url, reward_frame_url });
+          // Rewards last 24h from completion — the app removes them then
+          const expires_at = new Date(new Date(completed_at).getTime() + 24 * 60 * 60 * 1000).toISOString();
+          socket.emit('reward_applied', { reward_bg_url, reward_frame_url, expires_at });
         }
       } catch (e) { /* non-fatal */ }
 
-      // Join notice
+      // Join notice — live only (clients show a short welcome toast). Not kept
+      // in roomMessages, so it never replays as a permanent line in chat_history.
       const joinMsg = {
         id: `join_${socket.id}_${Date.now()}`,
         type: 'join',
         createdAt: new Date().toISOString(),
         user: { id: userId, name: userName, avatarUri: avatarUrl ?? '', level: socket.userLevel ?? 0 },
       };
-      const msgs = roomMessages.get(roomId) ?? [];
-      msgs.push(joinMsg);
-      if (msgs.length > 100) msgs.shift();
-      roomMessages.set(roomId, msgs);
       io.to(roomId).emit('chat_message', joinMsg);
       // Save join to DB
       await saveMessage(roomId, userId, 'join', `${userName} joined`);
+    });
+
+    // "Refresh Room" from the app menu — re-send this room's state to the caller
+    // only. Unlike join_room, no join notice / welcome toast for everyone.
+    // Either host cancels a running battle: it ends at once and both rooms get
+    // the result, decided by the confirmed gifting totals at this moment.
+    socket.on('cancel_battle', async ({ inviteId } = {}, ack) => {
+      const reply = typeof ack === 'function' ? ack : () => {};
+      try {
+        if (!inviteId) return reply({ ok: false, message: 'Battle not found.' });
+        const battle = await battleModel.getInviteById(inviteId);
+        if (!battle) return reply({ ok: false, message: 'Battle not found.' });
+        if (battle.from_user_id !== userId && battle.to_user_id !== userId) {
+          return reply({ ok: false, message: 'Only the two hosts can cancel this battle.' });
+        }
+        if (battle.status !== 'active') return reply({ ok: false, message: 'This battle has already ended.' });
+
+        const result = await endBattle(battle, { reason: 'cancelled', endedBy: userId });
+        if (!result) return reply({ ok: false, message: 'This battle has already ended.' });
+        reply({ ok: true, result });
+      } catch (e) {
+        console.error('cancel_battle error:', e.message);
+        reply({ ok: false, message: 'Could not cancel the battle. Please try again.' });
+      }
+    });
+
+    socket.on('refresh_room', async ({ roomId }) => {
+      if (!roomId || socket.currentRoomId !== roomId) return;
+      const [roomInfo, battleSnapshot] = await Promise.all([
+        getRoomInfoSafe(roomId),
+        getBattleSnapshot(roomId),
+        ensureRoomCache(roomId).catch(() => { /* send empty */ }),
+      ]);
+      if (roomInfo) socket.emit('room_info', roomInfo);
+      socket.emit('seats_update', serializeSeats(roomId));
+      socket.emit('host_status', hostStatusFor(roomId));
+      socket.emit('battle_state', battleSnapshot);
+      socket.emit('chat_history', roomMessages.get(roomId) ?? []);
+      socket.emit('pinned_comment_update', { roomId, messageId: roomPinnedMessageId.get(roomId) ?? null });
+      socket.emit('online_count', { roomId, count: onlineCount(roomId) });
     });
 
     // ── Seat management ────────────────────────────────────────────────────────
@@ -729,7 +1067,7 @@ function setupSocket(httpServer) {
     socket.on('request_seat', ({ roomId, slotIndex }) => {
       if (!roomId) return;
       const hostSocketId = roomHostSockets.get(roomId);
-      if (!hostSocketId) {
+      if (!isHostOnline(roomId)) {
         socket.emit('seat_request_result', { slotIndex, accepted: false, reason: 'Host is offline.' });
         return;
       }
@@ -814,6 +1152,19 @@ function setupSocket(httpServer) {
       io.to(roomId).emit('seats_update', serializeSeats(roomId));
     });
 
+    // Host leaves / returns to the audio stage while staying in the room
+    socket.on('host_leave_stage', ({ roomId }) => {
+      if (!roomId || roomHostSockets.get(roomId) !== socket.id) return;
+      roomHostOffStage.add(roomId);
+      io.to(roomId).emit('host_status', hostStatusFor(roomId));
+    });
+
+    socket.on('host_return_stage', ({ roomId }) => {
+      if (!roomId || roomHostSockets.get(roomId) !== socket.id) return;
+      roomHostOffStage.delete(roomId);
+      io.to(roomId).emit('host_status', hostStatusFor(roomId));
+    });
+
     // Host removes a co-host from a seat
     socket.on('remove_from_stage', ({ roomId, slotIndex }) => {
       if (!roomId || !socket.isHost) return;
@@ -871,6 +1222,20 @@ function setupSocket(httpServer) {
       io.to(roomId).emit('seats_update', serializeSeats(roomId));
     });
 
+    // Speaking level (0–1) from someone on a seat, for the stage's voice waves.
+    // Only seated users (incl. the host on slot 0) are in the voice channel, so
+    // only they can report; relayed to the rest of the room, not stored.
+    socket.on('speaking_level', ({ roomId, level }) => {
+      if (!roomId || !socket.userId || socket.currentRoomId !== roomId) return;
+      const now = Date.now();
+      if (socket.lastSpeakingAt && now - socket.lastSpeakingAt < 80) return; // cheap flood guard
+      socket.lastSpeakingAt = now;
+      const seated = (roomSeats.get(roomId) ?? []).some(s => s.userId === socket.userId);
+      if (!seated) return;
+      const l = Math.max(0, Math.min(1, Number(level) || 0));
+      socket.to(roomId).emit('speaking_level', { userId: socket.userId, level: Math.round(l * 100) / 100 });
+    });
+
     // ── Live broadcast likes (toggle like/unlike, not a tap counter) ─────────────
 
     socket.on('like_broadcast', async ({ roomId }) => {
@@ -895,7 +1260,7 @@ function setupSocket(httpServer) {
 
     // ── Chat messages ──────────────────────────────────────────────────────────
 
-    socket.on('send_message', async ({ roomId, text }) => {
+    socket.on('send_message', async ({ roomId, text, clientGiftId }) => {
       if (!roomId || !text?.trim()) return;
 
       const trimmed = text.trim();
@@ -906,7 +1271,9 @@ function setupSocket(httpServer) {
         const { giftName, toName, imgUrl, bgColor, giftId, coins, qty, senderId, recipientId, giftForUserId } = giftPayload;
         const totalCoins = coins * qty;
 
-        // Process wallet transaction (gems go to host=recipientId, history tracks actual target)
+        // Process wallet transaction (gems go to host=recipientId, history tracks actual target).
+        // The room's running battle is looked up at the same time, not after.
+        const battleLookup = battleModel.getActiveBattleForRoom(roomId).catch(() => null);
         const result = await processGift({
           roomId, senderId, recipientId,
           giftId, giftName, giftImageUrl: imgUrl,
@@ -914,14 +1281,39 @@ function setupSocket(httpServer) {
         });
 
         if (!result.ok) {
-          // Notify sender of failure (insufficient coins etc.)
-          socket.emit('gift_error', { message: result.message });
+          // Notify sender of failure (insufficient coins etc.) — client_gift_id
+          // lets the app take back the score it added optimistically.
+          socket.emit('gift_error', { message: result.message, client_gift_id: clientGiftId ?? null });
           return;
         }
 
+        socket.emit('wallet_update', { coins: result.senderBalance });
+
+        // Battle score first — before saving the chat line etc. — so both rooms
+        // see the gift's power the moment it's paid for.
+        try {
+          const b = await battleLookup;
+          if (b) {
+            const live = await ensureLiveBattle(b);
+            countBattleGift(live, {
+              ...result.giftEvent,
+              full_name: socket.userName ?? null,
+              avatar_url: socket.avatarUrl ?? null,
+            });
+            // Emitted even if the seed already held this gift, so the sender's
+            // pending score is confirmed by these exact totals.
+            emitBattleUpdate(io, live, clientGiftId);
+          }
+        } catch (e) { console.error('battle_scores emit error:', e.message); }
+        // Always settle the sender's pending gift (also when there's no battle)
+        if (clientGiftId) socket.emit('gift_ack', { client_gift_id: clientGiftId });
+
+        // Save first so the live message carries its DB id (pin/delete survive a reload)
+        const giftRowId = await saveMessage(roomId, senderId, 'gift', trimmed);
+
         // Build chat message
         const msg = {
-          id: `gift_${socket.id}_${Date.now()}`,
+          id: giftRowId ?? `gift_${socket.id}_${Date.now()}`,
           type: 'gift',
           user: { id: socket.userId, name: socket.userName ?? 'User', avatarUri: socket.avatarUrl ?? '', level: socket.userLevel ?? 0 },
           giftName,
@@ -942,38 +1334,6 @@ function setupSocket(httpServer) {
         if (msgs.length > 100) msgs.shift();
 
         io.to(roomId).emit('chat_message', msg);
-        // Notify sender of new balance
-        socket.emit('wallet_update', { coins: result.senderBalance });
-
-        // Emit real-time battle scores if this room has an active battle
-        try {
-          const battleResult = await db.query(
-            `SELECT id, from_room_id, to_room_id, started_at
-             FROM battle_invites
-             WHERE status = 'active'
-               AND (from_room_id = $1 OR to_room_id = $1)
-             LIMIT 1`,
-            [roomId]
-          );
-          if (battleResult.rows.length) {
-            const b = battleResult.rows[0];
-            const scoreResult = await db.query(
-              `SELECT room_id, COALESCE(SUM(coins * quantity), 0)::int AS total
-               FROM room_gift_events
-               WHERE room_id IN ($1, $2) AND created_at >= $3
-               GROUP BY room_id`,
-              [b.from_room_id, b.to_room_id, b.started_at]
-            );
-            let left = 0, right = 0;
-            for (const row of scoreResult.rows) {
-              if (row.room_id === b.from_room_id) left = parseInt(row.total, 10);
-              else if (row.room_id === b.to_room_id) right = parseInt(row.total, 10);
-            }
-            const scoreData = { invite_id: b.id, left, right };
-            io.to(b.from_room_id).emit('battle_scores', scoreData);
-            io.to(b.to_room_id).emit('battle_scores', scoreData);
-          }
-        } catch (e) { console.error('battle_scores emit error:', e.message); }
 
         // Check for level-up
         const newLevel = checkLevelUp(result.currentLevel, result.totalCoins);
@@ -1025,6 +1385,7 @@ function setupSocket(httpServer) {
                     reward_frame_url: task.reward_frame_url,
                     completed_by: socket.userName ?? 'Someone',
                     task_title: task.title,
+                    expires_at: new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString(),
                   });
                 }
               } catch (emitErr) {
@@ -1034,14 +1395,13 @@ function setupSocket(httpServer) {
           }
         } catch (e) { console.error('[TASK] task progress error:', e.message, e.stack); }
 
-        // Save to DB
-        await saveMessage(roomId, senderId, 'gift', trimmed);
         return;
       }
 
       // ── Regular message ────────────────────────────────────────────────────
+      const savedId = await saveMessage(roomId, userId, 'message', trimmed);
       const msg = {
-        id: `msg_${socket.id}_${Date.now()}`,
+        id: savedId ?? `msg_${socket.id}_${Date.now()}`,
         type: 'message',
         user: { id: socket.userId, name: socket.userName ?? 'User', avatarUri: socket.avatarUrl ?? '', level: socket.userLevel ?? 0 },
         text: trimmed,
@@ -1054,7 +1414,6 @@ function setupSocket(httpServer) {
       if (msgs.length > 100) msgs.shift();
 
       io.to(roomId).emit('chat_message', msg);
-      await saveMessage(roomId, userId, 'message', trimmed);
     });
 
     // ── Comment moderation (host only): pin, delete, report ─────────────────────
@@ -1084,6 +1443,10 @@ function setupSocket(httpServer) {
         const idx = msgs.findIndex(m => m.id === messageId);
         if (idx !== -1) msgs.splice(idx, 1);
       }
+      // Stored rows have UUID ids (older live-only ids like msg_<socket>_<ts> aren't in the DB)
+      if (/^[0-9a-f-]{36}$/i.test(messageId)) {
+        db.query(`DELETE FROM chat_messages WHERE id = $1 AND room_id = $2`, [messageId, roomId]).catch(() => {});
+      }
       if (roomPinnedMessageId.get(roomId) === messageId) {
         roomPinnedMessageId.set(roomId, null);
         db.query(`UPDATE rooms SET pinned_message_id = NULL WHERE id = $1`, [roomId]).catch(() => {});
@@ -1095,21 +1458,36 @@ function setupSocket(httpServer) {
     socket.on('report_comment', async ({ roomId, messageId, messageText, reportedUserId, reason }) => {
       if (!roomId || !messageText || !socket.userId) return;
       try {
-        await db.query(
-          `INSERT INTO comment_reports (room_id, message_id, reported_user_id, reporter_id, message_text, reason)
-           VALUES ($1, $2, $3, $4, $5, $6)`,
-          [roomId, messageId || null, reportedUserId || null, socket.userId, messageText, reason || null]
-        );
-        socket.emit('report_comment_result', { ok: true });
+        const result = await moderationModel.reportUser({
+          reporterId: socket.userId, reportedUserId: reportedUserId || null, roomId,
+          reason: reason || null, kind: 'message', messageId, messageText,
+        });
+        socket.emit('report_comment_result', { ok: true, duplicate: !!result.duplicate });
+        applyModerationResult(result);
       } catch (e) {
+        if (e instanceof moderationModel.ModerationError) {
+          socket.emit('report_comment_result', { ok: false, message: e.message });
+          return;
+        }
         console.error('report_comment error:', e.message);
         socket.emit('report_comment_result', { ok: false });
       }
     });
 
+    // The app asks (once its app-wide socket is up) for warnings that were
+    // issued while it was offline.
+    socket.on('moderation_sync', async () => {
+      try {
+        const warnings = await moderationModel.takeUndeliveredWarnings(userId);
+        warnings.forEach(w => socket.emit('moderation_warning', {
+          id: w.id, message: w.message, createdAt: new Date(w.created_at).toISOString(),
+        }));
+      } catch (e) { console.error('moderation_sync error:', e.message); }
+    });
+
     // ── Disconnect ─────────────────────────────────────────────────────────────
 
-    socket.on('disconnect', () => {
+    socket.on('disconnect', (reason) => {
       // Friend Zone presence cleanup — runs regardless of room membership
       const fzSockets = friendZoneOnlineUsers.get(userId);
       if (fzSockets) {
@@ -1140,12 +1518,10 @@ function setupSocket(httpServer) {
 
       if (socket.isHost && roomHostSockets.get(roomId) === socket.id) {
         roomHostSockets.delete(roomId);
-        const hostSeat = getSeats(roomId).find(s => s.slotIndex === 0);
-        io.to(roomId).emit('host_status', {
-          isOnline: false,
-          userName: hostSeat?.userName ?? 'Host',
-          avatarUrl: hostSeat?.avatarUrl ?? null,
-        });
+        // Left the room on purpose → next visit starts on stage. A dropped
+        // connection keeps the choice, so a reconnect can't reopen their mic.
+        if (reason === 'client namespace disconnect') roomHostOffStage.delete(roomId);
+        io.to(roomId).emit('host_status', hostStatusFor(roomId));
 
         // Grace period before treating this as a real broadcast end (covers brief
         // network blips / app backgrounding) — if the host doesn't reconnect in
@@ -1156,6 +1532,7 @@ function setupSocket(httpServer) {
         pendingBroadcastEndTimers.set(roomId, setTimeout(async () => {
           pendingBroadcastEndTimers.delete(roomId);
           if (roomHostSockets.get(roomId)) return; // host reconnected under a different socket id
+          roomHostOffStage.delete(roomId);
           try {
             const activeBroadcast = await liveBroadcastModel.getBroadcastByRoomId(roomId);
             if (!activeBroadcast) return;
@@ -1191,7 +1568,7 @@ function getAllOnlineCounts() {
   for (const [roomId, sockets] of roomSockets.entries()) result[roomId] = sockets.size;
   return result;
 }
-function isRoomHostOnline(roomId) { return !!roomHostSockets.get(roomId); }
+function isRoomHostOnline(roomId) { return isHostOnline(roomId); }
 function getHostSocketId(roomId) { return roomHostSockets.get(roomId) ?? null; }
 // "Co-host" isn't a persisted role — it's whoever currently occupies a
 // non-zero stage seat, same live definition used for force-mute and the
@@ -1215,7 +1592,17 @@ function getRoomMembers(roomId) {
 let _io = null;
 function setIo(io) { _io = io; }
 
-function kickUserFromRoom(roomId, targetUserId) {
+// Push a user's current chatroom-ownership flag to all their open sockets —
+// called after a room is created for them over HTTP (by them or an admin).
+async function notifyChatroomStatus(userId) {
+  if (!_io || !userId) return;
+  try {
+    const hasChatroom = await userHasChatroom(userId);
+    _io.to(`user_${userId}`).emit('my_chatroom_status', { hasChatroom });
+  } catch (e) { console.error('notifyChatroomStatus error:', e.message); }
+}
+
+function kickUserFromRoom(roomId, targetUserId, payload = { message: 'You have been blocked from this room', kind: 'room_block' }) {
   if (!_io) return;
   const usersMap = roomUsers.get(roomId);
   if (!usersMap) return;
@@ -1229,12 +1616,17 @@ function kickUserFromRoom(roomId, targetUserId) {
   for (const socketId of socketsToKick) {
     const sock = _io.sockets.sockets.get(socketId);
     if (sock) {
-      sock.emit('kicked_from_room', { message: 'You have been blocked from this room' });
+      sock.emit('kicked_from_room', payload);
       sock.leave(roomId);
       sock.currentRoomId = null;
     }
     roomSockets.get(roomId)?.delete(socketId);
     usersMap.delete(socketId);
+    if (roomHostSockets.get(roomId) === socketId) {
+      roomHostSockets.delete(roomId);
+      roomHostOffStage.delete(roomId);
+      _io.to(roomId).emit('host_status', hostStatusFor(roomId));
+    }
 
     // Remove from seat if on stage
     const seats = getSeats(roomId);
@@ -1248,7 +1640,45 @@ function kickUserFromRoom(roomId, targetUserId) {
   _io.to(roomId).emit('online_count', { roomId, count: onlineCount(roomId) });
 }
 
+/** Rooms the user currently has a socket in. */
+function roomsWithUser(targetUserId) {
+  const out = [];
+  for (const [roomId, usersMap] of roomUsers) {
+    for (const u of usersMap.values()) {
+      if (u.userId === targetUserId) { out.push(roomId); break; }
+    }
+  }
+  return out;
+}
+
+/**
+ * Carry out what a report triggered: deliver a warning live, or enforce a new
+ * 24h ban — the host's ID is removed from every room they're in, and everyone
+ * is removed from the banned room. (New entries are refused in join_room.)
+ */
+function applyModerationResult(result) {
+  if (!_io || !result) return;
+  if (result.warning) {
+    const { id, userId, message, createdAt } = result.warning;
+    emitToUser(_io, userId, 'moderation_warning', { id, message, createdAt });
+    // Online now → delivered; otherwise sent on their next moderation_sync
+    if (isFriendZoneUserOnline(userId)) moderationModel.markWarningDelivered(id).catch(() => {});
+  }
+  if (result.ban) {
+    const { roomId, hostUserId, expiresAt } = result.ban;
+    for (const rid of roomsWithUser(hostUserId)) {
+      kickUserFromRoom(rid, hostUserId, { message: moderationModel.USER_BANNED_MESSAGE, kind: 'user_ban', expiresAt });
+    }
+    const others = new Set([...(roomUsers.get(roomId)?.values() ?? [])].map(u => u.userId));
+    for (const uid of others) {
+      kickUserFromRoom(roomId, uid, { message: moderationModel.ROOM_BANNED_MESSAGE, kind: 'room_ban', expiresAt });
+    }
+  }
+}
+
 module.exports = {
+  applyModerationResult,
   setupSocket, setIo, getOnlineCount, getAllOnlineCounts, isRoomHostOnline, getHostSocketId, getRoomMembers, kickUserFromRoom,
-  isFriendZoneUserOnline, debugFriendZonePresence, emitToUser, isUserSeatedInRoom,
+  isFriendZoneUserOnline, debugFriendZonePresence, emitToUser, isUserSeatedInRoom, notifyChatroomStatus,
+  scheduleBattleEnd,
 };

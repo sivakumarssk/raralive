@@ -1,0 +1,49 @@
+# EAS Build only needs the Expo app in app/. When this file exists, EAS uses it
+# instead of every .gitignore, so app/.gitignore rules are repeated below.
+# (EAS on Windows also fails to apply nested .gitignore files, which is how the
+# 2.4 GB app/android folder ended up in the upload.)
+
+# Everything at the repo root except the app — backend, admin, agencies,
+# landingpage, LevelsSvg, groupLevels, oldimages, store-assets, .git, ...
+/*
+!/app
+
+# dependencies
+node_modules
+
+# Expo
+/app/.expo
+/app/dist
+/app/web-build
+/app/expo-env.d.ts
+
+# generated native folders (EAS runs prebuild from app.json)
+/app/android
+/app/ios
+
+# Native / secrets
+.kotlin
+*.orig.*
+*.jks
+*.p8
+*.p12
+*.key
+*.mobileprovision
+*.pem
+
+# Metro / debug / OS / editor
+.metro-health-check*
+npm-debug.*
+yarn-debug.*
+yarn-error.*
+.DS_Store
+/app/.vscode
+/app/*.png
+
+# local env files
+.env*.local
+
+# typescript
+*.tsbuildinfo
+
+/app/app-example

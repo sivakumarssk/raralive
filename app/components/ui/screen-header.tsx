@@ -23,7 +23,7 @@ export function ScreenHeader({ step, totalSteps, onBack, backgroundColor }: Scre
       <TouchableOpacity onPress={handleBack} style={styles.backButton} activeOpacity={0.7}>
         <Ionicons name="chevron-back" size={22} color="#7A0EED" />
         <GradientWordmark
-          text="Rara Live"
+          text="RaRa Live"
           containerStyle={styles.wordmark}
           fontSize={18}
           lineHeight={22}

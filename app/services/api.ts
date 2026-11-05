@@ -1,8 +1,9 @@
+// Production (use for Play builds):
 // export const BASE_URL = 'https://api.raralive.in/api';
 // export const MEDIA_BASE = 'https://api.raralive.in';
 
-export const BASE_URL = 'http://172.20.10.3:5000/api';
-export const MEDIA_BASE = 'http://172.20.10.3:5000';
+export const BASE_URL = 'http://192.168.1.42:5000/api';
+export const MEDIA_BASE = 'http://192.168.1.42:5000';
 
 export type ApiResult<T = unknown> =
   | { ok: true; data: T }
@@ -19,11 +20,19 @@ export function resolveImageUrl(url: string | null | undefined): string | undefi
 }
 
 // Called when an authenticated request gets a 401 (token expired/invalid)
-let _on401: (() => void) | null = null;
+// 'revoked' = the account was logged out of all devices from somewhere.
+type SignOutReason = 'expired' | 'revoked';
+let _on401: ((reason: SignOutReason) => void) | null = null;
 let _getToken: (() => string | null) = () => null;
-export function register401Handler(fn: () => void, getToken: () => string | null) {
+export function register401Handler(fn: (reason: SignOutReason) => void, getToken: () => string | null) {
   _on401 = fn;
   _getToken = getToken;
+}
+
+/** Signs out locally after the server revoked this session (REST or socket). */
+export function triggerSessionRevoked() {
+  if (!_getToken()) return;
+  _on401?.('revoked');
 }
 // GET requests are background fetches — a 401 means "no access", not "session expired"
 // Only log out on 401 for mutating requests (POST/PUT/PATCH/DELETE)
@@ -34,10 +43,12 @@ function isTokenError(status: number, message: string): boolean {
   return TOKEN_ERROR_MSGS.some(m => message.toLowerCase().includes(m));
 }
 
-function handle401(path: string) {
+function handle401(path: string, code?: string) {
+  // A revoked session ends everywhere; other /auth/ 401s are wrong-credential replies.
+  if (code === 'SESSION_REVOKED') { triggerSessionRevoked(); return; }
   if (path.startsWith('/auth/')) return;
   if (!_getToken()) return;
-  _on401?.();
+  _on401?.('expired');
 }
 
 async function request<T>(
@@ -51,7 +62,7 @@ async function request<T>(
     });
     const json = await res.json().catch(() => ({}));
     const msg = json.message || '';
-    if (isTokenError(res.status, msg)) { handle401(path); return { ok: false, message: msg || 'Session expired. Please log in again.' }; }
+    if (isTokenError(res.status, msg)) { handle401(path, json.code); return { ok: false, message: msg || 'Session expired. Please log in again.' }; }
     if (!res.ok || !json.success) {
       return { ok: false, message: msg || 'Something went wrong.' };
     }
@@ -74,7 +85,7 @@ async function requestMultipart<T>(
       body: formData,
     });
     const json = await res.json().catch(() => ({}));
-    if (isTokenError(res.status, json.message || '')) { handle401(path); return { ok: false, message: json.message || 'Session expired. Please log in again.' }; }
+    if (isTokenError(res.status, json.message || '')) { handle401(path, json.code); return { ok: false, message: json.message || 'Session expired. Please log in again.' }; }
     if (!res.ok || !json.success) {
       return { ok: false, message: json.message || 'Something went wrong.' };
     }
@@ -86,8 +97,8 @@ async function requestMultipart<T>(
 
 // ── Auth ─────────────────────────────────────────────────────────────────────
 
-export type RegisterPayload = { phone: string; password: string; email?: string };
-export type RegisterResponse = { userId: string; phone: string; devOtp?: string };
+export type RegisterPayload = { phone: string; password?: string; email?: string };
+export type RegisterResponse = { userId: string; phone: string };
 
 export async function apiRegister(payload: RegisterPayload) {
   return request<RegisterResponse>('/auth/register', {
@@ -106,6 +117,8 @@ export type LoginResponse = {
     username: string | null;
     avatar_url: string | null;
     is_phone_verified: boolean;
+    gender?: string | null;
+    preferred_language?: string | null;
   };
 };
 
@@ -116,6 +129,45 @@ export async function apiLogin(payload: LoginPayload) {
   });
 }
 
+/** OTP login, step 1: texts a code to a registered phone. */
+export async function apiSendLoginOtp(phone: string) {
+  return request<undefined>('/auth/login-otp/send', {
+    method: 'POST',
+    body: JSON.stringify({ phone }),
+  });
+}
+
+/** OTP login, step 2: same response as password login. */
+export async function apiVerifyLoginOtp(phone: string, code: string) {
+  return request<LoginResponse>('/auth/login-otp/verify', {
+    method: 'POST',
+    body: JSON.stringify({ phone, code }),
+  });
+}
+
+/** Registration step 1: is this username still free? */
+export async function apiCheckUsername(username: string) {
+  return request<{ available: boolean }>(`/auth/username-available?username=${encodeURIComponent(username)}`);
+}
+
+/** Save the account's app language (PATCH /auth/language). */
+/** Revokes every session of this account, the current one included. */
+export async function apiLogoutAllDevices(token: string) {
+  return request<unknown>('/auth/logout-all', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+  });
+}
+
+export async function apiSetLanguage(language: string, token: string) {
+  return request<unknown>('/auth/language', {
+    method: 'PATCH',
+    // Full headers: request() lets options.headers replace its defaults
+    headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+    body: JSON.stringify({ language }),
+  });
+}
+
 export type VerifyOtpPayload = { phone: string; code: string; purpose?: string };
 export type VerifyOtpResponse = { token: string | null; user: Record<string, unknown> | null };
 
@@ -123,6 +175,13 @@ export async function apiVerifyOtp(payload: VerifyOtpPayload) {
   return request<VerifyOtpResponse>('/auth/verify-otp', {
     method: 'POST',
     body: JSON.stringify({ purpose: 'register', ...payload }),
+  });
+}
+
+export async function apiResendOtp(phone: string) {
+  return request<undefined>('/auth/resend-otp', {
+    method: 'POST',
+    body: JSON.stringify({ phone }),
   });
 }
 
@@ -418,12 +477,19 @@ export type PublicRoom = {
   city: string | null;
   state: string | null;
   district: string | null;
+  /** The host's current app language (rooms follow their host). */
+  language?: string;
 };
 
-export async function apiPublicRooms(token?: string | null) {
+/**
+ * Public rooms in the viewer's language. Logged-in users are matched on their
+ * account's language server-side; `language` covers guests (phone's choice).
+ */
+export async function apiPublicRooms(token?: string | null, language?: string | null) {
   const headers: Record<string, string> = {};
   if (token) headers.Authorization = `Bearer ${token}`;
-  return request<PublicRoom[]>('/rooms/public', { headers });
+  const query = language ? `?language=${encodeURIComponent(language)}` : '';
+  return request<PublicRoom[]>(`/rooms/public${query}`, { headers });
 }
 
 export async function apiOnlineCounts() {
@@ -465,17 +531,43 @@ export type ChatConversation = {
   peer_avatar_url: string | null;
   unread_count?: number;
   pinned?: boolean;
+  /** Only on the single-conversation endpoint — whether I've blocked this peer. */
+  blocked_by_me?: boolean;
+  /** Only on the single-conversation endpoint — whether this peer has blocked me. */
+  blocked_by_peer?: boolean;
 };
 
-export async function apiChatConversations(token: string) {
-  return request<ChatConversation[]>('/chat/conversations', {
+export type BlockedUser = {
+  id: string;
+  full_name: string | null;
+  username: string | null;
+  avatar_url: string | null;
+  blocked_at: string;
+  conversation_id: string | null;
+};
+
+/** Users I've blocked (chat list ⋮ → Blocked Users). */
+export async function apiChatBlockedUsers(token: string) {
+  return request<BlockedUser[]>('/chat/blocks', {
     method: 'GET',
     headers: { Authorization: `Bearer ${token}` },
   });
 }
 
-export async function apiChatRequests(token: string) {
-  return request<ChatConversation[]>('/chat/requests', {
+export async function apiChatUnblockUser(userId: string, token: string) {
+  return request<{ message: string }>(`/chat/blocks/${userId}`, {
+    method: 'DELETE',
+    headers: { Authorization: `Bearer ${token}` },
+  });
+}
+
+/** A pending conversation someone else started — shown with Accept / Remove / Block. */
+export function isIncomingChatRequest(conversation: ChatConversation, myUserId: string | null) {
+  return conversation.status === 'pending' && conversation.initiated_by !== myUserId;
+}
+
+export async function apiChatConversations(token: string) {
+  return request<ChatConversation[]>('/chat/conversations', {
     method: 'GET',
     headers: { Authorization: `Bearer ${token}` },
   });
@@ -513,6 +605,20 @@ export async function apiChatAcceptConversation(conversationId: string, token: s
 export async function apiChatRejectConversation(conversationId: string, token: string) {
   return request<{ message: string }>(`/chat/conversations/${conversationId}/reject`, {
     method: 'POST',
+    headers: { Authorization: `Bearer ${token}` },
+  });
+}
+
+export async function apiChatBlock(conversationId: string, token: string) {
+  return request<{ message: string }>(`/chat/conversations/${conversationId}/block`, {
+    method: 'POST',
+    headers: { Authorization: `Bearer ${token}` },
+  });
+}
+
+export async function apiChatUnblock(conversationId: string, token: string) {
+  return request<{ message: string }>(`/chat/conversations/${conversationId}/block`, {
+    method: 'DELETE',
     headers: { Authorization: `Bearer ${token}` },
   });
 }
@@ -574,4 +680,123 @@ export async function apiChatSendMedia(conversationId: string, payload: ChatMedi
   if (payload.durationMs) form.append('durationMs', String(payload.durationMs));
   form.append('file', { uri: payload.uri, name: payload.name, type: payload.mimeType } as unknown as Blob);
   return requestMultipart<DirectMessage>(`/chat/conversations/${conversationId}/media`, form, token, 'POST');
+}
+
+// ── Agency Coin Wallet (agency accounts only) ─────────────────────────────────
+
+export type AgencyWalletTxn = {
+  id: string;
+  txn_code: string;
+  agency_id: string;
+  agency_name: string;
+  type: 'official_credit' | 'user_recharge';
+  coins: number;
+  slab_coins: number;
+  extra_coins: number;
+  balance_after: number;
+  user_id: string | null;
+  user_handle: string | null;
+  user_name: string | null;
+  request_id: string | null;
+  note: string | null;
+  created_at: string;
+};
+
+export type AgencyCoinRequest = {
+  id: string;
+  request_code: string;
+  coins: number;
+  status: 'pending' | 'approved' | 'rejected';
+  extra_coins: number;
+  admin_note: string | null;
+  processed_at: string | null;
+  created_at: string;
+};
+
+export type AgencyWalletOverview = {
+  agency: { id: string; agency_name: string; agent_code: string };
+  balance: number;
+  stats: { received: number; used_today: number; transactions: number };
+  recharge_slabs: number[];
+  request_slabs: number[];
+  low_balance_threshold: number;
+};
+
+export type AgencyRechargeUser = { id: string; username: string | null; full_name: string | null; avatar_url: string | null };
+
+export async function apiAgencyWallet(token: string) {
+  return request<AgencyWalletOverview>('/agency-wallet/me', {
+    method: 'GET',
+    headers: { Authorization: `Bearer ${token}` },
+  });
+}
+
+export async function apiAgencyWalletTransactions(token: string) {
+  return request<AgencyWalletTxn[]>('/agency-wallet/transactions', {
+    method: 'GET',
+    headers: { Authorization: `Bearer ${token}` },
+  });
+}
+
+export async function apiAgencyWalletLookup(query: string, token: string) {
+  return request<AgencyRechargeUser>(`/agency-wallet/lookup?q=${encodeURIComponent(query)}`, {
+    method: 'GET',
+    headers: { Authorization: `Bearer ${token}` },
+  });
+}
+
+export async function apiAgencyWalletRecharge(
+  payload: { userId: string; slabCoins: number; extraCoins: number; idempotencyKey: string },
+  token: string,
+) {
+  return request<{ transaction: AgencyWalletTxn; balance: number; duplicate: boolean }>('/agency-wallet/recharge', {
+    method: 'POST',
+    headers: { Authorization: `Bearer ${token}` },
+    body: JSON.stringify(payload),
+  });
+}
+
+export async function apiAgencyWalletRequests(token: string) {
+  return request<AgencyCoinRequest[]>('/agency-wallet/requests', {
+    method: 'GET',
+    headers: { Authorization: `Bearer ${token}` },
+  });
+}
+
+export async function apiAgencyWalletCreateRequest(coins: number, token: string) {
+  return request<AgencyCoinRequest>('/agency-wallet/requests', {
+    method: 'POST',
+    headers: { Authorization: `Bearer ${token}` },
+    body: JSON.stringify({ coins }),
+  });
+}
+
+// ── India locations (chatroom location picker) ────────────────────────────────
+
+export async function apiLocationStates(token: string) {
+  return request<string[]>('/locations/states', {
+    method: 'GET',
+    headers: { Authorization: `Bearer ${token}` },
+  });
+}
+
+export async function apiLocationCities(state: string, token: string) {
+  return request<string[]>(`/locations/cities?state=${encodeURIComponent(state)}`, {
+    method: 'GET',
+    headers: { Authorization: `Bearer ${token}` },
+  });
+}
+
+// ── Post tags (admin-managed Home tabs + sub tags) ────────────────────────────
+
+export type PostTag = { id: string; name: string; parent_id: string | null; children?: PostTag[] };
+
+/** Active Home tabs (top-level tags) with their sub tags. */
+export async function apiPostTags() {
+  return request<PostTag[]>('/post-tags', { method: 'GET' });
+}
+
+/** "Trending Now" chips — tags used most in the last 7 days. */
+export async function apiTrendingPostTags() {
+  return request<PostTag[]>('/post-tags/trending', { method: 'GET' });
 }

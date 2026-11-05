@@ -14,6 +14,7 @@ import {
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { BASE_URL, MEDIA_BASE } from '@/services/api';
+import { avatarSource } from '@/utils/default-avatar';
 
 const COIN_IMG = require('@/assets/tabs/coin.png');
 
@@ -281,8 +282,8 @@ export function LeaderboardScreen() {
                   {top3[1] ? (
                     <TouchableOpacity activeOpacity={0.8} onPress={() => goToEntry(top3[1])}>
                       <View style={[lb.podRing, lb.podRingSilver]}>
-                        {top3[1].imageUri ? (
-                          <Image source={{ uri: top3[1].imageUri }} style={lb.podAvatar} />
+                        {top3[1].imageUri || !isRoomTab ? (
+                          <Image source={avatarSource(top3[1].imageUri)} style={lb.podAvatar} />
                         ) : (
                           <View style={[lb.podAvatar, lb.podAvatarFallback]}>
                             <Ionicons name={fallbackIcon as any} size={20} color="#FFFFFF" />
@@ -313,8 +314,8 @@ export function LeaderboardScreen() {
                   {top3[0] ? (
                     <TouchableOpacity activeOpacity={0.8} onPress={() => goToEntry(top3[0])}>
                       <View style={[lb.podRing, lb.podRingGold, lb.podRingBig]}>
-                        {top3[0].imageUri ? (
-                          <Image source={{ uri: top3[0].imageUri }} style={lb.podAvatarBig} />
+                        {top3[0].imageUri || !isRoomTab ? (
+                          <Image source={avatarSource(top3[0].imageUri)} style={lb.podAvatarBig} />
                         ) : (
                           <View style={[lb.podAvatarBig, lb.podAvatarFallback]}>
                             <Ionicons name={fallbackIcon as any} size={26} color="#FFFFFF" />
@@ -345,8 +346,8 @@ export function LeaderboardScreen() {
                   {top3[2] ? (
                     <TouchableOpacity activeOpacity={0.8} onPress={() => goToEntry(top3[2])}>
                       <View style={[lb.podRing, lb.podRingBronze]}>
-                        {top3[2].imageUri ? (
-                          <Image source={{ uri: top3[2].imageUri }} style={lb.podAvatar} />
+                        {top3[2].imageUri || !isRoomTab ? (
+                          <Image source={avatarSource(top3[2].imageUri)} style={lb.podAvatar} />
                         ) : (
                           <View style={[lb.podAvatar, lb.podAvatarFallback]}>
                             <Ionicons name={fallbackIcon as any} size={20} color="#FFFFFF" />

@@ -235,6 +235,36 @@ async function migrate() {
         CHECK (mode IN ('normal', 'gifting'));
   `);
 
+  // ── battle_targets — Gifting Battle coin targets, managed in the admin panel.
+  // Seeded with the old built-in options only when the table is first created,
+  // so re-running never brings back targets an admin deleted. ──
+  await run('battle_targets table', `
+    DO $$
+    BEGIN
+      IF NOT EXISTS (SELECT 1 FROM information_schema.tables WHERE table_name = 'battle_targets') THEN
+        CREATE TABLE battle_targets (
+          id           UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+          label        TEXT,
+          coin_amount  BIGINT NOT NULL CHECK (coin_amount > 0),
+          image_url    TEXT,
+          description  TEXT,
+          sort_order   INTEGER NOT NULL DEFAULT 0,
+          is_active    BOOLEAN NOT NULL DEFAULT TRUE,
+          created_at   TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+          updated_at   TIMESTAMPTZ NOT NULL DEFAULT NOW()
+        );
+        INSERT INTO battle_targets (label, coin_amount, sort_order) VALUES
+          ('5K', 5000, 1), ('20K', 20000, 2), ('50K', 50000, 3), ('100K', 100000, 4), ('200K', 200000, 5);
+      END IF;
+    END $$;
+  `);
+  // The target an invite was played for — coin amount copied at invite time.
+  await run('battle_invites target columns', `
+    ALTER TABLE battle_invites
+      ADD COLUMN IF NOT EXISTS target_id UUID,
+      ADD COLUMN IF NOT EXISTS target_coins BIGINT;
+  `);
+
   // ── room_gift_events.target_user_id — actual gift recipient for history ──
   await run('room_gift_events.target_user_id', `
     ALTER TABLE room_gift_events ADD COLUMN IF NOT EXISTS target_user_id UUID REFERENCES users(id) ON DELETE SET NULL;
@@ -266,6 +296,69 @@ async function migrate() {
       is_active   BOOLEAN NOT NULL DEFAULT TRUE,
       created_at  TIMESTAMPTZ NOT NULL DEFAULT NOW()
     );
+  `);
+
+  // ── stage_backgrounds table (chat room stage/header background images) ──
+  await run('stage_backgrounds table', `
+    CREATE TABLE IF NOT EXISTS stage_backgrounds (
+      id          UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+      title       TEXT,
+      image_url   TEXT NOT NULL,
+      sort_order  INTEGER NOT NULL DEFAULT 0,
+      is_active   BOOLEAN NOT NULL DEFAULT TRUE,
+      created_at  TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    );
+  `);
+
+  // ── rooms: stage background held for 24h per room ──
+  await run('rooms stage_bg columns', `
+    ALTER TABLE rooms
+      ADD COLUMN IF NOT EXISTS stage_bg_id UUID,
+      ADD COLUMN IF NOT EXISTS stage_bg_selected_at TIMESTAMPTZ;
+  `);
+
+  // ── earning_config_versions (admin-managed slabs + gem value, per service/month) ──
+  await run('earning_config_versions table', `
+    CREATE TABLE IF NOT EXISTS earning_config_versions (
+      id               UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+      source           TEXT NOT NULL,
+      effective_month  TEXT NOT NULL,
+      gems_per_coin    NUMERIC NOT NULL,
+      bonus_pct        NUMERIC NOT NULL DEFAULT 0,
+      slabs            JSONB NOT NULL DEFAULT '[]',
+      updated_at       TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      UNIQUE (source, effective_month)
+    );
+  `);
+
+  // ── support_requests table (chatroom Help & Support / Report messages) ──
+  await run('support_requests table', `
+    CREATE TABLE IF NOT EXISTS support_requests (
+      id          UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+      user_id     UUID REFERENCES users(id) ON DELETE SET NULL,
+      room_id     UUID,
+      type        TEXT NOT NULL DEFAULT 'help',
+      message     TEXT NOT NULL,
+      status      TEXT NOT NULL DEFAULT 'open',
+      created_at  TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    );
+  `);
+
+  // ── app_banners.placement (home | chatroom | live) ──
+  // (routes/banner.routes.js also adds it on first use and copies existing
+  // banners for Live, since they used to show in both Chat Rooms and Live)
+  await run('app_banners.placement', `
+    DO $$
+    BEGIN
+      IF NOT EXISTS (
+        SELECT 1 FROM information_schema.columns
+        WHERE table_name = 'app_banners' AND column_name = 'placement'
+      ) THEN
+        ALTER TABLE app_banners ADD COLUMN placement TEXT NOT NULL DEFAULT 'chatroom';
+        INSERT INTO app_banners (title, image_url, link_url, sort_order, is_active, placement)
+        SELECT title, image_url, link_url, sort_order, is_active, 'live' FROM app_banners WHERE placement = 'chatroom';
+      END IF;
+    END $$;
   `);
 
   // ── friend_zone_applications table ──────────────────────────────────────────
@@ -545,6 +638,11 @@ async function migrate() {
     ALTER TABLE rooms ADD COLUMN IF NOT EXISTS room_name_expires_at TIMESTAMPTZ;
   `);
 
+  // Bumped by "log out of all devices"; app JWTs carry it as `tv`.
+  await run('users.token_version', `
+    ALTER TABLE users ADD COLUMN IF NOT EXISTS token_version INTEGER NOT NULL DEFAULT 0;
+  `);
+
   // Lets an agency's phone+password also log into the app itself (not just
   // the separate agency panel), tagged with role='agency' so app code can
   // role-gate agency-specific features later. agency_id links back to the
@@ -565,6 +663,210 @@ async function migrate() {
   // chat rooms only (the one service that existed before this column).
   await run('agencies.service_access', `
     ALTER TABLE agencies ADD COLUMN IF NOT EXISTS service_access TEXT[] NOT NULL DEFAULT ARRAY['chatroom']::TEXT[];
+  `);
+
+  // ── earning_withdrawals — money taken out of the slab-earnings wallet ───────
+  // The wallet balance is computed from slab credits (see earnings.controller)
+  // minus pending + paid rows here; a rejected request returns the money.
+  await run('earning_withdrawals table', `
+    CREATE TABLE IF NOT EXISTS earning_withdrawals (
+      id           UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+      user_id      UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      amount       NUMERIC(12,2) NOT NULL CHECK (amount > 0),
+      status       VARCHAR(20) NOT NULL DEFAULT 'pending' CHECK (status IN ('pending','paid','rejected')),
+      created_at   TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      processed_at TIMESTAMPTZ
+    );
+  `);
+  await run('idx_earning_withdrawals_user', `
+    CREATE INDEX IF NOT EXISTS idx_earning_withdrawals_user ON earning_withdrawals(user_id, created_at DESC);
+  `);
+
+  // ── user_blocks — 1:1 chat blocking ─────────────────────────────────────────
+  // While a row exists neither side can send DMs in their conversation, and
+  // the blocker no longer sees it in their chat list.
+  await run('user_blocks table', `
+    CREATE TABLE IF NOT EXISTS user_blocks (
+      blocker_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      blocked_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      PRIMARY KEY (blocker_id, blocked_id),
+      CHECK (blocker_id <> blocked_id)
+    );
+  `);
+  await run('idx_user_blocks_blocked', `
+    CREATE INDEX IF NOT EXISTS idx_user_blocks_blocked ON user_blocks(blocked_id);
+  `);
+
+  // ── Agency coin wallet ───────────────────────────────────────────────────────
+  // Agencies buy coins from RaRa Live Official (credited by admin, usually in
+  // answer to an agency_coin_requests row) and recharge users from them.
+  // Every movement is one agency_wallet_transactions row with a readable
+  // txn_code (RRL-OFF-… for official credits, RRL-USR-… for user recharges).
+  await run('agency_wallets table', `
+    CREATE TABLE IF NOT EXISTS agency_wallets (
+      agency_id  UUID PRIMARY KEY REFERENCES agencies(id) ON DELETE CASCADE,
+      coins      BIGINT NOT NULL DEFAULT 0 CHECK (coins >= 0),
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    );
+  `);
+  await run('agency_wallet_code_seq', `CREATE SEQUENCE IF NOT EXISTS agency_wallet_code_seq;`);
+  await run('agency_coin_requests table', `
+    CREATE TABLE IF NOT EXISTS agency_coin_requests (
+      id             UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+      request_code   VARCHAR(40) NOT NULL UNIQUE,
+      agency_id      UUID NOT NULL REFERENCES agencies(id) ON DELETE CASCADE,
+      requested_by   UUID REFERENCES users(id) ON DELETE SET NULL,
+      coins          BIGINT NOT NULL CHECK (coins > 0),
+      status         VARCHAR(20) NOT NULL DEFAULT 'pending' CHECK (status IN ('pending','approved','rejected')),
+      extra_coins    BIGINT NOT NULL DEFAULT 0 CHECK (extra_coins >= 0),
+      admin_note     TEXT,
+      processed_by   UUID REFERENCES admins(id) ON DELETE SET NULL,
+      processed_at   TIMESTAMPTZ,
+      created_at     TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    );
+  `);
+  await run('idx_agency_coin_requests_status', `
+    CREATE INDEX IF NOT EXISTS idx_agency_coin_requests_status ON agency_coin_requests(status, created_at DESC);
+  `);
+  await run('idx_agency_coin_requests_agency', `
+    CREATE INDEX IF NOT EXISTS idx_agency_coin_requests_agency ON agency_coin_requests(agency_id, created_at DESC);
+  `);
+  await run('agency_wallet_transactions table', `
+    CREATE TABLE IF NOT EXISTS agency_wallet_transactions (
+      id              UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+      txn_code        VARCHAR(40) NOT NULL UNIQUE,
+      agency_id       UUID NOT NULL REFERENCES agencies(id) ON DELETE CASCADE,
+      type            VARCHAR(20) NOT NULL CHECK (type IN ('official_credit','user_recharge')),
+      coins           BIGINT NOT NULL CHECK (coins > 0),
+      slab_coins      BIGINT NOT NULL DEFAULT 0,
+      extra_coins     BIGINT NOT NULL DEFAULT 0,
+      balance_after   BIGINT NOT NULL,
+      user_id         UUID REFERENCES users(id) ON DELETE SET NULL,
+      user_handle     VARCHAR(120),
+      user_name       VARCHAR(160),
+      request_id      UUID REFERENCES agency_coin_requests(id) ON DELETE SET NULL,
+      admin_id        UUID REFERENCES admins(id) ON DELETE SET NULL,
+      note            TEXT,
+      idempotency_key VARCHAR(80),
+      created_at      TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      UNIQUE (agency_id, idempotency_key)
+    );
+  `);
+  await run('idx_agency_wallet_txn_agency', `
+    CREATE INDEX IF NOT EXISTS idx_agency_wallet_txn_agency ON agency_wallet_transactions(agency_id, created_at DESC);
+  `);
+  await run('idx_agency_wallet_txn_created', `
+    CREATE INDEX IF NOT EXISTS idx_agency_wallet_txn_created ON agency_wallet_transactions(created_at DESC);
+  `);
+
+  // Gems the receiver earned for a gift sent during a Friend Zone call —
+  // recorded per gift so admin call history can show it (older rows: 0).
+  await run('call_gift_events.gems_earned', `
+    ALTER TABLE call_gift_events ADD COLUMN IF NOT EXISTS gems_earned INTEGER NOT NULL DEFAULT 0;
+  `);
+
+  // ── Admin-managed post tags ──────────────────────────────────────────────────
+  // Top-level tags (parent_id NULL) are the custom tabs on the app's Home feed;
+  // sub tags (parent_id set) show as chips under their tab. Posts link to tags
+  // through post_tag_links — users can only pick these, not type their own.
+  await run('post_tags table', `
+    CREATE TABLE IF NOT EXISTS post_tags (
+      id          UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+      parent_id   UUID REFERENCES post_tags(id) ON DELETE CASCADE,
+      name        VARCHAR(60) NOT NULL,
+      sort_order  INTEGER NOT NULL DEFAULT 0,
+      is_active   BOOLEAN NOT NULL DEFAULT TRUE,
+      created_at  TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    );
+  `);
+  await run('idx_post_tags_parent', `
+    CREATE INDEX IF NOT EXISTS idx_post_tags_parent ON post_tags(parent_id, sort_order);
+  `);
+  await run('post_tag_links table', `
+    CREATE TABLE IF NOT EXISTS post_tag_links (
+      post_id UUID NOT NULL REFERENCES posts(id) ON DELETE CASCADE,
+      tag_id  UUID NOT NULL REFERENCES post_tags(id) ON DELETE CASCADE,
+      PRIMARY KEY (post_id, tag_id)
+    );
+  `);
+  await run('idx_post_tag_links_tag', `
+    CREATE INDEX IF NOT EXISTS idx_post_tag_links_tag ON post_tag_links(tag_id);
+  `);
+
+  // ── otp_codes: wrong-code attempt counter (MSG91 OTP) ───────────────────────
+  await run('otp_codes.attempts', `
+    ALTER TABLE otp_codes ADD COLUMN IF NOT EXISTS attempts SMALLINT NOT NULL DEFAULT 0;
+  `);
+
+  // ── users.preferred_language: NULL means "not chosen yet" ───────────────────
+  // The app shows the language picker once, only while this is NULL. New
+  // accounts start NULL; existing accounts keep their saved value (the old
+  // 'en' default), so they go straight to Home and are never asked.
+  await run('users.preferred_language no default', `
+    ALTER TABLE users ALTER COLUMN preferred_language DROP DEFAULT;
+  `);
+
+  // ── Agency Portal: documents history, POC accounts, audit log, support ──────
+  // POCs are a separate account type, not admins: an admin token opens the
+  // whole admin panel, and a POC must only reach their assigned agencies.
+  await run('agency portal tables', `
+    CREATE TABLE IF NOT EXISTS agency_documents (
+      id           UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+      agency_id    UUID NOT NULL REFERENCES agencies(id) ON DELETE CASCADE,
+      doc_type     VARCHAR(20) NOT NULL,
+      file_url     TEXT NOT NULL,
+      status       VARCHAR(20) NOT NULL DEFAULT 'submitted' CHECK (status IN ('submitted','verified','rejected')),
+      note         TEXT,
+      reviewed_at  TIMESTAMPTZ,
+      created_at   TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      UNIQUE (agency_id, file_url)
+    );
+    CREATE TABLE IF NOT EXISTS agency_pocs (
+      id            UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+      full_name     VARCHAR(120) NOT NULL,
+      email         VARCHAR(255) NOT NULL UNIQUE,
+      password_hash VARCHAR(255) NOT NULL,
+      is_active     BOOLEAN NOT NULL DEFAULT TRUE,
+      created_at    TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    );
+    CREATE TABLE IF NOT EXISTS agency_poc_assignments (
+      poc_id      UUID NOT NULL REFERENCES agency_pocs(id) ON DELETE CASCADE,
+      agency_id   UUID NOT NULL REFERENCES agencies(id) ON DELETE CASCADE,
+      assigned_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      PRIMARY KEY (poc_id, agency_id)
+    );
+    CREATE TABLE IF NOT EXISTS agency_audit_log (
+      id         UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+      agency_id  UUID REFERENCES agencies(id) ON DELETE SET NULL,
+      actor_type VARCHAR(20) NOT NULL,
+      actor_id   UUID,
+      action     VARCHAR(60) NOT NULL,
+      details    JSONB,
+      ip         VARCHAR(64),
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    );
+    CREATE INDEX IF NOT EXISTS idx_agency_audit_agency ON agency_audit_log(agency_id, created_at DESC);
+    CREATE TABLE IF NOT EXISTS agency_support_tickets (
+      id          UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+      agency_id   UUID NOT NULL REFERENCES agencies(id) ON DELETE CASCADE,
+      subject     VARCHAR(160) NOT NULL,
+      message     TEXT NOT NULL,
+      status      VARCHAR(20) NOT NULL DEFAULT 'open' CHECK (status IN ('open','resolved')),
+      admin_reply TEXT,
+      created_at  TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      resolved_at TIMESTAMPTZ
+    );
+    CREATE INDEX IF NOT EXISTS idx_agency_tickets_agency ON agency_support_tickets(agency_id, created_at DESC);
+  `);
+
+  // ── rooms.room_image_url — catch up rooms whose host added/changed their
+  // profile picture after creating the room (the app now keeps these in sync) ──
+  await run('rooms image = host picture', `
+    UPDATE rooms r SET room_image_url = u.avatar_url
+    FROM users u
+    WHERE u.id = r.host_user_id AND u.avatar_url IS NOT NULL
+      AND r.room_image_url IS DISTINCT FROM u.avatar_url;
   `);
 
   console.log('\n✅ All migrations complete.');

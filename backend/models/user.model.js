@@ -61,6 +61,15 @@ async function findByIdentifier(identifier) {
   return isEmail ? findByEmail(trimmed.toLowerCase()) : findByPhone(trimmed);
 }
 
+/** True when another account already uses this username (case-insensitive). */
+async function isUsernameTaken(username, exceptUserId = null) {
+  const result = await db.query(
+    `SELECT 1 FROM users WHERE LOWER(username) = LOWER($1) AND ($2::uuid IS NULL OR id <> $2) LIMIT 1`,
+    [username, exceptUserId]
+  );
+  return result.rowCount > 0;
+}
+
 async function createUser({ phone, email, passwordHash }) {
   const result = await db.query(
     `INSERT INTO users (phone, email, password_hash)
@@ -95,7 +104,7 @@ async function getProfileWithStats(userId) {
   const result = await db.query(
     `SELECT u.id, u.phone, u.email, u.username, u.full_name, u.gender,
             u.date_of_birth, u.preferred_language, u.avatar_url, u.bio, u.cover_url, u.location,
-            u.is_phone_verified, u.created_at,
+            u.is_phone_verified, u.created_at, u.role, u.agency_id,
             (SELECT COUNT(*) FROM user_follows WHERE following_id = u.id) AS followers_count,
             (SELECT COUNT(*) FROM user_follows WHERE follower_id  = u.id) AS following_count,
             (SELECT COUNT(*) FROM posts WHERE user_id = u.id) AS posts_count,
@@ -155,6 +164,17 @@ async function updatePassword(userId, passwordHash) {
   return result.rows[0] || null;
 }
 
+/** Re-registration of a phone that never finished OTP verification. */
+async function updatePendingRegistration(userId, { email, passwordHash }) {
+  const result = await db.query(
+    `UPDATE users SET email = $2, password_hash = $3, updated_at = NOW()
+     WHERE id = $1
+     RETURNING id, phone, email, is_phone_verified, created_at`,
+    [userId, email || null, passwordHash]
+  );
+  return result.rows[0] || null;
+}
+
 async function markPhoneVerified(userId) {
   const result = await db.query(
     `UPDATE users SET is_phone_verified = TRUE, updated_at = NOW() WHERE id = $1 RETURNING id, is_phone_verified`,
@@ -174,8 +194,41 @@ async function markPhoneVerified(userId) {
  * Called whenever an agency is created and whenever its password is reset,
  * so the two stay in sync (see agency.controller.js).
  */
-async function linkAgencyUser({ agencyId, phone, passwordHash, fullName }) {
+// Same shape as the app's generateUsername() (otp-verify-screen.tsx):
+// lowercase name, [a-z0-9_] only, max 14 chars, plus a 4-digit suffix.
+function usernameCandidate(seed) {
+  const base = String(seed || '')
+    .toLowerCase()
+    .replace(/[^a-z0-9]/g, '_')
+    .replace(/_+/g, '_')
+    .replace(/^_|_$/g, '')
+    .slice(0, 14);
+  return `${base || 'agency'}_${Math.floor(1000 + Math.random() * 9000)}`;
+}
+
+/**
+ * Gives a user a unique username if they don't have one yet (agency accounts
+ * never go through the app's profile step). Returns the user's username.
+ */
+async function ensureUsername(userId, seed) {
+  for (let attempt = 0; attempt < 10; attempt++) {
+    try {
+      const r = await db.query(
+        `UPDATE users SET username = COALESCE(username, $2), updated_at = NOW()
+         WHERE id = $1 RETURNING username`,
+        [userId, usernameCandidate(seed)]
+      );
+      return r.rows[0]?.username ?? null;
+    } catch (err) {
+      if (err.code !== '23505') throw err; // username taken — try another suffix
+    }
+  }
+  return null;
+}
+
+async function linkAgencyUser({ agencyId, phone, passwordHash, fullName, usernameSeed }) {
   const existing = await findByPhone(phone);
+  let row;
   if (existing) {
     const result = await db.query(
       `UPDATE users
@@ -184,15 +237,18 @@ async function linkAgencyUser({ agencyId, phone, passwordHash, fullName }) {
        RETURNING id, phone, role, agency_id`,
       [existing.id, passwordHash, agencyId]
     );
-    return result.rows[0];
+    row = result.rows[0];
+  } else {
+    const result = await db.query(
+      `INSERT INTO users (phone, password_hash, full_name, role, agency_id, is_phone_verified)
+       VALUES ($1, $2, $3, 'agency', $4, TRUE)
+       RETURNING id, phone, role, agency_id`,
+      [phone, passwordHash, fullName || null, agencyId]
+    );
+    row = result.rows[0];
   }
-  const result = await db.query(
-    `INSERT INTO users (phone, password_hash, full_name, role, agency_id, is_phone_verified)
-     VALUES ($1, $2, $3, 'agency', $4, TRUE)
-     RETURNING id, phone, role, agency_id`,
-    [phone, passwordHash, fullName || null, agencyId]
-  );
-  return result.rows[0];
+  if (usernameSeed) row.username = await ensureUsername(row.id, usernameSeed);
+  return row;
 }
 
 module.exports = {
@@ -201,11 +257,14 @@ module.exports = {
   findByPhoneFlexible,
   findByEmail,
   findByIdentifier,
+  isUsernameTaken,
   createUser,
   updateProfile,
   updatePassword,
+  updatePendingRegistration,
   markPhoneVerified,
   linkAgencyUser,
+  ensureUsername,
   listUsers,
   getProfileWithStats,
   followUser,

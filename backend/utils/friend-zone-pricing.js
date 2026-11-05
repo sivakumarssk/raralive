@@ -2,8 +2,8 @@
 // The coin cost per 5-second tick depends only on which MINUTE of the call
 // that tick falls in (every tick within the same minute costs the same);
 // there's no first-call/existing-user distinction in this model. Gems
-// earned by the recipient are always coins * 5, matching the room-gift
-// conversion rate used everywhere else in the app.
+// earned by the recipient use the admin's Friend Zone gem value (Earning
+// Slabs page); nothing is credited while that isn't configured.
 //
 // Confirmed schedule (minute -> coins per 5-sec tick):
 //   Audio: 1=5, 2=10, 3=20, 4=25, 5=30, then +10 per minute after minute 5
@@ -11,7 +11,6 @@
 //   Video: 1=10, 2=15, 3=30, 4=40, 5=50, then +10 per minute after minute 5
 //     (6=60, 7=70, 8=80, 9=90, 10=100, 11=110, ...)
 
-const GEMS_PER_COIN = 5;
 const TICK_SECONDS = 5;
 
 const AUDIO_EARLY_MINUTES = { 1: 5, 2: 10, 3: 20, 4: 25, 5: 30 };
@@ -25,8 +24,11 @@ function coinsPerTickForMinute({ callType, minuteNumber }) {
   return early[5] + (minuteNumber - 5) * 10;
 }
 
-function gemsForCoins(coins) {
-  return coins * GEMS_PER_COIN;
+/** Gems the callee earns for `coins` at this month's Friend Zone gem value. */
+async function gemsForCoins(coins) {
+  const { loadConfigVersions, configFor, monthKey } = require('./earning-slabs');
+  const cfg = configFor(await loadConfigVersions(), 'friendzone', monthKey(new Date()));
+  return cfg ? Math.round(coins * cfg.gemsPerCoin) : 0;
 }
 
-module.exports = { coinsPerTickForMinute, gemsForCoins, GEMS_PER_COIN, TICK_SECONDS };
+module.exports = { coinsPerTickForMinute, gemsForCoins, TICK_SECONDS };

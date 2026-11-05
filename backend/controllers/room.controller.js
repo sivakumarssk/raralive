@@ -2,7 +2,7 @@ const roomModel = require('../models/room.model');
 const agencyModel = require('../models/agency.model');
 const walletModel = require('../models/wallet.model');
 const db = require('../config/db');
-const { getAllOnlineCounts, isRoomHostOnline } = require('../socket');
+const { getAllOnlineCounts, isRoomHostOnline, notifyChatroomStatus } = require('../socket');
 
 /** GET /api/rooms/online-counts */
 function onlineCounts(req, res) {
@@ -19,27 +19,20 @@ const ROOM_NAME_DURATION_PRICING = {
   90: 4000,
 };
 
-/**
- * Lazy-expiry for a paid room-name change — mirrors the pattern battle
- * .controller.js uses for auto-finishing battles: no scheduled job, just a
- * conditional UPDATE run whenever the room is read, reverting room_name back
- * to previous_room_name once room_name_expires_at has passed.
- */
-async function applyRoomNameExpiry(roomId) {
-  await db.query(
-    `UPDATE rooms
-     SET room_name = previous_room_name, previous_room_name = NULL, room_name_expires_at = NULL
-     WHERE id = $1
-       AND room_name_expires_at IS NOT NULL
-       AND room_name_expires_at <= NOW()`,
-    [roomId]
-  );
-}
-
 /** GET /api/rooms/public */
 async function publicRooms(req, res, next) {
   try {
-    const rooms = await roomModel.getPublicRooms();
+    // Only rooms in the viewer's language: their account's language (read
+    // fresh, so a change applies at once), else what a guest's app sends.
+    let language = null;
+    if (req.user?.id) {
+      const me = await db.query(`SELECT preferred_language FROM users WHERE id = $1`, [req.user.id]);
+      language = me.rows[0]?.preferred_language ?? null;
+    }
+    if (!language && typeof req.query.language === 'string' && req.query.language.trim()) {
+      language = req.query.language.trim();
+    }
+    const rooms = await roomModel.getPublicRooms({ language });
 
     // If user is authenticated, filter out rooms where they are blocked
     const userId = req.user?.id;
@@ -63,25 +56,11 @@ async function publicRooms(req, res, next) {
 async function getRoom(req, res, next) {
   try {
     const { id } = req.params;
-    await applyRoomNameExpiry(id);
-    const result = await db.query(
-      `SELECT r.id, r.room_code, r.room_name, r.room_image_url, r.visibility, r.status, r.host_user_id,
-              r.current_level, r.total_coins_received,
-              r.previous_room_name, r.room_name_expires_at,
-              r.agency_id, a.agency_name,
-              u.full_name AS host_name, u.username AS host_username, u.avatar_url AS host_avatar_url,
-              lb.likes_count
-       FROM rooms r
-       LEFT JOIN agencies a ON a.id = r.agency_id
-       LEFT JOIN live_broadcasts lb ON lb.room_id = r.id AND lb.status = 'active'
-       JOIN users u ON u.id = r.host_user_id
-       WHERE r.id = $1`,
-      [id]
-    );
-    if (!result.rows.length) {
+    const room = await roomModel.getRoomDetail(id);
+    if (!room) {
       return res.status(404).json({ success: false, message: 'Room not found.' });
     }
-    return res.json({ success: true, data: result.rows[0] });
+    return res.json({ success: true, data: room });
   } catch (error) {
     next(error);
   }
@@ -201,6 +180,8 @@ async function createRoom(req, res, next) {
       }
       throw err;
     }
+
+    notifyChatroomStatus(userId);
 
     return res.status(201).json({
       success: true,

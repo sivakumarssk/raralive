@@ -15,6 +15,7 @@ import {
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { getLevelImage } from './room-level-up';
+import { defaultAvatar } from '@/utils/default-avatar';
 
 const COIN_IMG = require('@/assets/tabs/coin.png');
 
@@ -101,7 +102,6 @@ export function PerformanceModal({ visible, onClose, level = 0 }: Props) {
             <Ionicons name="arrow-back" size={22} color="#1C1E22" />
           </TouchableOpacity>
           <Text style={s.headerTitle}>Performance</Text>
-          <View style={s.backBtn} />
         </View>
 
         {/* Tab bar */}
@@ -179,9 +179,7 @@ export function PerformanceModal({ visible, onClose, level = 0 }: Props) {
                   <Text style={[s.rank, s2.rank <= 3 && s.rankTop]}>
                     {s2.rank <= 3 ? ['🥇', '🥈', '🥉'][s2.rank - 1] : s2.rank}
                   </Text>
-                  <View style={[s.avatar, { backgroundColor: s2.avatarColor }]}>
-                    <Text style={s.avatarInitial}>{s2.name[0]}</Text>
-                  </View>
+                  <Image source={defaultAvatar()} style={s.avatar} />
                   <Text style={s.supporterName} numberOfLines={1}>{s2.name}</Text>
                   <View style={s.coinsWrap}>
                     <Image source={COIN_IMG} style={s.coinIcon} resizeMode="contain" />
@@ -217,9 +215,10 @@ const s = StyleSheet.create({
   headerRow: {
     flexDirection: 'row',
     alignItems: 'center',
-    paddingHorizontal: 16,
-    paddingTop: 14,
-    paddingBottom: 8,
+    gap: 8,
+    paddingHorizontal: 12,
+    paddingTop: 10,
+    paddingBottom: 6,
   },
   backBtn: {
     width: 36,
@@ -229,8 +228,7 @@ const s = StyleSheet.create({
   },
   headerTitle: {
     flex: 1,
-    textAlign: 'center',
-    fontSize: 18,
+    fontSize: 20,
     fontWeight: '700',
     color: '#1C1E22',
   },
@@ -243,12 +241,13 @@ const s = StyleSheet.create({
   },
   tabBtn: {
     flex: 1,
+    height: 48,
     alignItems: 'center',
-    paddingVertical: 12,
+    justifyContent: 'center',
     position: 'relative',
   },
   tabLabel: {
-    fontSize: 15,
+    fontSize: 16,
     fontWeight: '500',
     color: '#7A7A8A',
   },
@@ -259,9 +258,9 @@ const s = StyleSheet.create({
   tabUnderline: {
     position: 'absolute',
     bottom: 0,
-    left: 16,
-    right: 16,
-    height: 2.5,
+    left: 28,
+    right: 28,
+    height: 3,
     borderRadius: 2,
     backgroundColor: '#7A0EED',
   },
@@ -277,21 +276,21 @@ const s = StyleSheet.create({
   },
   heroGlow: {
     position: 'absolute',
-    width: 200,
-    height: 200,
+    width: 150,
+    height: 150,
     borderRadius: 100,
     backgroundColor: 'rgba(100,80,220,0.35)',
   },
   heroLevelImg: {
-    width: 160,
-    height: 160,
+    width: 120,
+    height: 120,
   },
   heroBottom: {
     position: 'absolute',
     bottom: 0,
     left: 0,
     right: 0,
-    paddingHorizontal: 20,
+    paddingHorizontal: 16,
     paddingBottom: 14,
   },
   progressTrack: {
@@ -341,7 +340,7 @@ const s = StyleSheet.create({
     paddingHorizontal: 16,
   },
   rewardsTitle: {
-    fontSize: 18,
+    fontSize: 16,
     fontWeight: '800',
     color: '#1C1E22',
     marginBottom: 4,
@@ -364,7 +363,7 @@ const s = StyleSheet.create({
     position: 'relative',
   },
   rewardEmoji: {
-    fontSize: 52,
+    fontSize: 32,
   },
   rewardTag: {
     position: 'absolute',
@@ -386,37 +385,37 @@ const s = StyleSheet.create({
   supporterRow: {
     flexDirection: 'row',
     alignItems: 'center',
-    paddingHorizontal: 20,
-    paddingVertical: 14,
+    paddingHorizontal: 16,
+    paddingVertical: 11,
     gap: 12,
     borderBottomWidth: StyleSheet.hairlineWidth,
     borderBottomColor: '#F0EDF8',
   },
   rank: {
     width: 28,
-    fontSize: 15,
+    fontSize: 14,
     fontWeight: '700',
     color: '#ABADB2',
     textAlign: 'center',
   },
   rankTop: {
-    fontSize: 20,
+    fontSize: 18,
   },
   avatar: {
-    width: 44,
-    height: 44,
+    width: 36,
+    height: 36,
     borderRadius: 22,
     alignItems: 'center',
     justifyContent: 'center',
   },
   avatarInitial: {
-    fontSize: 18,
+    fontSize: 16,
     fontWeight: '700',
     color: '#FFFFFF',
   },
   supporterName: {
     flex: 1,
-    fontSize: 15,
+    fontSize: 14,
     fontWeight: '600',
     color: '#1C1E22',
   },

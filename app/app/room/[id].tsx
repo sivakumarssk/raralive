@@ -34,7 +34,9 @@ export default function RoomDetailPage() {
   return (
     <RoomDetailScreen
       roomId={resolvedId}
-      onBack={() => router.back()}
+      // Back to the exact previous screen (kept mounted, not reloaded); a room
+      // opened from a link has none, so fall back to the tabs.
+      onBack={() => (router.canGoBack() ? router.back() : router.replace('/(tabs)' as any))}
       openBattle={openBattle === '1'}
     />
   );

@@ -10,6 +10,8 @@ export function NotFoundPage({ message }: { message?: string }) {
         <div className="text-7xl font-black text-transparent bg-clip-text bg-gradient-to-r from-[#7A0EED] to-[#B50357] mb-4">
           404
         </div>
+        {/* A reason when there is one, e.g. a suspended agency */}
+        {message && <p className="text-gray-500 text-sm leading-relaxed">{message}</p>}
         {/* <h1 className="text-2xl font-black text-gray-900 mb-2">Agency Not Found</h1>
         <p className="text-gray-500 text-sm leading-relaxed">
           {message || 'This agency link is invalid or does not exist. Please contact your administrator for the correct link.'}

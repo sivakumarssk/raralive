@@ -1,15 +1,19 @@
 import { DarkTheme, DefaultTheme, ThemeProvider } from '@react-navigation/native';
 import { router, Stack } from 'expo-router';
+import * as SplashScreen from 'expo-splash-screen';
 import { useEffect } from 'react';
+import { Alert, Platform, StatusBar } from 'react-native';
 import 'react-native-reanimated';
 
+import { AppUpdateTag } from '@/components/AppUpdateTag';
 import { IncomingCallOverlay } from '@/components/IncomingCallOverlay';
 import { InsufficientCoinsModal } from '@/components/InsufficientCoinsModal';
 import { MiniRoomPlayer } from '@/components/MiniRoomPlayer';
 import { useColorScheme } from '@/hooks/use-color-scheme';
 import { register401Handler } from '@/services/api';
 import { authStore } from '@/store/auth-store';
-import { chatSocketStore } from '@/store/chat-socket-store';
+import { chatSocketStore, subscribeChatEvents } from '@/store/chat-socket-store';
+import { socketStore } from '@/store/socket-store';
 import { initFriendZoneCallSession } from '@/store/friend-zone-call-session-store';
 import {
   friendZoneSocketStore,
@@ -21,12 +25,44 @@ export const unstable_settings = {
   anchor: '(tabs)',
 };
 
+// Keep the native logo splash up until the JS splash artwork has decoded
+// (splash.tsx hides it), otherwise a blank white frame shows in between.
+SplashScreen.preventAutoHideAsync().catch(() => {});
+SplashScreen.setOptions({ fade: true, duration: 250 });
+
+// Android status bar is translucent app-wide, from launch and never toggled.
+// Screens that draw behind it (chat room stage, profile cover, leaderboard)
+// used to switch translucency on mount/unmount, which resizes the window
+// after the first layout: the header slid down on open and the screen
+// jumped on back. Every screen pads its own top with safe-area insets, as
+// it already does on iOS.
+if (Platform.OS === 'android') {
+  StatusBar.setTranslucent(true);
+  StatusBar.setBackgroundColor('transparent');
+}
+
 export default function RootLayout() {
   const colorScheme = useColorScheme();
 
+  // Moderation warning (5 different people reported this user) — shown on
+  // whatever screen is open; also saved under Notifications.
+  useEffect(() => subscribeChatEvents(event => {
+    if (event.type === 'moderation_warning') Alert.alert('Warning', event.message);
+  }), []);
+
+  // Safety net: when the app opens straight onto another screen (deep link,
+  // notification) splash.tsx never mounts to hide the native splash.
+  useEffect(() => {
+    const t = setTimeout(() => { SplashScreen.hideAsync().catch(() => {}); }, 3000);
+    return () => clearTimeout(t);
+  }, []);
+
   useEffect(() => {
     register401Handler(
-      () => { authStore.clear(); friendZoneSocketStore.disconnect(); chatSocketStore.disconnect(); router.replace('/login'); },
+      (reason) => {
+        authStore.clear(); friendZoneSocketStore.disconnect(); chatSocketStore.disconnect(); socketStore.leave(); router.replace('/login');
+        if (reason === 'revoked') Alert.alert('Logged out', 'Your account was logged out of all devices. Please log in again.');
+      },
       () => authStore.getToken(),
     );
   }, []);
@@ -60,7 +96,10 @@ export default function RootLayout() {
         <Stack.Screen name="room/[id]" options={{ headerShown: false }} />
         <Stack.Screen name="forgot-password/index" options={{ headerShown: false }} />
         <Stack.Screen name="wallet/index" options={{ headerShown: false }} />
+        <Stack.Screen name="agency-wallet/index" options={{ headerShown: false }} />
+        <Stack.Screen name="agency-wallet-history/index" options={{ headerShown: false }} />
         <Stack.Screen name="wallet-history/index" options={{ headerShown: false }} />
+        <Stack.Screen name="service-earnings/index" options={{ headerShown: false }} />
         <Stack.Screen name="performance/index" options={{ headerShown: false }} />
         <Stack.Screen name="leaderboard/index" options={{ headerShown: false }} />
         <Stack.Screen name="notifications/index" options={{ headerShown: false }} />
@@ -80,7 +119,13 @@ export default function RootLayout() {
         <Stack.Screen name="edit-room-name/index" options={{ headerShown: false }} />
         <Stack.Screen name="agency/[id]" options={{ headerShown: false }} />
       </Stack>
+      {/* Always mounted, so translucency never falls back to the opaque
+          default when no screen-level StatusBar is mounted. Sets no barStyle —
+          screens keep choosing their own icon colour. */}
+      <StatusBar translucent backgroundColor="transparent" />
       <MiniRoomPlayer />
+      {/* Above the navigator so it stays put on every screen */}
+      <AppUpdateTag />
       <IncomingCallOverlay />
       <InsufficientCoinsModal />
     </ThemeProvider>

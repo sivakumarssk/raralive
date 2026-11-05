@@ -14,6 +14,7 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 
 import { PhotoCarousel } from '@/components/photo-carousel';
 import type { Friend } from '@/screens/chat-rooms/components/friend-zone-screen';
+import { defaultAvatar } from '@/utils/default-avatar';
 
 const SCREEN_W = Dimensions.get('window').width;
 const HERO_H = SCREEN_W * 0.75;
@@ -48,9 +49,7 @@ export function FriendProfileScreen({
           {heroPhotos.length > 0 ? (
             <PhotoCarousel photos={heroPhotos} width={SCREEN_W} height={HERO_H} dotsStyle="light" />
           ) : (
-            <View style={[s.heroImage, s.heroFallback]}>
-              <Text style={s.heroFallbackInitial}>{friend.name[0]?.toUpperCase()}</Text>
-            </View>
+            <Image source={defaultAvatar(friend.gender)} style={s.heroImage} resizeMode="contain" />
           )}
 
           <LinearGradient

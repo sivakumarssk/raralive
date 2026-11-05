@@ -2,6 +2,10 @@ import { Stack, router } from 'expo-router';
 
 import { ScreenHeader } from '@/components/ui/screen-header';
 import { RegisterProfileScreen } from '@/screens/register/register-profile-screen';
+import { authStore } from '@/store/auth-store';
+
+// A new account has no language yet, so this lands on the one-time picker.
+const goHomeOrLanguage = () => router.replace(authStore.needsLanguage() ? '/language' : '/(tabs)');
 
 export default function RegisterProfileRoute() {
   return (
@@ -14,8 +18,8 @@ export default function RegisterProfileRoute() {
         }}
       />
       <RegisterProfileScreen
-        onSkip={() => router.replace('/language')}
-        onComplete={() => router.replace('/(tabs)')}
+        onSkip={goHomeOrLanguage}
+        onComplete={goHomeOrLanguage}
       />
     </>
   );

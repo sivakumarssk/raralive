@@ -36,7 +36,6 @@ export default function Footer() {
             <h4 className="mb-3 text-sm font-semibold text-white">Contact</h4>
             <ul className="space-y-2 text-sm">
               <li><a href={`mailto:${COMPANY.email}`} className="break-all text-muted hover:text-white">{COMPANY.email}</a></li>
-              <li><a href={COMPANY.phoneHref} className="text-muted hover:text-white">{COMPANY.phone}</a></li>
             </ul>
           </div>
         </div>

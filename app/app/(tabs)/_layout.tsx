@@ -1,10 +1,20 @@
-import { Ionicons } from '@expo/vector-icons';
 import { Tabs } from 'expo-router';
-import { Platform, StyleSheet, View } from 'react-native';
+import { Platform, StyleSheet, Text, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
+
+import { TabIcon } from '@/components/ui/tab-icon';
+
+// Dark, high-contrast tab icons (no bright tints). Selected = filled icon +
+// bold label in black; unselected = outline icon + regular label in near-black.
+const TAB_ACTIVE = '#000000';
+const TAB_INACTIVE = '#2B2D33';
 
 function TabBarBackground() {
   return <View style={styles.tabBarBackground} />;
+}
+
+function TabLabel({ focused, color, children }: { focused: boolean; color: string; children: string }) {
+  return <Text style={[styles.tabLabel, { color }, focused && styles.tabLabelActive]}>{children}</Text>;
 }
 
 export default function TabsLayout() {
@@ -17,9 +27,9 @@ export default function TabsLayout() {
       screenOptions={{
         headerShown: false,
         tabBarStyle: [styles.tabBar, { height: barHeight, paddingBottom: Platform.OS === 'ios' ? 24 : bottomInset + 12 }],
-        tabBarActiveTintColor: '#7A0EED',
-        tabBarInactiveTintColor: '#ABADB2',
-        tabBarLabelStyle: styles.tabLabel,
+        tabBarActiveTintColor: TAB_ACTIVE,
+        tabBarInactiveTintColor: TAB_INACTIVE,
+        tabBarLabel: TabLabel,
         tabBarItemStyle: styles.tabItem,
         tabBarBackground: () => <TabBarBackground />,
       }}>
@@ -28,7 +38,7 @@ export default function TabsLayout() {
         options={{
           title: 'Home',
           tabBarIcon: ({ color, focused }) => (
-            <Ionicons name={focused ? 'home' : 'home-outline'} size={26} color={color} />
+            <TabIcon name={focused ? 'home' : 'home-outline'} size={26} color={color} />
           ),
         }}
       />
@@ -37,7 +47,7 @@ export default function TabsLayout() {
         options={{
           title: 'Explore',
           tabBarIcon: ({ color, focused }) => (
-            <Ionicons name={focused ? 'compass' : 'compass-outline'} size={26} color={color} />
+            <TabIcon name={focused ? 'compass' : 'compass-outline'} size={26} color={color} />
           ),
         }}
       />
@@ -45,8 +55,8 @@ export default function TabsLayout() {
         name="create"
         options={{
           title: 'Create',
-          tabBarIcon: ({ color }) => (
-            <Ionicons name="add-circle-outline" size={30} color={color} />
+          tabBarIcon: ({ color, focused }) => (
+            <TabIcon name={focused ? 'add-circle' : 'add-circle-outline'} size={30} color={color} />
           ),
         }}
       />
@@ -55,7 +65,7 @@ export default function TabsLayout() {
         options={{
           title: 'Live',
           tabBarIcon: ({ color, focused }) => (
-            <Ionicons name={focused ? 'radio' : 'radio-outline'} size={26} color={color} />
+            <TabIcon name={focused ? 'radio' : 'radio-outline'} size={26} color={color} />
           ),
         }}
       />
@@ -64,7 +74,7 @@ export default function TabsLayout() {
         options={{
           title: 'Profile',
           tabBarIcon: ({ color, focused }) => (
-            <Ionicons name={focused ? 'person' : 'person-outline'} size={26} color={color} />
+            <TabIcon name={focused ? 'person' : 'person-outline'} size={26} color={color} />
           ),
         }}
       />
@@ -101,6 +111,9 @@ const styles = StyleSheet.create({
     fontSize: 10,
     fontWeight: '500',
     marginTop: 1,
+  },
+  tabLabelActive: {
+    fontWeight: '700',
   },
   tabItem: {
     gap: 2,

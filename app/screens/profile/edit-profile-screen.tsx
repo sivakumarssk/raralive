@@ -23,6 +23,7 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 
 import { BASE_URL, MEDIA_BASE } from '@/services/api';
 import { authStore } from '@/store/auth-store';
+import { avatarSource } from '@/utils/default-avatar';
 
 const SCREEN_W = Dimensions.get('window').width;
 const COVER_H = 200;
@@ -158,6 +159,8 @@ export function EditProfileScreen() {
 
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState('');
+  // Gender and date of birth are mandatory; bio is optional
+  const [fieldErrors, setFieldErrors] = useState<{ gender?: string; dob?: string }>({});
 
   useEffect(() => {
     const token = authStore.getToken();
@@ -201,6 +204,16 @@ export function EditProfileScreen() {
 
   const handleSave = async () => {
     if (!username.trim()) { setError('Username is required.'); return; }
+    const missing: { gender?: string; dob?: string } = {};
+    if (!gender) missing.gender = 'Please select your gender.';
+    if (!dob) missing.dob = 'Please select your date of birth.';
+    setFieldErrors(missing);
+    if (missing.gender || missing.dob) {
+      setError(missing.gender && missing.dob
+        ? 'Gender and date of birth are required.'
+        : missing.gender ? 'Gender is required.' : 'Date of birth is required.');
+      return;
+    }
     setSaving(true); setError('');
     try {
       const token = authStore.getToken();
@@ -229,7 +242,16 @@ export function EditProfileScreen() {
         body: form,
       });
       const json = await res.json();
-      if (!json.success) { setError(json.message || 'Failed to save.'); return; }
+      if (!json.success) {
+        // Server-side check names the missing field(s) too
+        const fields: string[] = Array.isArray(json.fields) ? json.fields : [];
+        setFieldErrors({
+          gender: fields.includes('gender') ? 'Please select your gender.' : undefined,
+          dob: fields.includes('dateOfBirth') ? 'Please select your date of birth.' : undefined,
+        });
+        setError(json.message || 'Failed to save.');
+        return;
+      }
       router.back();
     } catch { setError('Network error.'); }
     finally { setSaving(false); }
@@ -245,7 +267,6 @@ export function EditProfileScreen() {
 
   const displayAvatarUri = avatarUri ?? resolveUrl(profile?.avatar_url);
   const displayCoverUri  = coverUri  ?? resolveUrl(profile?.cover_url);
-  const initials = (fullName || username || '?').split(' ').map((w: string) => w[0]).join('').toUpperCase().slice(0, 2);
 
   return (
     <SafeAreaView style={st.safe} edges={['top']}>
@@ -283,13 +304,7 @@ export function EditProfileScreen() {
           {/* Avatar */}
           <View style={st.avatarRow}>
             <TouchableOpacity onPress={pickAvatar} activeOpacity={0.88} style={st.avatarWrap}>
-              {displayAvatarUri ? (
-                <Image source={{ uri: displayAvatarUri }} style={st.avatar} />
-              ) : (
-                <LinearGradient colors={['#7A0EED', '#B50357']} style={st.avatar}>
-                  <Text style={st.avatarInitials}>{initials}</Text>
-                </LinearGradient>
-              )}
+              <Image source={avatarSource(displayAvatarUri, gender)} style={st.avatar} />
               <View style={st.cameraBadge}>
                 <Ionicons name="camera" size={14} color="#FFFFFF" />
               </View>
@@ -298,30 +313,30 @@ export function EditProfileScreen() {
 
           {/* Fields */}
           <View style={st.form}>
-            <Field label="FULL NAME" icon="person-outline">
+            <Field label="Full name" icon="person-outline">
               <TextInput style={st.input} value={fullName} onChangeText={setFullName} placeholder="Your full name" placeholderTextColor="#C4C5CC" />
             </Field>
 
-            <Field label="USERNAME *" icon="at-outline">
+            <Field label="Username *" icon="at-outline">
               <TextInput style={st.input} value={username} onChangeText={setUsername} placeholder="username" placeholderTextColor="#C4C5CC" autoCapitalize="none" />
             </Field>
 
-            <Field label="BIO" icon="document-text-outline">
-              <TextInput style={[st.input, { height: 72, textAlignVertical: 'top', paddingTop: 10 }]} value={bio} onChangeText={setBio} placeholder="Tell people about yourself…" placeholderTextColor="#C4C5CC" multiline />
+            <Field label={`Bio (optional) · ${bio.length}/150`} icon="document-text-outline">
+              <TextInput style={[st.input, { height: 72, textAlignVertical: 'top', paddingTop: 10 }]} value={bio} onChangeText={setBio} placeholder="Tell people about yourself…" placeholderTextColor="#C4C5CC" multiline maxLength={150} />
             </Field>
 
-            <Field label="LOCATION" icon="location-outline">
+            <Field label="Location" icon="location-outline">
               <TextInput style={st.input} value={location} onChangeText={setLocation} placeholder="City, Country" placeholderTextColor="#C4C5CC" />
             </Field>
 
             {/* Gender */}
             <View style={st.fieldWrap}>
-              <Text style={st.fieldLabel}>GENDER</Text>
+              <Text style={st.fieldLabel}>Gender *</Text>
               <View style={st.genderRow}>
                 {GENDERS.map(g => (
                   <TouchableOpacity key={g}
-                    style={[st.genderChip, gender === g && st.genderChipActive]}
-                    onPress={() => setGender(gender === g ? '' : g)}
+                    style={[st.genderChip, !!fieldErrors.gender && st.inputError, gender === g && st.genderChipActive]}
+                    onPress={() => { setGender(g); setFieldErrors(f => ({ ...f, gender: undefined })); }}
                     activeOpacity={0.8}>
                     <Ionicons
                       name={g === 'Female' ? 'female-outline' : g === 'Male' ? 'male-outline' : 'transgender-outline'}
@@ -330,18 +345,20 @@ export function EditProfileScreen() {
                   </TouchableOpacity>
                 ))}
               </View>
+              {!!fieldErrors.gender && <Text style={st.fieldError}>{fieldErrors.gender}</Text>}
             </View>
 
             {/* Date of birth */}
             <View style={st.fieldWrap}>
-              <Text style={st.fieldLabel}>DATE OF BIRTH</Text>
-              <TouchableOpacity style={st.inputBox} onPress={() => setShowDob(true)} activeOpacity={0.8}>
+              <Text style={st.fieldLabel}>Date of birth *</Text>
+              <TouchableOpacity style={[st.inputBox, !!fieldErrors.dob && st.inputError]} onPress={() => setShowDob(true)} activeOpacity={0.8}>
                 <Ionicons name="calendar-outline" size={18} color="#7A0EED" />
                 <Text style={[st.input, { flex: 1, color: dob ? '#1C1E22' : '#C4C5CC' }]}>
                   {dob ? formatDobDisplay(dob.toISOString()) : 'Select date of birth'}
                 </Text>
                 <Ionicons name="chevron-down" size={16} color="#ABADB2" />
               </TouchableOpacity>
+              {!!fieldErrors.dob && <Text style={st.fieldError}>{fieldErrors.dob}</Text>}
             </View>
 
             {!!error && (
@@ -354,7 +371,7 @@ export function EditProfileScreen() {
         </ScrollView>
       </KeyboardAvoidingView>
 
-      <DatePickerModal visible={showDob} initialDate={dob ?? undefined} onConfirm={d => { setDob(d); setShowDob(false); }} onClose={() => setShowDob(false)} />
+      <DatePickerModal visible={showDob} initialDate={dob ?? undefined} onConfirm={d => { setDob(d); setShowDob(false); setFieldErrors(f => ({ ...f, dob: undefined })); }} onClose={() => setShowDob(false)} />
     </SafeAreaView>
   );
 }
@@ -395,7 +412,7 @@ const st = StyleSheet.create({
 
   form:       { paddingHorizontal: 20, paddingTop: 16, gap: 16 },
   fieldWrap:  { gap: 7 },
-  fieldLabel: { fontSize: 11, fontWeight: '700', color: '#ABADB2', letterSpacing: 1.1, textTransform: 'uppercase' },
+  fieldLabel: { fontSize: 12, fontWeight: '700', color: '#ABADB2', letterSpacing: 0.2 },
   inputBox:   { flexDirection: 'row', alignItems: 'center', gap: 10, backgroundColor: '#F7F5FF', borderRadius: 14, paddingHorizontal: 14, paddingVertical: Platform.OS === 'ios' ? 0 : 2, borderWidth: 1, borderColor: '#E8E5F5', minHeight: 48 },
   input:      { flex: 1, fontSize: 14, color: '#1C1E22', paddingVertical: Platform.OS === 'ios' ? 13 : 10 },
 
@@ -407,4 +424,6 @@ const st = StyleSheet.create({
 
   errorBox:  { flexDirection: 'row', alignItems: 'center', gap: 8, backgroundColor: '#FFF0F1', borderRadius: 10, padding: 12, borderWidth: 1, borderColor: '#FFCDD0' },
   errorText: { flex: 1, fontSize: 13, color: '#E14C57', fontWeight: '500' },
+  inputError: { borderColor: '#E14C57' },
+  fieldError: { fontSize: 12, color: '#E14C57', fontWeight: '500', marginTop: 2 },
 });

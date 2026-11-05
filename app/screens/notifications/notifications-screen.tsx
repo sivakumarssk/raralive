@@ -49,6 +49,13 @@ function NotifIcon({ type }: { type: string }) {
       </View>
     );
   }
+  if (type === 'moderation_warning') {
+    return (
+      <View style={[styles.iconCircle, { backgroundColor: '#FFF1F2' }]}>
+        <Ionicons name="warning-outline" size={20} color="#E14C57" />
+      </View>
+    );
+  }
   return (
     <View style={[styles.iconCircle, { backgroundColor: '#F5F3FA' }]}>
       <Ionicons name="notifications-outline" size={20} color="#7A0EED" />
