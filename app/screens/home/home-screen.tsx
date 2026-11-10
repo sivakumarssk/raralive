@@ -55,6 +55,9 @@ export type FeedPost = {
   allow_comments: boolean;
   likes_count: number;
   comments_count: number;
+  /** Video views — counted once someone watches at least half the video */
+  views_count?: number;
+  downloads_count?: number;
   created_at: string;
   user_id: string;
   full_name: string | null;
@@ -490,6 +493,13 @@ function safePlayer(fn: () => void) {
  * video play/pause/autoplay — shared by the feed card (PostCard) and the
  * full-screen post page (PostReel), so both behave the same.
  */
+// A counted view is shared with every card showing that post (the Home feed
+// card stays mounted while the post page counts the view).
+const viewCountListeners = new Set<(postId: string, views: number) => void>();
+function publishViewCount(postId: string, views: number) {
+  viewCountListeners.forEach(fn => fn(postId, views));
+}
+
 export function usePostInteractions(post: FeedPost, { currentUserId, following, onFollowChange, onOpenPost, autoPlay = false }: {
   currentUserId: string;
   following: boolean;
@@ -531,7 +541,46 @@ export function usePostInteractions(post: FeedPost, { currentUserId, following, 
   const videoPlayer = useVideoPlayer(isVideo && mediaUri ? { uri: mediaUri } : null, p => {
     p.loop = true;
     p.muted = false;
+    p.timeUpdateEventInterval = 0.5; // for the view count below
   });
+
+  // A view counts once someone has watched at least half the video. Seconds
+  // actually played are added up (seeking / the jump back on loop don't
+  // count); at half the length the view is sent once. The server counts it
+  // once per person per day.
+  const [viewsCount, setViewsCount] = useState(post.views_count ?? 0);
+  useEffect(() => {
+    const onCount = (postId: string, views: number) => { if (postId === post.id) setViewsCount(views); };
+    viewCountListeners.add(onCount);
+    return () => { viewCountListeners.delete(onCount); };
+  }, [post.id]);
+  const watchedRef = useRef(0);
+  const lastTimeRef = useRef<number | null>(null);
+  const viewSentRef = useRef(false);
+  useEffect(() => {
+    if (!isVideo || !videoPlayer) return;
+    const sub = videoPlayer.addListener('timeUpdate', ({ currentTime }) => {
+      const last = lastTimeRef.current;
+      lastTimeRef.current = currentTime;
+      if (last == null || viewSentRef.current) return;
+      const step = currentTime - last;
+      if (step > 0 && step < 2) watchedRef.current += step;
+      let duration = 0;
+      try { duration = videoPlayer.duration; } catch { /* released */ }
+      if (duration > 0 && watchedRef.current >= duration / 2) {
+        viewSentRef.current = true;
+        const token = authStore.getToken();
+        fetch(`${BASE_URL}/posts/${post.id}/view`, {
+          method: 'POST',
+          headers: token ? { Authorization: `Bearer ${token}` } : {},
+        })
+          .then(r => r.json())
+          .then(j => { if (j.success) publishViewCount(post.id, j.data.views_count); })
+          .catch(() => {});
+      }
+    });
+    return () => sub.remove();
+  }, [isVideo, videoPlayer, post.id]);
 
   // Measure actual image size and fit height to natural aspect ratio
   useEffect(() => {
@@ -712,6 +761,11 @@ export function usePostInteractions(post: FeedPost, { currentUserId, following, 
       if (result.status === 200) {
         await MediaLibrary.saveToLibraryAsync(destUri);
         Alert.alert('Saved!', `${isVideo ? 'Video' : 'Image'} saved to your gallery.`);
+        // Counts toward Trending (once per person)
+        const token = authStore.getToken();
+        if (token) {
+          fetch(`${BASE_URL}/posts/${post.id}/download`, { method: 'POST', headers: { Authorization: `Bearer ${token}` } }).catch(() => {});
+        }
       } else {
         Alert.alert('Error', 'Could not download the file.');
       }
@@ -724,7 +778,7 @@ export function usePostInteractions(post: FeedPost, { currentUserId, following, 
 
   return {
     mediaUri, isVideo, mediaError, setMediaError, mediaHeight,
-    liked, saved, likesCount, commentsCount, downloading, followLoading, videoPlaying,
+    liked, saved, likesCount, commentsCount, viewsCount, downloading, followLoading, videoPlaying,
     likeScale, bigHeartScale, bigHeartOpacity,
     isOwnPost, displayName, initial, color, avatarUri, videoPlayer,
     handleFollow, handleLike, handleSave, handleMediaTap, handleDownload,
@@ -746,7 +800,7 @@ export function PostCard({ post, currentUserId, onOpenComments, following, onFol
 }) {
   const {
     mediaUri, isVideo, mediaError, setMediaError, mediaHeight,
-    liked, saved, likesCount, commentsCount, downloading, followLoading, videoPlaying,
+    liked, saved, likesCount, commentsCount, viewsCount, downloading, followLoading, videoPlaying,
     likeScale, bigHeartScale, bigHeartOpacity,
     isOwnPost, displayName, initial, color, avatarUri, videoPlayer,
     handleFollow, handleLike, handleSave, handleMediaTap, handleDownload,
@@ -816,6 +870,12 @@ export function PostCard({ post, currentUserId, onOpenComments, following, onFol
         {/* Tap layer sits ON TOP of the media: the native video surface
             swallows touches on Android, so a wrapper around it never sees them */}
         <Pressable style={StyleSheet.absoluteFill} onPress={handleMediaTap} />
+        {isVideo && !mediaError && (
+          <View style={card.viewsBadge} pointerEvents="none">
+            <Ionicons name="eye" size={12} color="#FFFFFF" />
+            <Text style={card.viewsText}>{formatCount(viewsCount)} {viewsCount === 1 ? 'view' : 'views'}</Text>
+          </View>
+        )}
         {isVideo && !mediaError && (
           <View style={card.playOverlay} pointerEvents="none">
             {!videoPlaying && (
@@ -1132,6 +1192,11 @@ const cap = StyleSheet.create({
 });
 
 const card = StyleSheet.create({
+  viewsBadge: {
+    position: 'absolute', left: 10, bottom: 10, flexDirection: 'row', alignItems: 'center', gap: 4,
+    paddingHorizontal: 8, paddingVertical: 3, borderRadius: 10, backgroundColor: 'rgba(0,0,0,0.5)',
+  },
+  viewsText: { fontSize: 11, fontWeight: '700', color: '#FFFFFF' },
   container:  { backgroundColor: '#FFFFFF', shadowColor: '#4A0099', shadowOpacity: 0.05, shadowRadius: 8, shadowOffset: { width: 0, height: 2 }, elevation: 2 },
   header:        { flexDirection: 'row', alignItems: 'center', paddingHorizontal: 16, paddingVertical: 12, gap: 10 },
   avatarNameRow: { flexDirection: 'row', alignItems: 'center', gap: 10, flex: 1 },

@@ -1,5 +1,6 @@
 import { DarkTheme, DefaultTheme, ThemeProvider } from '@react-navigation/native';
 import { router, Stack } from 'expo-router';
+import * as ScreenCapture from 'expo-screen-capture';
 import * as SplashScreen from 'expo-splash-screen';
 import { useEffect } from 'react';
 import { Alert, Platform, StatusBar } from 'react-native';
@@ -43,6 +44,14 @@ if (Platform.OS === 'android') {
 
 export default function RootLayout() {
   const colorScheme = useColorScheme();
+
+  // No screenshots or screen recording anywhere in the app. Android: the
+  // window is marked secure, so screenshots are refused and recordings show
+  // black. iOS: blocks recordings (iOS 11+) and screenshots (iOS 13+).
+  // Set once here, for every screen.
+  useEffect(() => {
+    ScreenCapture.preventScreenCaptureAsync('app').catch(() => {});
+  }, []);
 
   // Moderation warning (5 different people reported this user) — shown on
   // whatever screen is open; also saved under Notifications.
@@ -109,6 +118,7 @@ export default function RootLayout() {
         <Stack.Screen name="legal/[doc]" options={{ headerShown: false }} />
         <Stack.Screen name="search/index" options={{ headerShown: false }} />
         <Stack.Screen name="post/[id]" options={{ headerShown: false }} />
+        <Stack.Screen name="category-posts" options={{ headerShown: false }} />
         <Stack.Screen name="id-level/index" options={{ headerShown: false }} />
         <Stack.Screen name="friend-zone-apply/index" options={{ headerShown: false }} />
         <Stack.Screen name="friend-profile/index" options={{ headerShown: false }} />

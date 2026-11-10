@@ -341,6 +341,45 @@ async function migrate() {
     );
   `);
 
+  // ── Post views (counted after half the video is watched) + downloads ────────
+  await run('posts.views_count', `
+    ALTER TABLE posts ADD COLUMN IF NOT EXISTS views_count INTEGER NOT NULL DEFAULT 0;
+  `);
+  await run('posts.downloads_count', `
+    ALTER TABLE posts ADD COLUMN IF NOT EXISTS downloads_count INTEGER NOT NULL DEFAULT 0;
+  `);
+  await run('post_views table', `
+    CREATE TABLE IF NOT EXISTS post_views (
+      post_id   UUID NOT NULL REFERENCES posts(id) ON DELETE CASCADE,
+      user_id   UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      view_day  DATE NOT NULL,
+      viewed_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      PRIMARY KEY (post_id, user_id, view_day)
+    );
+  `);
+  await run('post_downloads table', `
+    CREATE TABLE IF NOT EXISTS post_downloads (
+      post_id       UUID NOT NULL REFERENCES posts(id) ON DELETE CASCADE,
+      user_id       UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      downloaded_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      PRIMARY KEY (post_id, user_id)
+    );
+  `);
+
+  // ── search_logs — full searches, for Explore's "Most searched today" ────────
+  await run('search_logs table', `
+    CREATE TABLE IF NOT EXISTS search_logs (
+      id         BIGSERIAL PRIMARY KEY,
+      term       TEXT NOT NULL,
+      display    TEXT NOT NULL,
+      user_id    UUID REFERENCES users(id) ON DELETE SET NULL,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    );
+  `);
+  await run('idx_search_logs_time', `
+    CREATE INDEX IF NOT EXISTS idx_search_logs_time ON search_logs (created_at DESC);
+  `);
+
   // ── task_bonus_slab_versions (Daily Task "Bonus Payment" slabs, per month) ──
   // Extra bonus on Audio Chat Room gems, separate from the earning slabs.
   await run('task_bonus_slab_versions table', `

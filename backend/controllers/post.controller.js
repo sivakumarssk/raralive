@@ -5,7 +5,7 @@ const { isUuid } = require('./post-tag.controller');
 // [{ id, name, parent_id }]). `tags` is the legacy free-text column.
 const POST_SELECT = `
   SELECT p.id, p.caption, p.category, p.tags, p.allow_comments,
-         p.likes_count, p.comments_count, p.created_at,
+         p.likes_count, p.comments_count, p.views_count, p.downloads_count, p.created_at,
          u.id AS user_id, u.full_name, u.username, u.avatar_url,
          COALESCE((
            SELECT json_agg(json_build_object('id', pm.id, 'media_url', pm.media_url,
@@ -20,6 +20,34 @@ const POST_SELECT = `
          ), '[]'::json) AS tag_list
   FROM posts p
   JOIN users u ON u.id = p.user_id`;
+
+// views_count / downloads_count on posts, and the tables that make each count
+// once: a view once per person per post per day (only after watching at least
+// half the video — the app reports it then), a download once per person.
+// Also created in database/migrate-all.js.
+let statsReady = null;
+function ensurePostStats() {
+  if (!statsReady) {
+    statsReady = db.query(`
+    ALTER TABLE posts ADD COLUMN IF NOT EXISTS views_count INTEGER NOT NULL DEFAULT 0;
+    ALTER TABLE posts ADD COLUMN IF NOT EXISTS downloads_count INTEGER NOT NULL DEFAULT 0;
+    CREATE TABLE IF NOT EXISTS post_views (
+      post_id   UUID NOT NULL REFERENCES posts(id) ON DELETE CASCADE,
+      user_id   UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      view_day  DATE NOT NULL,
+      viewed_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      PRIMARY KEY (post_id, user_id, view_day)
+    );
+    CREATE TABLE IF NOT EXISTS post_downloads (
+      post_id       UUID NOT NULL REFERENCES posts(id) ON DELETE CASCADE,
+      user_id       UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      downloaded_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      PRIMARY KEY (post_id, user_id)
+    );
+    `).catch((err) => { statsReady = null; throw err; });
+  }
+  return statsReady;
+}
 
 const MAX_POST_TAGS = 10;
 
@@ -41,6 +69,7 @@ async function resolvePostTags(rawIds) {
 /** POST /api/posts — create a post with media */
 async function createPost(req, res, next) {
   try {
+    await ensurePostStats();
     const userId = req.user.id;
     const { caption, category, tags, tag_ids, allow_comments } = req.body;
     const files = req.files ?? [];
@@ -102,6 +131,9 @@ async function createPost(req, res, next) {
   } catch (err) { next(err); }
 }
 
+// Make sure the count columns exist before any post is read
+ensurePostStats().catch(() => {});
+
 async function getPostWithMedia(postId) {
   const r = await db.query(`${POST_SELECT} WHERE p.id = $1`, [postId]);
   return r.rows[0] || null;
@@ -116,6 +148,7 @@ async function getPostWithMedia(postId) {
  */
 async function getFeed(req, res, next) {
   try {
+    await ensurePostStats();
     const limit = Math.min(parseInt(req.query.limit ?? '20', 10) || 20, 50);
     const offset = parseInt(req.query.offset ?? '0', 10) || 0;
     const tab = String(req.query.tab ?? 'trending');
@@ -160,6 +193,7 @@ async function getFeed(req, res, next) {
 /** GET /api/posts/:id — one post (shared links and the post page open this) */
 async function getPost(req, res, next) {
   try {
+    await ensurePostStats();
     if (!isUuid(req.params.id)) return res.status(404).json({ success: false, message: 'Post not found.' });
     const post = await getPostWithMedia(req.params.id);
     if (!post) return res.status(404).json({ success: false, message: 'Post not found.' });
@@ -170,6 +204,7 @@ async function getPost(req, res, next) {
 /** GET /api/posts/my — current user's posts */
 async function getMyPosts(req, res, next) {
   try {
+    await ensurePostStats();
     const r = await db.query(`${POST_SELECT} WHERE p.user_id = $1 ORDER BY p.created_at DESC`, [req.user.id]);
     return res.json({ success: true, data: r.rows });
   } catch (err) { next(err); }
@@ -216,6 +251,7 @@ async function toggleSave(req, res, next) {
 /** GET /api/posts/saved — the current user's saved posts, most recently saved first */
 async function getSavedPosts(req, res, next) {
   try {
+    await ensurePostStats();
     await ensureSavesTable();
     const r = await db.query(
       `${POST_SELECT}
@@ -227,6 +263,36 @@ async function getSavedPosts(req, res, next) {
   } catch (err) { next(err); }
 }
 
+// Every full search (not the while-typing suggestions) is logged, for the
+// Explore page's "Most searched today". One person searching the same thing
+// many times counts once.
+let searchLogReady = null;
+function ensureSearchLog() {
+  if (!searchLogReady) {
+    searchLogReady = db.query(`
+    CREATE TABLE IF NOT EXISTS search_logs (
+      id         BIGSERIAL PRIMARY KEY,
+      term       TEXT NOT NULL,                 -- lower-cased, for grouping
+      display    TEXT NOT NULL,                 -- as typed, for showing
+      user_id    UUID REFERENCES users(id) ON DELETE SET NULL,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    );
+    CREATE INDEX IF NOT EXISTS idx_search_logs_time ON search_logs (created_at DESC);
+    `).catch((err) => { searchLogReady = null; throw err; });
+  }
+  return searchLogReady;
+}
+
+function logSearch(q, userId) {
+  if (q.length < 2) return;
+  ensureSearchLog()
+    .then(() => db.query(
+      'INSERT INTO search_logs (term, display, user_id) VALUES ($1, $2, $3)',
+      [q.toLowerCase(), q, userId || null],
+    ))
+    .catch(() => { /* logging never breaks a search */ });
+}
+
 /**
  * GET /api/posts/search?q=&suggest=1
  * People by name or @username, posts by tag name (admin tags and older
@@ -235,12 +301,14 @@ async function getSavedPosts(req, res, next) {
  */
 async function search(req, res, next) {
   try {
+    await ensurePostStats();
     // "#music" and "music" search the same; % and _ are literal, not wildcards
     const q = String(req.query.q ?? '').trim().replace(/^[#@]+/, '').slice(0, 50);
     if (!q) return res.json({ success: true, data: { users: [], tags: [], posts: [] } });
     const like = `%${q.replace(/[\\%_]/g, (c) => `\\${c}`)}%`;
     const prefix = `${q.replace(/[\\%_]/g, (c) => `\\${c}`)}%`;
     const suggest = req.query.suggest === '1';
+    if (!suggest) logSearch(q, req.user?.id);
 
     const [users, tags, posts] = await Promise.all([
       db.query(
@@ -275,6 +343,135 @@ async function search(req, res, next) {
     ]);
 
     return res.json({ success: true, data: { users: users.rows, tags: tags.rows, posts: posts.rows } });
+  } catch (err) { next(err); }
+}
+
+/**
+ * GET /api/posts/explore — the Explore page:
+ *   top_searches: today's most searched terms (IST day), most people first
+ *   most_liked:   posts with the most likes
+ *   most_saved:   posts saved by the most people (save counts stay private —
+ *                 only the order uses them)
+ *   trending:     likes + views + saves + downloads, posts from the last 14 days first
+ *   most_followed: people with the most followers
+ *   most_viewed:  videos with the most views
+ * Categories come from /api/post-tags (admin tabs + sub tags).
+ */
+async function getExplore(req, res, next) {
+  try {
+    await Promise.all([ensureSearchLog(), ensureSavesTable(), ensurePostStats()]);
+    const [searches, liked, saved, trending, followed, viewed] = await Promise.all([
+      db.query(
+        `SELECT term,
+                (array_agg(display ORDER BY created_at DESC))[1] AS display,
+                COUNT(DISTINCT COALESCE(user_id::text, id::text))::int AS searches
+         FROM search_logs
+         WHERE created_at >= (date_trunc('day', NOW() AT TIME ZONE 'Asia/Kolkata') AT TIME ZONE 'Asia/Kolkata')
+         GROUP BY term
+         ORDER BY searches DESC, MAX(created_at) DESC
+         LIMIT 10`
+      ),
+      db.query(
+        `${POST_SELECT}
+         WHERE p.likes_count > 0
+         ORDER BY p.likes_count DESC, p.created_at DESC
+         LIMIT 12`
+      ),
+      db.query(
+        `${POST_SELECT}
+         JOIN (SELECT post_id, COUNT(*) AS saves FROM post_saves GROUP BY post_id) s ON s.post_id = p.id
+         ORDER BY s.saves DESC, p.created_at DESC
+         LIMIT 12`
+      ),
+      // Trending: rank ids by score (recent first), then load those posts in that order
+      db.query(
+        `SELECT q.* FROM (
+           SELECT p.id,
+                  p.likes_count + p.views_count + COALESCE(sv.saves, 0) + p.downloads_count AS score,
+                  p.created_at > NOW() - INTERVAL '14 days' AS recent
+           FROM posts p
+           LEFT JOIN (SELECT post_id, COUNT(*)::int AS saves FROM post_saves GROUP BY post_id) sv ON sv.post_id = p.id
+         ) q
+         WHERE q.score > 0
+         ORDER BY q.recent DESC, q.score DESC
+         LIMIT 12`
+      ).then(async ({ rows }) => {
+        if (!rows.length) return { rows: [] };
+        const ids = rows.map(r => r.id);
+        const full = await db.query(`${POST_SELECT} WHERE p.id = ANY($1::uuid[])`, [ids]);
+        const byId = new Map(full.rows.map(r => [r.id, r]));
+        return { rows: ids.map(id => byId.get(id)).filter(Boolean) };
+      }),
+      db.query(
+        `SELECT u.id, u.full_name, u.username, u.avatar_url, u.gender, f.followers::int AS followers_count
+         FROM users u
+         JOIN (SELECT following_id, COUNT(*) AS followers FROM user_follows GROUP BY following_id) f ON f.following_id = u.id
+         WHERE u.username IS NOT NULL OR u.full_name IS NOT NULL
+         ORDER BY f.followers DESC, u.created_at
+         LIMIT 12`
+      ),
+      db.query(
+        `${POST_SELECT}
+         WHERE p.views_count > 0
+           AND EXISTS (SELECT 1 FROM post_media pm WHERE pm.post_id = p.id AND pm.media_type = 'video')
+         ORDER BY p.views_count DESC, p.created_at DESC
+         LIMIT 12`
+      ),
+    ]);
+    return res.json({
+      success: true,
+      data: {
+        top_searches: searches.rows.map(r => ({ term: r.term, display: r.display, searches: r.searches })),
+        most_liked: liked.rows,
+        most_saved: saved.rows,
+        trending: trending.rows,
+        most_followed: followed.rows,
+        most_viewed: viewed.rows,
+      },
+    });
+  } catch (err) { next(err); }
+}
+
+/**
+ * POST /api/posts/:id/view — the app calls this once someone has watched at
+ * least half of the video. Counted once per person per post per IST day;
+ * signed-out viewers aren't counted.
+ */
+async function recordView(req, res, next) {
+  try {
+    if (!isUuid(req.params.id)) return res.status(404).json({ success: false, message: 'Post not found.' });
+    await ensurePostStats();
+    let counted = false;
+    if (req.user?.id) {
+      const ins = await db.query(
+        `INSERT INTO post_views (post_id, user_id, view_day)
+         SELECT id, $2, (NOW() AT TIME ZONE 'Asia/Kolkata')::date FROM posts WHERE id = $1
+         ON CONFLICT DO NOTHING`,
+        [req.params.id, req.user.id]
+      );
+      counted = ins.rowCount > 0;
+    }
+    const r = counted
+      ? await db.query('UPDATE posts SET views_count = views_count + 1 WHERE id = $1 RETURNING views_count', [req.params.id])
+      : await db.query('SELECT views_count FROM posts WHERE id = $1', [req.params.id]);
+    if (!r.rows[0]) return res.status(404).json({ success: false, message: 'Post not found.' });
+    return res.json({ success: true, data: { counted, views_count: r.rows[0].views_count } });
+  } catch (err) { next(err); }
+}
+
+/** POST /api/posts/:id/download — counted once per person (Trending uses it). */
+async function recordDownload(req, res, next) {
+  try {
+    if (!isUuid(req.params.id)) return res.status(404).json({ success: false, message: 'Post not found.' });
+    await ensurePostStats();
+    const ins = await db.query(
+      `INSERT INTO post_downloads (post_id, user_id)
+       SELECT id, $2 FROM posts WHERE id = $1
+       ON CONFLICT DO NOTHING`,
+      [req.params.id, req.user.id]
+    );
+    if (ins.rowCount) await db.query('UPDATE posts SET downloads_count = downloads_count + 1 WHERE id = $1', [req.params.id]);
+    return res.json({ success: true, data: { counted: ins.rowCount > 0 } });
   } catch (err) { next(err); }
 }
 
@@ -365,9 +562,10 @@ async function getComments(req, res, next) {
 /** GET /api/posts/user/:userId — public posts of any user */
 async function getUserPosts(req, res, next) {
   try {
+    await ensurePostStats();
     const r = await db.query(`${POST_SELECT} WHERE p.user_id = $1 ORDER BY p.created_at DESC`, [req.params.userId]);
     return res.json({ success: true, data: r.rows });
   } catch (err) { next(err); }
 }
 
-module.exports = { search, getPost, createPost, getFeed, getMyPosts, getUserPosts, toggleLike, checkLiked, toggleSave, getSavedPosts, addComment, getComments };
+module.exports = { search, getExplore, recordView, recordDownload, getPost, createPost, getFeed, getMyPosts, getUserPosts, toggleLike, checkLiked, toggleSave, getSavedPosts, addComment, getComments };

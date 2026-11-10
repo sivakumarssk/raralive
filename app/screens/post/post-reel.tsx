@@ -48,7 +48,7 @@ export function PostReel({ post, currentUserId, following, onFollowChange, onOpe
   const [captionOpen, setCaptionOpen] = useState(false);
   const {
     mediaUri, isVideo, mediaError, setMediaError,
-    liked, saved, likesCount, commentsCount, downloading, followLoading, videoPlaying,
+    liked, saved, likesCount, commentsCount, viewsCount, downloading, followLoading, videoPlaying,
     likeScale, bigHeartScale, bigHeartOpacity,
     isOwnPost, displayName, initial, color, avatarUri, videoPlayer,
     handleFollow, handleLike, handleSave, handleMediaTap, handleDownload,
@@ -179,7 +179,9 @@ export function PostReel({ post, currentUserId, following, onFollowChange, onOpe
           </View>
         )}
 
-        <Text style={s.time}>{timeAgo(post.created_at)}</Text>
+        <Text style={s.time}>
+          {isVideo ? `${formatCount(viewsCount)} ${viewsCount === 1 ? 'view' : 'views'} · ` : ''}{timeAgo(post.created_at)}
+        </Text>
       </View>
     </View>
   );
