@@ -3,6 +3,7 @@ import { useFocusEffect, useRouter } from 'expo-router';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import {
   ActivityIndicator,
+  Alert,
   FlatList,
   Image,
   Keyboard,
@@ -19,7 +20,7 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 
 import {
   BASE_URL, MEDIA_BASE, type ActiveBroadcast, type FriendZoneApplication, type FriendZonePublicFriend, type GoLiveRequest, type MyRoom, type PublicRoom,
-  apiActiveBroadcasts, apiFriendZoneFriends, apiFriendZoneMyStatus, apiFriendZoneUpdateToggles, apiGoLiveMyStatus, apiMyRooms, apiOnlineCounts, apiPublicRooms,
+  apiActiveBroadcasts, apiDeleteRoom, apiFriendZoneFriends, apiFriendZoneMyStatus, apiFriendZoneUpdateToggles, apiGoLiveMyStatus, apiMyRooms, apiOnlineCounts, apiPublicRooms,
 } from '@/services/api';
 import { authStore } from '@/store/auth-store';
 import { subscribeChatEvents } from '@/store/chat-socket-store';
@@ -29,7 +30,9 @@ import { consumePendingReturnToFriendZone, friendZoneCallSessionStore } from '@/
 import { friendZoneSocketStore, getFriendZoneSocketState, subscribeFriendZoneSocket } from '@/store/friend-zone-socket-store';
 import { BannerCarousel, fetchBanners } from './components/banner-carousel';
 import { ChatRoomsHeader } from './components/chat-rooms-header';
+import { ConfirmDialog } from '@/components/ui/confirm-dialog';
 import { CreateRoomCard } from './components/create-room-card';
+import { roomTagsFor } from './room-tags';
 import { CreateRoomSheet } from './components/create-room-sheet';
 import { FriendZoneScreen, type Friend, type FriendZoneApplicationStatus, type MyProfile } from './components/friend-zone-screen';
 import { GoLiveSheet } from './components/go-live-sheet';
@@ -323,7 +326,10 @@ export function ChatRoomsScreen() {
       if (result.ok) setOnlineCounts(result.data);
     });
     // Re-fetched on every visit: the list is language-filtered, so a language
-    // change in Profile (yours, or a host's) shows up when you come back.
+    // change in Profile (yours, or a host's) shows up when you come back —
+    // and so do new profile photos, which are the rooms' pictures.
+    const token = authStore.getToken();
+    if (token) apiMyRooms(token).then(result => { if (result.ok) setMyRooms(result.data); });
     apiPublicRooms(authStore.getToken(), authStore.getLanguage()).then(result => {
       if (result.ok) setPublicRooms(result.data);
     });
@@ -334,6 +340,22 @@ export function ChatRoomsScreen() {
 
   // Open a room with what the list already knows (name, image, level) so its
   // header renders immediately; the socket fills in the rest on join.
+  // Long press on your own private room → delete it. Public rooms can't be deleted.
+  const [roomToDelete, setRoomToDelete] = useState<MyRoom | null>(null);
+  const [deletingRoom, setDeletingRoom] = useState(false);
+  const confirmDeleteRoom = (room: MyRoom) => setRoomToDelete(room);
+  const deleteRoom = async () => {
+    const room = roomToDelete;
+    const token = authStore.getToken();
+    if (!room || !token) return;
+    setDeletingRoom(true);
+    const res = await apiDeleteRoom(room.id, token);
+    setDeletingRoom(false);
+    setRoomToDelete(null);
+    if (!res.ok) { Alert.alert("Couldn't delete", res.message); return; }
+    setMyRooms(prev => prev.filter(r => r.id !== room.id));
+  };
+
   const openRoom = (room: MyRoom | PublicRoom) => requireProfile(() => {
     primeRoomInfo({
       id: room.id,
@@ -499,10 +521,13 @@ export function ChatRoomsScreen() {
                   name: room.room_name,
                   onlineCount: onlineCounts[room.id] ?? 0,
                   avatarUri: resolveImageUrl(room.room_image_url),
+                  hostGender: room.host_gender,
                   level: room.current_level ?? 0,
                   location: roomLocation(room),
+                  tags: roomTagsFor(room.tags),
                 }}
                 onPress={() => openRoom(room)}
+                onLongPress={room.visibility === 'private' ? () => confirmDeleteRoom(room) : undefined}
               />
             ))}
 
@@ -521,8 +546,10 @@ export function ChatRoomsScreen() {
                     onlineCount: onlineCounts[room.id] ?? 0,
                     memberCount: onlineCounts[room.id] ?? 0,
                     imageUri: resolveImageUrl(room.room_image_url),
+                    hostGender: room.host_gender,
                     level: room.current_level ?? 0,
                     location: roomLocation(room),
+                    tags: roomTagsFor(room.tags),
                   }}
                   onPress={() => openRoom(room)}
                 />
@@ -536,6 +563,18 @@ export function ChatRoomsScreen() {
 
       {/* No floating JOIN button here — the draggable JOIN bubble
           (components/MiniRoomPlayer) appears only while a room is minimized. */}
+
+      {/* Long press on your private room → delete it */}
+      <ConfirmDialog
+        visible={!!roomToDelete}
+        icon="trash"
+        danger
+        title="Delete your chatroom"
+        confirmLabel="Delete"
+        busy={deletingRoom}
+        onConfirm={deleteRoom}
+        onCancel={() => setRoomToDelete(null)}
+      />
 
       <CreateRoomSheet
         visible={showCreateSheet}

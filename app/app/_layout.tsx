@@ -106,6 +106,9 @@ export default function RootLayout() {
         <Stack.Screen name="battle/overview" options={{ headerShown: false }} />
         <Stack.Screen name="profile/edit" options={{ headerShown: false }} />
         <Stack.Screen name="gift-history/index" options={{ headerShown: false }} />
+        <Stack.Screen name="legal/[doc]" options={{ headerShown: false }} />
+        <Stack.Screen name="search/index" options={{ headerShown: false }} />
+        <Stack.Screen name="post/[id]" options={{ headerShown: false }} />
         <Stack.Screen name="id-level/index" options={{ headerShown: false }} />
         <Stack.Screen name="friend-zone-apply/index" options={{ headerShown: false }} />
         <Stack.Screen name="friend-profile/index" options={{ headerShown: false }} />

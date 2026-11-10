@@ -1,12 +1,23 @@
-const BASE_URL = `${import.meta.env.VITE_API_URL ?? 'http://192.168.0.8:5000'}/api`;
+// Production sets VITE_API_URL. In development the API runs on port 5000 of
+// whatever host the portal was opened from (localhost or this PC's LAN IP),
+// so a changed Wi-Fi IP doesn't break it.
+const API_ORIGIN = import.meta.env.VITE_API_URL ?? `${window.location.protocol}//${window.location.hostname}:5000`;
+const BASE_URL = `${API_ORIGIN}/api`;
 
 const TOKEN_ERROR_MSGS = ['invalid or expired token', 'invalid token', 'expired token', 'token expired', 'jwt expired', 'unauthorized'];
 
-type Result<T> = { ok: true; data: T } | { ok: false; message: string };
+/** `network` = the server couldn't be reached at all (no reply). */
+type Result<T> = { ok: true; data: T } | { ok: false; message: string; network?: true };
 
 function isTokenError(status: number, message: string): boolean {
   if (status === 401) return true;
   return TOKEN_ERROR_MSGS.some(m => message.toLowerCase().includes(m));
+}
+
+// A 401 only means "session expired" when there is a session. Before sign-in
+// it's a wrong phone/password, which the login form shows itself.
+function hasSession() {
+  return !!sessionStorage.getItem('agency_token');
 }
 
 function handleTokenError() {
@@ -33,7 +44,7 @@ async function request<T>(path: string, options: RequestInit = {}): Promise<Resu
       headers: { 'Content-Type': 'application/json', ...authHeaders(), ...options.headers },
     });
     const json = await res.json();
-    if (isTokenError(res.status, json.message || '')) {
+    if (hasSession() && isTokenError(res.status, json.message || '')) {
       handleTokenError();
       return { ok: false, message: 'Session expired. Please log in again.' };
     }
@@ -42,7 +53,7 @@ async function request<T>(path: string, options: RequestInit = {}): Promise<Resu
     }
     return { ok: true, data: json.data };
   } catch {
-    return { ok: false, message: 'Network error. Check your connection.' };
+    return { ok: false, message: 'Network error. Check your connection.', network: true };
   }
 }
 
@@ -52,7 +63,7 @@ async function fetchFile(path: string): Promise<Result<Blob>> {
     const res = await fetch(`${BASE_URL}${path}`, { headers: authHeaders() });
     if (!res.ok) {
       const json = await res.json().catch(() => ({}));
-      if (isTokenError(res.status, json.message || '')) handleTokenError();
+      if (hasSession() && isTokenError(res.status, json.message || '')) handleTokenError();
       return { ok: false, message: json.message || 'Could not get the file.' };
     }
     return { ok: true, data: await res.blob() };

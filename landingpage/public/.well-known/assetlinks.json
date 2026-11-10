@@ -1,0 +1,14 @@
+[
+  {
+    "relation": [
+      "delegate_permission/common.handle_all_urls"
+    ],
+    "target": {
+      "namespace": "android_app",
+      "package_name": "com.tanushssts.raralive",
+      "sha256_cert_fingerprints": [
+        "83:17:E1:85:9A:D3:03:4A:E7:F4:BE:44:F2:C9:DA:19:34:4D:24:7E:CA:1A:D0:3E:74:53:64:36:EF:29:13:07"
+      ]
+    }
+  }
+]

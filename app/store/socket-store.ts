@@ -60,9 +60,15 @@ export type BattleResultSide = {
 /** Final battle result (battle_ended) — sent when a battle is cancelled or its time runs out. winner null = draw. */
 export type BattleResult = {
   invite_id: string;
+  /** 'gifting' battles get their own result layout; missing = normal. */
+  mode?: 'normal' | 'gifting';
   /** 'cancelled' (a host ended it) or 'time_up' (the timer ran out) */
   reason: 'cancelled' | 'time_up' | string;
   ended_by: string | null;
+  /** When it ended (ISO); missing on results from an older server. */
+  ended_at?: string;
+  /** How long the battle ran (its timer), in seconds. */
+  played_seconds?: number;
   winner: 'from' | 'to' | null;
   from: BattleResultSide;
   to: BattleResultSide;
@@ -125,6 +131,37 @@ export function getBattleState(): BattleState { return battleState; }
 // Result of the battle that just ended in this room, until dismissed.
 let battleResult: BattleResult | null = null;
 export function getBattleResult(): BattleResult | null { return battleResult; }
+
+// The result card shows for everyone in the room for 5 seconds after a battle
+// ends, then closes by itself. The 5 seconds count from when the card first
+// appears for that battle — the server's final result replacing the instant
+// one shown on Cancel doesn't restart them, and a result arriving after its
+// 5 seconds are up isn't shown again.
+const BATTLE_RESULT_SHOW_MS = 5000;
+let battleResultTimer: ReturnType<typeof setTimeout> | null = null;
+let battleResultShown: { id: string; at: number } | null = null;
+
+/** Puts the result on screen (caller notifies). */
+function showBattleResult(result: BattleResult) {
+  const now = Date.now();
+  if (battleResultShown?.id !== result.invite_id) battleResultShown = { id: result.invite_id, at: now };
+  const left = BATTLE_RESULT_SHOW_MS - (now - battleResultShown.at);
+  if (left <= 0) return;
+  battleResult = result;
+  if (battleResultTimer) clearTimeout(battleResultTimer);
+  battleResultTimer = setTimeout(() => {
+    battleResultTimer = null;
+    if (battleResult?.invite_id === result.invite_id) {
+      clearBattleResult();
+      notify();
+    }
+  }, left);
+}
+
+function clearBattleResult() {
+  if (battleResultTimer) { clearTimeout(battleResultTimer); battleResultTimer = null; }
+  battleResult = null;
+}
 
 // Battle score shown = the server's confirmed totals + this user's own gifts
 // that are still on their way. A sent gift adds to the score the instant it's
@@ -506,7 +543,30 @@ export function getSocketState(): SocketState {
   return { ...state, messages: [...state.messages], seats: [...state.seats] };
 }
 
+/** What the room profile card shows about someone (see get_profile_card). */
+export type ProfileCard = {
+  username: string | null;
+  cover_url: string | null;
+  followers_count: number;
+  /** Lifetime coins gifted — their ID level. */
+  coins_gifted: number;
+  room_sent: number;
+  room_received: number;
+  is_following: boolean;
+};
+
 export const socketStore = {
+  /** Profile card over the room socket; null when the socket isn't connected or doesn't answer. */
+  requestProfileCard(roomId: string, userId: string): Promise<ProfileCard | null> {
+    return new Promise(resolve => {
+      const s = state.socket;
+      if (!s?.connected) { resolve(null); return; }
+      s.timeout(5000).emit('get_profile_card', { roomId, userId }, (err: Error | null, res?: { ok: boolean; card?: ProfileCard }) => {
+        resolve(!err && res?.ok && res.card ? res.card : null);
+      });
+    });
+  },
+
   /** "Refresh Room": re-sync chat, seats and host status without re-joining. */
   refreshRoom(roomId: string) {
     if (state.roomId !== roomId || !state.socket) return;
@@ -714,7 +774,7 @@ export const socketStore = {
     socket.on('battle_ended', (result: BattleResult) => {
       if (result.from?.room_id !== state.roomId && result.to?.room_id !== state.roomId) return;
       if (battleState.battle?.id === result.invite_id) setBattle(null);
-      battleResult = { ...result, provisional: false };
+      showBattleResult({ ...result, provisional: false });
       notify();
     });
 
@@ -966,15 +1026,16 @@ export const socketStore = {
       score,
       supporters: supporters.slice(0, 3),
     });
-    battleResult = {
+    showBattleResult({
       invite_id: battle.id,
+      mode: battle.mode,
       reason: 'cancelled',
       ended_by: authStore.getUserId(),
       winner: left > right ? 'from' : right > left ? 'to' : null,
       from: side('from', left, gifters.left),
       to: side('to', right, gifters.right),
       provisional: true,
-    };
+    });
     setBattle(null); // notifies
 
     return new Promise(resolve => {
@@ -982,13 +1043,13 @@ export const socketStore = {
         if (!err && res?.ok) {
           // battle_ended normally lands first; this covers it arriving late
           if (res.result && battleResult?.invite_id === battle.id && battleResult.provisional) {
-            battleResult = { ...res.result, provisional: false };
+            showBattleResult({ ...res.result, provisional: false });
             notify();
           }
           resolve({ ok: true });
           return;
         }
-        if (battleResult?.invite_id === battle.id && battleResult.provisional) battleResult = null;
+        if (battleResult?.invite_id === battle.id && battleResult.provisional) clearBattleResult();
         notify();
         // Get the real state back (battle still running, or ended elsewhere)
         if (state.roomId && socket.connected) socket.emit('refresh_room', { roomId: state.roomId });
@@ -997,8 +1058,9 @@ export const socketStore = {
     });
   },
 
+  /** Closed early (tap outside the card / back). */
   dismissBattleResult() {
-    battleResult = null;
+    clearBattleResult();
     notify();
   },
 };

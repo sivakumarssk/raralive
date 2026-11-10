@@ -4,6 +4,9 @@ const {
   loadConfigVersions, invalidateConfigCache, configFor, gemsForCoins, publicConfig,
   normaliseSlabs, ensureTable,
 } = require('../utils/earning-slabs');
+const {
+  ensureBonusTable, loadBonusVersions, invalidateBonusCache, normaliseBonusSlabs, bonusSlabsFor,
+} = require('../utils/task-bonus-slabs');
 
 // How many months (including the current one) of history the app shows.
 const HISTORY_MONTHS = 3;
@@ -44,15 +47,22 @@ function eventGems(versions, ev) {
  * the increase over the previous slab's total, so credits sum to the highest
  * slab reached that month. `events` is the same history one row per gift/call
  * (coins count even if the service had no gem value set that month).
+ *
+ * `bonusCredits` are the Daily Task "Bonus Payment" slabs — a separate extra
+ * bonus on the same Audio Chat Room gems: each bonus slab crossed adds its
+ * own amount (credited to the wallet as "Extra Bonus"). Kept apart from
+ * `credits` so the slab screens and agency figures stay as they were.
  */
 async function computeEarnings(userId) {
-  const [{ rows }, versions] = await Promise.all([
+  const [{ rows }, versions, bonusVersions] = await Promise.all([
     db.query(GEM_EVENTS_SQL, [userId]),
     loadConfigVersions(),
+    loadBonusVersions(),
   ]);
 
   const monthGems = {};   // `${source}|${month}` -> gems
   const credits = [];
+  const bonusCredits = [];
   const events = [];
   for (const ev of rows) {
     const month = monthKey(ev.created_at);
@@ -79,9 +89,21 @@ async function computeEarnings(userId) {
         prevTotal = s.total;
       }
     }
+
+    // Daily Task bonus slabs (Audio Chat Rooms only): each crossed pays its amount
+    if (ev.source === 'chatroom') {
+      for (const b of bonusSlabsFor(bonusVersions, month)) {
+        if (b.amount > 0 && before < b.gems && after >= b.gems) {
+          bonusCredits.push({
+            source: ev.source, kind: 'bonus', slab: 'Extra Bonus', gems: b.gems, month,
+            amount: r2(b.amount), achieved_at: ev.created_at,
+          });
+        }
+      }
+    }
   }
 
-  return { monthGems, credits, versions, events };
+  return { monthGems, credits, bonusCredits, versions, events };
 }
 
 // Also created in database/migrate-all.js — kept here so the wallet works on a
@@ -150,23 +172,27 @@ function sourceSummary(monthGems, versions, source, month) {
 async function getEarningsOverview(req, res, next) {
   try {
     const userId = req.user.id;
-    const [{ monthGems, credits, versions }, withdrawals] = await Promise.all([
+    const [{ monthGems, credits, bonusCredits, versions }, withdrawals] = await Promise.all([
       computeEarnings(userId), getWithdrawals(userId),
     ]);
     const [month, lastMonth] = recentMonths(2);
+    const bonusIn = m => r2(bonusCredits.filter(c => c.month === m).reduce((sum, c) => sum + c.amount, 0));
 
     const sources = EARNING_SOURCES.map(src => sourceSummary(monthGems, versions, src, month));
-    const totalMonth = r2(sources.reduce((sum, s) => sum + s.month_earnings, 0));
+    const bonusMonth = bonusIn(month);
+    const totalMonth = r2(sources.reduce((sum, s) => sum + s.month_earnings, 0) + bonusMonth);
     const totalLastMonth = EARNING_SOURCES.reduce((sum, src) => {
       const cfg = configFor(versions, src, lastMonth);
       return sum + (slabFor(cfg, monthGems[`${src}|${lastMonth}`] ?? 0)?.total ?? 0);
-    }, 0);
+    }, 0) + bonusIn(lastMonth);
 
     // Wallet transactions (slab credits + withdrawals) grouped by month,
     // newest first; months with no activity are skipped.
     const txns = [
       // reversed so slabs crossed by the same gift list highest-first (sort is stable)
       ...credits.slice().reverse().map(c => ({ type: 'credit', source: c.source, slab: c.slab, amount: c.amount, at: c.achieved_at })),
+      // Daily Task bonus — shown as "Extra Bonus"
+      ...bonusCredits.slice().reverse().map(c => ({ type: 'credit', kind: 'bonus', source: c.source, slab: c.slab, gems: c.gems, amount: c.amount, at: c.achieved_at })),
       ...withdrawals.map(w => ({ type: 'withdrawal', id: w.id, amount: w.amount, status: w.status, at: w.created_at })),
     ].sort((a, b) => new Date(b.at) - new Date(a.at));
 
@@ -187,8 +213,9 @@ async function getEarningsOverview(req, res, next) {
       data: {
         month,
         total_month_earnings: totalMonth,
+        bonus_month: bonusMonth,
         growth_pct: totalLastMonth > 0 ? ((totalMonth - totalLastMonth) / totalLastMonth) * 100 : null,
-        available_balance: availableBalance(credits, withdrawals),
+        available_balance: availableBalance([...credits, ...bonusCredits], withdrawals),
         sources,
         months,
       },
@@ -209,8 +236,8 @@ async function requestWithdrawal(req, res, next) {
     // Serialise withdrawals per user so a double tap can't withdraw twice.
     await client.query('SELECT pg_advisory_xact_lock(hashtext($1))', [`earning_withdraw:${userId}`]);
 
-    const { credits } = await computeEarnings(userId);
-    const available = availableBalance(credits, await getWithdrawals(userId, client));
+    const { credits, bonusCredits } = await computeEarnings(userId);
+    const available = availableBalance([...credits, ...bonusCredits], await getWithdrawals(userId, client));
     if (available <= 0) {
       await client.query('ROLLBACK');
       return res.status(400).json({ success: false, message: 'No balance available to withdraw' });
@@ -421,6 +448,81 @@ async function adminSaveEarningConfig(req, res, next) {
   } catch (err) { next(err); }
 }
 
+// ── Daily Task bonus slabs ────────────────────────────────────────────────────
+
+/**
+ * GET /api/tasks/bonus — the chatroom Daily Task "Bonus Payment" tab: this
+ * month's bonus slabs, the user's Audio Chat gems so far, and which slabs
+ * they've reached (and when the bonus was credited).
+ */
+async function getTaskBonus(req, res, next) {
+  try {
+    const month = monthKey(new Date());
+    const [{ monthGems, bonusCredits }, bonusVersions] = await Promise.all([
+      computeEarnings(req.user.id), loadBonusVersions(),
+    ]);
+    const gems = monthGems[`chatroom|${month}`] ?? 0;
+    const credited = {};
+    for (const c of bonusCredits) if (c.month === month) credited[c.gems] = c.achieved_at;
+    return res.json({
+      success: true,
+      data: {
+        month,
+        month_gems: gems,
+        slabs: bonusSlabsFor(bonusVersions, month).map(b => ({
+          gems: b.gems, amount: b.amount, reached: gems >= b.gems, credited_at: credited[b.gems] ?? null,
+        })),
+      },
+    });
+  } catch (err) { next(err); }
+}
+
+/** GET /api/tasks/admin/task-bonus — current bonus slabs + saved versions */
+async function adminGetTaskBonus(req, res, next) {
+  try {
+    const versions = await loadBonusVersions();
+    const month = monthKey(new Date());
+    return res.json({
+      success: true,
+      data: {
+        month,
+        slabs: bonusSlabsFor(versions, month),
+        history: versions.map(v => ({ effective_month: v.effective_month, updated_at: v.updated_at })),
+      },
+    });
+  } catch (err) { next(err); }
+}
+
+/**
+ * PUT /api/tasks/admin/task-bonus  { slabs: [{ gems, amount }] }
+ * Only the slab targets and their bonus amounts. Saved as this month's
+ * version — applies to the whole current month and later, never to months
+ * already over (and never to months before the first save).
+ */
+async function adminSaveTaskBonus(req, res, next) {
+  try {
+    const raw = Array.isArray(req.body?.slabs) ? req.body.slabs : [];
+    const slabs = normaliseBonusSlabs(raw);
+    if (slabs.length !== raw.length) {
+      return res.status(400).json({ success: false, message: 'Every slab needs a whole-number gem target above 0 and a bonus amount of 0 or more' });
+    }
+    if (new Set(slabs.map(s => s.gems)).size !== slabs.length) {
+      return res.status(400).json({ success: false, message: 'Two slabs have the same gem target' });
+    }
+    await ensureBonusTable();
+    const month = monthKey(new Date());
+    await db.query(
+      `INSERT INTO task_bonus_slab_versions (effective_month, slabs, updated_at)
+       VALUES ($1, $2::jsonb, NOW())
+       ON CONFLICT (effective_month) DO UPDATE SET slabs = $2::jsonb, updated_at = NOW()`,
+      [month, JSON.stringify(slabs)]
+    );
+    invalidateBonusCache();
+    const versions = await loadBonusVersions();
+    return res.json({ success: true, data: { month, slabs: bonusSlabsFor(versions, month) } });
+  } catch (err) { next(err); }
+}
+
 // ── Admin ─────────────────────────────────────────────────────────────────────
 
 /** GET /api/tasks/admin/withdrawals?status=pending */
@@ -464,4 +566,5 @@ module.exports = {
   getEarningsOverview, getSourceEarnings, requestWithdrawal,
   getEarningConfig, adminGetEarningConfig, adminSaveEarningConfig,
   adminListWithdrawals, adminUpdateWithdrawal,
+  getTaskBonus, adminGetTaskBonus, adminSaveTaskBonus,
 };

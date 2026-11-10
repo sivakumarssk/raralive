@@ -67,6 +67,22 @@ function formatCoins(n: number) {
   return String(n);
 }
 
+/**
+ * Muted mark on an avatar, no background. White over a room background image
+ * (the stage is dark there), red on the plain light stage — each with a soft
+ * halo so it stays readable over any profile photo.
+ */
+function MuteIcon({ onBg }: { onBg?: boolean }) {
+  return (
+    <Ionicons
+      name="mic-off"
+      size={18}
+      color={onBg ? '#FFFFFF' : '#E14C57'}
+      style={onBg ? stage.muteIconOnBg : stage.muteIconPlain}
+    />
+  );
+}
+
 function CoinBadge({ coins }: { coins: number }) {
   return (
     <View style={stage.coinBadge}>
@@ -101,7 +117,7 @@ function HostSlot({ hostInfo, hostUserId, isHost, isMuted, onToggleMute, onLayou
       {/* No mic state while the host is offline — only the lock shows */}
       {isMuted && hostInfo.isOnline && (
         <View style={stage.muteBadge}>
-          <Ionicons name="mic-off" size={10} color="#FFFFFF" />
+          <MuteIcon onBg={hasRoomBg} />
         </View>
       )}
     </>
@@ -183,7 +199,7 @@ function OccupiedSlot({ slot, isMe, isMuted, onToggleMute, onLayout, coins, show
             {avatar}
             {isMuted && (
               <View style={stage.muteBadge}>
-                <Ionicons name="mic-off" size={10} color="#FFFFFF" />
+                <MuteIcon onBg={hasRoomBg} />
               </View>
             )}
           </TouchableOpacity>
@@ -192,7 +208,7 @@ function OccupiedSlot({ slot, isMe, isMuted, onToggleMute, onLayout, coins, show
             {avatar}
             {isMuted && (
               <View style={stage.muteBadge}>
-                <Ionicons name="mic-off" size={10} color="#FFFFFF" />
+                <MuteIcon onBg={hasRoomBg} />
               </View>
             )}
           </TouchableOpacity>
@@ -546,16 +562,23 @@ const stage = StyleSheet.create({
     textShadowOffset: { width: 0, height: 1 },
     textShadowRadius: 2,
   },
+  // Mic-off icon on the avatar's corner — see MuteIcon for its colours
   muteBadge: {
     position: 'absolute',
-    bottom: 0,
-    right: 0,
-    width: 18,
-    height: 18,
-    borderRadius: 9,
-    backgroundColor: '#E14C57',
+    bottom: -1,
+    right: -1,
     alignItems: 'center',
     justifyContent: 'center',
+  },
+  muteIconOnBg: {
+    textShadowColor: 'rgba(0,0,0,0.75)',
+    textShadowOffset: { width: 0, height: 0 },
+    textShadowRadius: 3,
+  },
+  muteIconPlain: {
+    textShadowColor: 'rgba(255,255,255,0.95)',
+    textShadowOffset: { width: 0, height: 0 },
+    textShadowRadius: 3,
   },
 
   coinBadge: {

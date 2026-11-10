@@ -17,6 +17,7 @@ import {
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { BASE_URL } from '@/services/api';
 import { authStore } from '@/store/auth-store';
+import { ROOM_NAME_MAX, charCount, limitChars } from '@/utils/text-limits';
 
 const COIN_IMG = require('@/assets/tabs/coin.png');
 
@@ -139,14 +140,13 @@ export function EditRoomNameScreen({ roomId, currentName }: EditRoomNameScreenPr
             <View style={[s.inputBox, !!error && s.inputBoxError]}>
               <TextInput
                 value={newName}
-                onChangeText={v => { setNewName(v); if (error) setError(''); }}
+                onChangeText={v => { setNewName(limitChars(v, ROOM_NAME_MAX)); if (error) setError(''); }}
                 placeholder={currentName}
                 placeholderTextColor="#ABADB2"
                 style={s.input}
-                maxLength={20}
                 returnKeyType="done"
               />
-              <Text style={s.charCount}>{newName.length}/20</Text>
+              <Text style={s.charCount}>{charCount(newName)}/{ROOM_NAME_MAX}</Text>
             </View>
           </View>
 

@@ -2,7 +2,8 @@ const roomModel = require('../models/room.model');
 const agencyModel = require('../models/agency.model');
 const walletModel = require('../models/wallet.model');
 const db = require('../config/db');
-const { getAllOnlineCounts, isRoomHostOnline, notifyChatroomStatus } = require('../socket');
+const { ROOM_NAME_MAX, charCount } = require('../utils/text-limits');
+const { getAllOnlineCounts, isRoomHostOnline, notifyChatroomStatus, removeEveryoneFromRoom } = require('../socket');
 
 /** GET /api/rooms/online-counts */
 function onlineCounts(req, res) {
@@ -57,7 +58,7 @@ async function getRoom(req, res, next) {
   try {
     const { id } = req.params;
     const room = await roomModel.getRoomDetail(id);
-    if (!room) {
+    if (!room || room.deleted_at) {
       return res.status(404).json({ success: false, message: 'Room not found.' });
     }
     return res.json({ success: true, data: room });
@@ -72,7 +73,7 @@ async function getRoomByCode(req, res, next) {
     const { code } = req.params;
     const result = await db.query(
       `SELECT r.id, r.room_code, r.room_name, r.room_image_url, r.status
-       FROM rooms r WHERE r.room_code = $1`,
+       FROM rooms r WHERE r.room_code = $1 AND r.deleted_at IS NULL`,
       [code.toUpperCase()]
     );
     if (!result.rows.length) {
@@ -106,14 +107,60 @@ async function myRooms(req, res, next) {
   }
 }
 
+/**
+ * DELETE /api/rooms/:id — the host deletes their own private room. Public
+ * rooms can't be deleted. Soft delete: the room is only marked and disappears
+ * from the app; anyone inside is sent out.
+ */
+async function deleteRoom(req, res, next) {
+  try {
+    const userId = req.user.id;
+    const room = await roomModel.getRoomDetail(req.params.id);
+    if (!room || room.deleted_at) return res.status(404).json({ success: false, message: 'Room not found.' });
+    if (room.host_user_id !== userId) return res.status(403).json({ success: false, message: 'Only the room owner can delete this room.' });
+    if (room.visibility !== 'private') return res.status(403).json({ success: false, message: 'Only private chat rooms can be deleted.' });
+
+    await roomModel.softDeleteRoom(room.id);
+    removeEveryoneFromRoom(room.id, { message: 'This chat room has been deleted by its owner.', kind: 'room_deleted' });
+    notifyChatroomStatus(userId);
+    return res.json({ success: true, message: 'Chat room deleted.' });
+  } catch (error) {
+    next(error);
+  }
+}
+
+// Topic tags a room can have — the app has an icon for each.
+const ROOM_TAGS = [
+  'Music', 'Gaming', 'Talk', 'Comedy', 'Podcast',
+  'EDM', 'Hip-Hop', 'Sports', 'News', 'Tech',
+  'Chill', 'Study', 'Fitness', 'Art', 'Food',
+];
+
+function roomNameTakenMessage(visibility) {
+  return visibility === 'private'
+    ? 'You already have a private room with this name. Please choose a different name.'
+    : 'A public room with this name already exists. Please choose a different name.';
+}
+
+const MAX_ROOM_TAGS = 2;
+
+/** Known tags only, each once, in the order picked, at most MAX_ROOM_TAGS. */
+function cleanRoomTags(tags) {
+  if (!Array.isArray(tags)) return [];
+  return [...new Set(tags.filter(t => ROOM_TAGS.includes(t)))].slice(0, MAX_ROOM_TAGS);
+}
+
 /** POST /api/rooms — user creates a room using their agent_code */
 async function createRoom(req, res, next) {
   try {
     const userId = req.user?.id;
-    const { room_name, agent_code, visibility = 'public', city, state, district } = req.body;
+    const { room_name, agent_code, visibility = 'public', city, state, district, tags } = req.body;
 
     if (!room_name) {
       return res.status(400).json({ success: false, message: 'room_name is required.' });
+    }
+    if (charCount(room_name.trim()) > ROOM_NAME_MAX) {
+      return res.status(400).json({ success: false, message: `Chatroom name must be ${ROOM_NAME_MAX} characters or fewer.` });
     }
     if (visibility === 'public' && !agent_code) {
       return res.status(400).json({ success: false, message: 'agent_code is required for public rooms.' });
@@ -157,7 +204,7 @@ async function createRoom(req, res, next) {
       // No agency is fine for private rooms — agency_id is nullable
     }
 
-    const userResult = await db.query(`SELECT avatar_url FROM users WHERE id = $1`, [userId]);
+    const userResult = await db.query(`SELECT avatar_url, gender FROM users WHERE id = $1`, [userId]);
     const avatarUrl = userResult.rows[0]?.avatar_url || null;
 
     let room;
@@ -173,10 +220,11 @@ async function createRoom(req, res, next) {
         state: state?.trim() || null,
         district: district?.trim() || null,
         createdBy: null,
+        tags: cleanRoomTags(tags),
       });
     } catch (err) {
       if (err.code === 'ROOM_NAME_TAKEN') {
-        return res.status(409).json({ success: false, message: 'A room with this name already exists. Please choose a different name.' });
+        return res.status(409).json({ success: false, message: roomNameTakenMessage(visibility) });
       }
       throw err;
     }
@@ -191,11 +239,14 @@ async function createRoom(req, res, next) {
         room_name: room.room_name,
         description: room.description,
         room_image_url: room.room_image_url,
+        host_gender: userResult.rows[0]?.gender ?? null,
         visibility: room.visibility,
         status: room.status,
+        current_level: 0,
         city: room.city,
         state: room.state,
         district: room.district,
+        tags: room.tags ?? [],
         agency_name: agency?.agency_name ?? null,
         created_at: room.created_at,
       },
@@ -216,8 +267,8 @@ async function renameRoom(req, res, next) {
     if (!newName) {
       return res.status(400).json({ success: false, message: 'room_name is required.' });
     }
-    if (newName.length > 20) {
-      return res.status(400).json({ success: false, message: 'Chatroom name must be 20 characters or fewer.' });
+    if (charCount(newName) > ROOM_NAME_MAX) {
+      return res.status(400).json({ success: false, message: `Chatroom name must be ${ROOM_NAME_MAX} characters or fewer.` });
     }
 
     const durationDays = Number(duration_days);
@@ -229,7 +280,7 @@ async function renameRoom(req, res, next) {
       });
     }
 
-    const roomResult = await db.query(`SELECT id, host_user_id, room_name FROM rooms WHERE id = $1`, [id]);
+    const roomResult = await db.query(`SELECT id, host_user_id, room_name, visibility FROM rooms WHERE id = $1`, [id]);
     const room = roomResult.rows[0];
     if (!room) {
       return res.status(404).json({ success: false, message: 'Room not found.' });
@@ -267,7 +318,7 @@ async function renameRoom(req, res, next) {
       // Roll the coin spend back if the rename itself fails (e.g. unique name clash).
       await walletModel.creditCoins(userId, cost, 'Refund: chatroom name change failed', null, id);
       if (err.code === '23505' && err.constraint?.includes('room_name')) {
-        return res.status(409).json({ success: false, message: 'A room with this name already exists. Please choose a different name.' });
+        return res.status(409).json({ success: false, message: roomNameTakenMessage(room.visibility) });
       }
       throw err;
     }
@@ -303,6 +354,6 @@ async function publicRoomsForBattle(req, res, next) {
 }
 
 module.exports = {
-  onlineCounts, publicRooms, publicRoomsForBattle, getRoom, getRoomByCode, myRooms, createRoom, renameRoom,
+  onlineCounts, publicRooms, publicRoomsForBattle, getRoom, getRoomByCode, myRooms, createRoom, renameRoom, deleteRoom,
   ROOM_NAME_DURATION_PRICING,
 };

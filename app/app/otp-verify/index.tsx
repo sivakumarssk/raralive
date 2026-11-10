@@ -1,7 +1,7 @@
 import { Stack, router, useLocalSearchParams } from 'expo-router';
 import { OtpVerifyScreen } from '@/screens/otp/otp-verify-screen';
 import { ScreenHeader } from '@/components/ui/screen-header';
-import { authStore } from '@/store/auth-store';
+import { enterApp } from '@/store/pending-link';
 
 export default function OtpVerifyRoute() {
   // Login arrives with ?mode=login&phone=…; registration passes nothing
@@ -20,7 +20,7 @@ export default function OtpVerifyRoute() {
       <OtpVerifyScreen
         loginPhone={isLogin ? phone : undefined}
         onVerifyContinue={() => {
-          if (isLogin) router.replace(authStore.needsLanguage() ? '/language' : '/(tabs)');
+          if (isLogin) enterApp();
           else router.push('/register/profile');
         }}
       />

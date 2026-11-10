@@ -1,4 +1,4 @@
-import { Ionicons } from '@expo/vector-icons';
+import { Ionicons, MaterialCommunityIcons } from '@expo/vector-icons';
 import { LinearGradient } from 'expo-linear-gradient';
 import { useEffect, useRef, useState } from 'react';
 import {
@@ -20,6 +20,8 @@ import {
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { BASE_URL, MEDIA_BASE } from '@/services/api';
 import { authStore } from '@/store/auth-store';
+import { DiamondCutButton } from '@/components/ui/diamond-cut-button';
+import { DiamondCutTabs } from '@/components/ui/diamond-cut-tabs';
 import { GradientButton } from '@/components/ui/gradient-button';
 import { onBattleInviteAccepted, onBattleInviteDeclined } from '@/store/socket-store';
 import { RC } from '../room-ui';
@@ -457,36 +459,15 @@ function SetupPage({
       </View>
 
       {/* ── Battle type: two equal segments ── */}
-      <View style={s.modeTabRow}>
-        {(['normal', 'gifting'] as const).map(mode => {
-          const active = battleMode === mode;
-          const label = mode === 'normal' ? 'Normal Battle' : 'Gifting Battle';
-          const icon = mode === 'normal' ? 'flash' : 'gift';
-          return (
-            <TouchableOpacity
-              key={mode}
-              activeOpacity={0.85}
-              onPress={() => setBattleMode(mode)}
-              style={s.modeTab}
-              accessibilityRole="button"
-              accessibilityState={{ selected: active }}>
-              {active ? (
-                <LinearGradient
-                  colors={mode === 'normal' ? ['#7A0EED', '#A020C8'] : ['#C0186A', '#EC4899']}
-                  start={{ x: 0, y: 0 }} end={{ x: 1, y: 0 }}
-                  style={[s.modeTabInner, s.modeTabInnerActive]}>
-                  <Ionicons name={icon} size={14} color="#FFFFFF" />
-                  <Text style={[s.modeTabText, s.modeTabTextActive]} numberOfLines={1}>{label}</Text>
-                </LinearGradient>
-              ) : (
-                <View style={s.modeTabInner}>
-                  <Ionicons name={`${icon}-outline`} size={14} color="#9B6FE0" />
-                  <Text style={s.modeTabText} numberOfLines={1}>{label}</Text>
-                </View>
-              )}
-            </TouchableOpacity>
-          );
-        })}
+      <View style={s.modeTabs}>
+        <DiamondCutTabs
+          value={battleMode}
+          onChange={setBattleMode}
+          tabs={[
+            { key: 'normal', label: 'Normal Battle', icon: 'flash', inactiveIcon: 'flash-outline', activeColors: ['#7A0EED', '#A020C8'] },
+            { key: 'gifting', label: 'Gifting Battle', icon: 'gift', inactiveIcon: 'gift-outline', activeColors: ['#C0186A', '#EC4899'] },
+          ]}
+        />
       </View>
 
       {/* ── Select time: six equal chips in one row ── */}
@@ -584,21 +565,17 @@ function SetupPage({
 
       {/* ── Start battle ── */}
       <View style={s.bottomArea}>
-        <GradientButton
+        <DiamondCutButton
           label="Start battle"
           onPress={onStart}
           disabled={!canStart}
           colors={['#7A0EED', '#C0186A', '#F5A623']}
-          iconNode={<Text style={{ fontSize: 14 }}>⚔️</Text>}
+          iconNode={<MaterialCommunityIcons name="sword-cross" size={18} color="#FFFFFF" />}
           height={46}
-          borderRadius={23}
           fontSize={15}
-          textStyle={{ fontWeight: '900', letterSpacing: 0.3 }}
+          textStyle={{ color: '#FFFFFF', fontWeight: '900', letterSpacing: 0.3 }}
+          style={s.startBtn}
         />
-        <View style={s.fairRow}>
-          <Ionicons name="shield-checkmark-outline" size={13} color="#9B6FE0" />
-          <Text style={s.fairText}>Fair battle system  •  Real-time results</Text>
-        </View>
       </View>
     </ScrollView>
   );
@@ -753,24 +730,8 @@ const s = StyleSheet.create({
   opponentBadge: { backgroundColor: '#EC4899' },
   youBadgeText: { fontSize: 11, fontWeight: '800', color: '#fff', letterSpacing: 0.2 },
 
-  // Battle type — compact segmented control, two equal halves
-  modeTabRow: {
-    flexDirection: 'row', backgroundColor: '#F4EEFF',
-    borderRadius: 999, padding: 3, marginBottom: 16, gap: 3,
-    borderWidth: 1, borderColor: '#EADDFF',
-  },
-  modeTab: { flex: 1, borderRadius: 999, overflow: 'hidden' },
-  modeTabInner: {
-    height: 36, borderRadius: 999,
-    flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 5,
-    paddingHorizontal: 8,
-  },
-  modeTabInnerActive: {
-    shadowColor: '#7A0EED', shadowOpacity: 0.25, shadowRadius: 6,
-    shadowOffset: { width: 0, height: 2 }, elevation: 3,
-  },
-  modeTabText: { fontSize: 13, fontWeight: '700', color: '#8A63D2', flexShrink: 1 },
-  modeTabTextActive: { color: '#FFFFFF' },
+  // Battle type — two equal diamond-cut tabs
+  modeTabs: { marginBottom: 16 },
 
   // Section header
   sectionRow: { flexDirection: 'row', alignItems: 'center', gap: 6, marginBottom: 8 },
@@ -831,6 +792,7 @@ const s = StyleSheet.create({
   infoText: { fontSize: 12, color: '#6B3FC0', flex: 1 },
 
   bottomArea: { paddingTop: 16, gap: 8 },
+  startBtn: { width: '72%', alignSelf: 'center' },
   fairRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 5 },
   fairText: { fontSize: 12, color: '#9B6FE0' },
 });

@@ -139,7 +139,19 @@ async function updateAgencyStatus(id, status) {
   return result.rows[0] || null;
 }
 
+// Agent codes run in sequence: AGTRARA-001, AGTRARA-002, … (more digits after
+// 999). Older codes in another format stay as they are and don't count.
+const AGENT_CODE_PREFIX = 'AGTRARA-';
+
+async function nextAgentCode() {
+  const { rows } = await db.query(
+    `SELECT COALESCE(MAX(substring(agent_code FROM '^AGTRARA-([0-9]+)$')::int), 0) + 1 AS n FROM agencies`
+  );
+  return `${AGENT_CODE_PREFIX}${String(rows[0].n).padStart(3, '0')}`;
+}
+
 module.exports = {
+  nextAgentCode,
   findByAgencyName, findByEmail, findByPhone, findByAgentCode,
   createAgency, listAgencies, getAgencyById, updateAgencyDetails, updateAgencyStatus,
   resetAgencyPassword,

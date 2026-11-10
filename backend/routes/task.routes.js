@@ -22,6 +22,7 @@ router.get('/gem-history',    authenticate, getMyGemHistory);
 router.get('/earnings',       authenticate, earnings.getEarningsOverview);
 router.post('/earnings/withdraw', authenticate, earnings.requestWithdrawal);
 router.get('/earnings/config', earnings.getEarningConfig);
+router.get('/bonus',          authenticate, earnings.getTaskBonus);   // Daily Task → Bonus Payment
 router.get('/earnings/:source', authenticate, earnings.getSourceEarnings);
 router.get('/top-hosts',      authenticate, ctrl.getTopHosts);
 router.get('/winners',        authenticate, ctrl.getWinners);
@@ -40,6 +41,10 @@ router.patch('/admin/withdrawals/:id',  authenticateAdmin, earnings.adminUpdateW
 // Earning slabs + gem value per service (admin)
 router.get('/admin/earning-config',         authenticateAdmin, earnings.adminGetEarningConfig);
 router.put('/admin/earning-config/:source', authenticateAdmin, earnings.adminSaveEarningConfig);
+
+// Daily Task bonus slabs — gem targets + bonus amounts only (admin)
+router.get('/admin/task-bonus', authenticateAdmin, earnings.adminGetTaskBonus);
+router.put('/admin/task-bonus', authenticateAdmin, earnings.adminSaveTaskBonus);
 
 // Gift history (admin)
 router.get('/admin/gift-history/user/:userId', authenticateAdmin, userGiftHistory);

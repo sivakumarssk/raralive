@@ -39,7 +39,7 @@ type SourceSummary = {
 };
 
 type WalletTxn =
-  | { type: 'credit'; source: EarningSource; slab: string; amount: number; at: string }
+  | { type: 'credit'; source: EarningSource; slab: string; amount: number; at: string; kind?: 'bonus'; gems?: number }
   | { type: 'withdrawal'; id: string; amount: number; status: 'pending' | 'paid' | 'rejected'; at: string };
 
 type WalletMonth = { month: string; added: number; withdrawn: number; transactions: WalletTxn[] };
@@ -212,7 +212,7 @@ function EarningsTab() {
             <View style={e.txnList}>
               {m.transactions.map((t, i) => (
                 <TxnRow
-                  key={t.type === 'credit' ? `c-${t.source}-${t.slab}-${t.at}` : `w-${t.id}`}
+                  key={t.type === 'credit' ? `c-${t.kind ?? 'slab'}-${t.source}-${t.slab}-${t.gems ?? ''}-${t.at}` : `w-${t.id}`}
                   txn={t}
                   last={i === m.transactions.length - 1}
                   onPress={t.type === 'credit' ? () => openSource(t.source) : undefined}
@@ -228,6 +228,8 @@ function EarningsTab() {
 
 function TxnRow({ txn, last, onPress }: { txn: WalletTxn; last: boolean; onPress?: () => void }) {
   const src = txn.type === 'credit' ? SOURCE_BY_KEY[txn.source] : null;
+  // Daily Task "Bonus Payment" credit
+  const isBonus = txn.type === 'credit' && txn.kind === 'bonus';
   const status = txn.type === 'withdrawal' ? WITHDRAW_STATUS[txn.status] : null;
   return (
     <TouchableOpacity
@@ -235,12 +237,12 @@ function TxnRow({ txn, last, onPress }: { txn: WalletTxn; last: boolean; onPress
       disabled={!onPress}
       onPress={onPress}
       style={[e.txnRow, !last && e.txnBorder]}>
-      <View style={[e.iconWrap, e.txnIconWrap, { backgroundColor: src?.tint ?? '#FEF3E2' }]}>
-        <Ionicons name={(src?.icon ?? 'arrow-up-circle') as any} size={18} color={src?.color ?? '#F59E0B'} />
+      <View style={[e.iconWrap, e.txnIconWrap, { backgroundColor: isBonus ? '#FFF4E0' : src?.tint ?? '#FEF3E2' }]}>
+        <Ionicons name={(isBonus ? 'gift' : src?.icon ?? 'arrow-up-circle') as any} size={18} color={isBonus ? '#F59E0B' : src?.color ?? '#F59E0B'} />
       </View>
       <View style={e.txnInfo}>
         <Text style={e.txnTitle} numberOfLines={1}>
-          {txn.type === 'credit' ? `${src!.short} - ${txn.slab}` : 'Withdrawal'}
+          {isBonus ? `Extra Bonus · ${src!.short}` : txn.type === 'credit' ? `${src!.short} - ${txn.slab}` : 'Withdrawal'}
         </Text>
         <Text style={e.txnSub} numberOfLines={1}>
           {formatTxnTime(new Date(txn.at))}

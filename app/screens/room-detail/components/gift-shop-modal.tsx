@@ -1,4 +1,5 @@
 import { Ionicons } from '@expo/vector-icons';
+import { useRouter } from 'expo-router';
 import { useEffect, useRef, useState } from 'react';
 import {
   Animated,
@@ -16,22 +17,43 @@ import {
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { BASE_URL, MEDIA_BASE } from '@/services/api';
 import type { SeatSlot } from '@/hooks/useRoomSocket';
-import { useUserLevel } from '@/components/UserLevel';
 import { authStore } from '@/store/auth-store';
 import { onWalletUpdate } from '@/store/socket-store';
-import { getLevelThreshold, getNextLevelThreshold } from '@/utils/userLevel';
 import { RC } from '../room-ui';
+import Svg, { Path } from 'react-native-svg';
 import { avatarSource } from '@/utils/default-avatar';
 
 const COIN_IMG = require('@/assets/tabs/coin.png');
+
+// The whole gift box is black; the top bar's coin side matches it
+const GIFT_BOX_BG = '#000000';
+const LEVEL_BAR_H = 48;
+const QUANTITIES = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10];
+const CURVE_LEAN = 22; // how far the recipients panel's curved edge runs sideways
+const CURVE_BEND = 13; // how round that S-curve is
+
+/**
+ * The recipients panel: square on the left; its right edge starts further out
+ * at the top and S-curves back in to the bottom.
+ */
+function levelPanelPath(end: number, h: number) {
+  const top = end + CURVE_LEAN;
+  return `M 0 0 L ${top} 0 C ${top - CURVE_BEND} 0 ${end + CURVE_BEND} ${h} ${end} ${h} L 0 ${h} Z`;
+}
 
 const { height: SCREEN_H, width: SCREEN_W } = Dimensions.get('window');
 const SHEET_HEIGHT = SCREEN_H * 0.52;
 const ITEM_W = (SCREEN_W - 2) / 4;
 
 /** 1000 → "1,000" — the exact amount, not a rounded 1.0K */
-function groupDigits(n: number): string {
-  return String(Math.max(0, Math.round(n))).replace(/\B(?=(\d{3})+(?!\d))/g, ',');
+/** Wallet coins in short Indian units: 950 · 1.2K · 3.5L · 2Cr. */
+function compactCoins(n: number): string {
+  const v = Math.max(0, Math.round(n));
+  const short = (x: number, unit: string) => `${x >= 100 ? Math.floor(x) : Math.floor(x * 10) / 10}${unit}`.replace('.0', '');
+  if (v >= 1_00_00_000) return short(v / 1_00_00_000, 'Cr');
+  if (v >= 1_00_000) return short(v / 1_00_000, 'L');
+  if (v >= 1_000) return short(v / 1_000, 'K');
+  return String(v);
 }
 
 /**
@@ -63,6 +85,7 @@ type ShopGift = {
   name: string;
   image_url: string | null;
   coins: number;
+  /** Still sent in the gift message for older app versions; no longer drawn. */
   bg_color: string;
 };
 
@@ -94,15 +117,15 @@ export function GiftShopModal({
 }: Props) {
   const insets = useSafeAreaInsets();
   const translateY = useRef(new Animated.Value(SHEET_HEIGHT)).current;
-  const { level, coinsSpent } = useUserLevel();
+  const router = useRouter();
+  const [barWidth, setBarWidth] = useState(0);
+  const [levelPanelEnd, setLevelPanelEnd] = useState(0);
   const walletCoins = useWalletCoins(visible);
 
   const [categories, setCategories] = useState<Category[]>([]);
   const [activeCatId, setActiveCatId] = useState<string | null>(null);
   const [selectedGift, setSelectedGift] = useState<ShopGift | null>(null);
   const [quantity, setQuantity] = useState(1);
-  const [showUserPicker, setShowUserPicker] = useState(false);
-  const [showQtyPicker, setShowQtyPicker] = useState(false);
   // Multiple recipients can be selected — sending fires one gift per target.
   const [selectedUserIds, setSelectedUserIds] = useState<string[]>([hostInfo.userId]);
 
@@ -161,8 +184,6 @@ export function GiftShopModal({
   }
 
   function close() {
-    setShowUserPicker(false);
-    setShowQtyPicker(false);
     Animated.timing(translateY, { toValue: SHEET_HEIGHT, duration: 220, useNativeDriver: true }).start(onClose);
   }
 
@@ -179,16 +200,6 @@ export function GiftShopModal({
 
   const activeGifts = categories.find(c => c.id === activeCatId)?.gifts ?? [];
 
-  // THRESHOLDS is cumulative lifetime coins gifted, so the coins it takes to
-  // go from this level to the next is the gap between the two thresholds —
-  // e.g. level 2 is 250 → 650, so Level 2 → Level 3 needs 400 coins.
-  const nextThreshold = getNextLevelThreshold(level);
-  const coinsForNextLevel = nextThreshold != null ? Math.max(0, nextThreshold - getLevelThreshold(level)) : null;
-  // How far into this level the user's gifting is (bar only — no counts)
-  const levelProgress = coinsForNextLevel
-    ? Math.min(Math.max((coinsSpent - getLevelThreshold(level)) / coinsForNextLevel, 0), 1)
-    : 1;
-
   return (
     <Modal visible={visible} transparent animationType="none" onRequestClose={close} onShow={open}>
       <TouchableOpacity style={s.backdrop} activeOpacity={1} onPress={close} />
@@ -200,43 +211,61 @@ export function GiftShopModal({
           <View style={s.handle} />
         </View>
 
-        {/* ID Level (current → next, coins required) and wallet balance */}
-        <View style={s.levelBox}>
-          <View style={s.infoRow}>
-            <View style={s.levelPath}>
-              <Text style={s.levelText}>Level {level}</Text>
-              {coinsForNextLevel != null && (
-                <>
-                  <Ionicons name="arrow-forward" size={13} color="rgba(255,255,255,0.55)" />
-                  <Text style={s.levelText}>Level {level + 1}</Text>
-                </>
-              )}
-            </View>
-            {coinsForNextLevel != null ? (
-              <View style={s.infoValue}>
-                <Image source={COIN_IMG} style={s.infoCoin} resizeMode="contain" />
-                <Text style={s.infoNumber} numberOfLines={1}>{groupDigits(coinsForNextLevel)}</Text>
-                <Text style={s.infoLabel} numberOfLines={1}>coins required</Text>
-              </View>
+        {/* One bar: a lighter recipients panel ending in a curve, wallet coins on
+            the darker part → tap opens the Wallet */}
+        <View style={s.levelBar} onLayout={e => setBarWidth(e.nativeEvent.layout.width)}>
+          {barWidth > 0 && levelPanelEnd > 0 && (
+            <Svg width={barWidth} height={LEVEL_BAR_H} style={StyleSheet.absoluteFill}>
+              <Path d={levelPanelPath(levelPanelEnd, LEVEL_BAR_H)} fill="#2B2724" />
+            </Svg>
+          )}
+          {/* Who gets the gift: host + people on stage. Tap to select one or more;
+              the chosen gift × quantity goes to each of them. */}
+          <View
+            style={s.levelSide}
+            onLayout={e => setLevelPanelEnd(e.nativeEvent.layout.x + e.nativeEvent.layout.width)}>
+            {targets.length === 0 ? (
+              <Text style={s.noTargets}>No one on stage to gift</Text>
             ) : (
-              <Text style={s.infoLabel}>Max level reached</Text>
+              <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={s.peopleList}>
+                {targets.map(t => {
+                  const selected = selectedUserIds.includes(t.userId);
+                  return (
+                    <TouchableOpacity
+                      key={t.userId}
+                      activeOpacity={0.8}
+                      onPress={() => setSelectedUserIds(prev =>
+                        prev.includes(t.userId) ? prev.filter(id => id !== t.userId) : [...prev, t.userId])}
+                      accessibilityLabel={`${selected ? 'Deselect' : 'Select'} ${t.name}`}
+                      style={[s.personRing, selected && s.personRingSelected]}>
+                      <Image source={avatarSource(resolveImg(t.avatarUrl))} style={s.personAvatar} />
+                      {t.isHost && <View style={s.hostTag}><Text style={s.hostTagText}>Host</Text></View>}
+                      {selected && (
+                        <View style={s.personCheck}>
+                          <Ionicons name="checkmark" size={9} color="#FFFFFF" />
+                        </View>
+                      )}
+                    </TouchableOpacity>
+                  );
+                })}
+              </ScrollView>
             )}
           </View>
 
-          {/* Progress towards the next level */}
-          <View style={s.levelTrack}>
-            <View style={[s.levelFill, { width: `${Math.round(levelProgress * 100)}%` }]} />
-          </View>
+          {/* Room for the curve between the two halves */}
+          <View style={{ width: CURVE_LEAN }} />
 
-          <View style={[s.infoRow, s.walletRow]}>
-            <Text style={s.infoLabel}>Wallet coins</Text>
-            <View style={s.infoValue}>
-              <Image source={COIN_IMG} style={s.infoCoin} resizeMode="contain" />
-              <Text style={s.infoNumber} numberOfLines={1}>
-                {walletCoins != null ? groupDigits(walletCoins) : '—'}
-              </Text>
-            </View>
-          </View>
+          <TouchableOpacity
+            style={s.walletSide}
+            activeOpacity={0.75}
+            onPress={() => { close(); router.push('/wallet' as never); }}
+            accessibilityLabel="Wallet coins, open wallet">
+            <Image source={COIN_IMG} style={s.walletCoin} resizeMode="contain" />
+            <Text style={s.walletCoins} numberOfLines={1}>
+              {walletCoins != null ? compactCoins(walletCoins) : '—'}
+            </Text>
+            <Ionicons name="chevron-forward" size={16} color="rgba(255,255,255,0.8)" />
+          </TouchableOpacity>
         </View>
 
         {/* Category tabs */}
@@ -265,7 +294,7 @@ export function GiftShopModal({
                 onPress={() => setSelectedGift(item)}
                 activeOpacity={0.8}
                 style={[s.giftCell, { width: ITEM_W }, isSelected && s.giftCellSelected]}>
-                <View style={[s.giftImgWrap, { backgroundColor: item.bg_color }]}>
+                <View style={s.giftImgWrap}>
                   {imgUri
                     ? <Image source={{ uri: imgUri }} style={s.giftImg} resizeMode="contain" />
                     : <Text style={s.giftEmoji}>🎁</Text>
@@ -282,27 +311,21 @@ export function GiftShopModal({
           }}
         />
 
-        {/* Bottom bar */}
+        {/* Bottom bar: quantity chips side by side (scroll for more) + Send.
+            Recipients: whoever the box was opened for, else the host. */}
         <View style={s.bottomBar}>
-          {/* User picker — tap a row in the dropdown below to toggle it; several can be selected */}
-          <TouchableOpacity style={s.userPicker} activeOpacity={0.8} onPress={() => { setShowQtyPicker(false); setShowUserPicker(v => !v); }}>
-            <Text style={s.userPickerText} numberOfLines={1}>
-              {selectedUserIds.length === 0
-                ? 'Select recipient'
-                : selectedUserIds.length === 1
-                  ? (targets.find(t => t.userId === selectedUserIds[0])?.name ?? 'User')
-                  : `${selectedUserIds.length} selected`}
-            </Text>
-            <Ionicons name={showUserPicker ? 'chevron-down' : 'chevron-up'} size={14} color="#ABADB2" />
-          </TouchableOpacity>
+          <ScrollView horizontal showsHorizontalScrollIndicator={false} style={s.qtyScroll} contentContainerStyle={s.qtyList}>
+            {QUANTITIES.map(n => (
+              <TouchableOpacity
+                key={n}
+                activeOpacity={0.8}
+                style={[s.qtyItem, quantity === n && s.qtyItemSelected]}
+                onPress={() => setQuantity(n)}>
+                <Text style={[s.qtyItemText, quantity === n && s.qtyItemTextSelected]}>{n}x</Text>
+              </TouchableOpacity>
+            ))}
+          </ScrollView>
 
-          {/* Qty picker */}
-          <TouchableOpacity style={s.qtyPicker} activeOpacity={0.8} onPress={() => { setShowUserPicker(false); setShowQtyPicker(v => !v); }}>
-            <Text style={s.qtyText}>x{quantity}</Text>
-            <Ionicons name={showQtyPicker ? 'chevron-down' : 'chevron-up'} size={14} color="#ABADB2" />
-          </TouchableOpacity>
-
-          {/* Send */}
           <TouchableOpacity
             style={[s.sendBtn, (!selectedGift || selectedUserIds.length === 0) && s.sendBtnDisabled]}
             activeOpacity={0.85}
@@ -311,47 +334,6 @@ export function GiftShopModal({
             <Ionicons name="arrow-forward" size={20} color="#FFFFFF" />
           </TouchableOpacity>
         </View>
-
-        {/* User picker dropdown — tap toggles a recipient in/out of the selection */}
-        {showUserPicker && (
-          <View style={s.dropdown}>
-            {targets.map(t => {
-              const uri = resolveImg(t.avatarUrl);
-              const isSelected = selectedUserIds.includes(t.userId);
-              return (
-                <TouchableOpacity
-                  key={t.userId}
-                  style={[s.dropdownItem, isSelected && s.dropdownItemSelected]}
-                  onPress={() => {
-                    setSelectedUserIds(prev =>
-                      prev.includes(t.userId) ? prev.filter(id => id !== t.userId) : [...prev, t.userId]
-                    );
-                  }}>
-                  <Image source={avatarSource(uri)} style={s.dropdownAvatar} />
-                  <Text style={[s.dropdownName, isSelected && s.dropdownNameSelected]}>{t.name}</Text>
-                  {t.isHost && <View style={s.hostChip}><Text style={s.hostChipText}>Host</Text></View>}
-                  {isSelected && <Ionicons name="checkmark" size={16} color="#7A0EED" style={{ marginLeft: 'auto' }} />}
-                </TouchableOpacity>
-              );
-            })}
-          </View>
-        )}
-
-        {/* Qty picker dropdown */}
-        {showQtyPicker && (
-          <View style={s.qtyDropdown}>
-            <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={s.qtyList}>
-              {[1,2,3,4,5,6,7,8,9,10].map(n => (
-                <TouchableOpacity
-                  key={n}
-                  style={[s.qtyItem, quantity === n && s.qtyItemSelected]}
-                  onPress={() => { setQuantity(n); setShowQtyPicker(false); }}>
-                  <Text style={[s.qtyItemText, quantity === n && s.qtyItemTextSelected]}>x{n}</Text>
-                </TouchableOpacity>
-              ))}
-            </ScrollView>
-          </View>
-        )}
       </Animated.View>
     </Modal>
   );
@@ -361,27 +343,39 @@ const s = StyleSheet.create({
   backdrop: { ...StyleSheet.absoluteFillObject, backgroundColor: 'rgba(0,0,0,0.55)' },
   sheet: {
     position: 'absolute', bottom: 0, left: 0, right: 0,
-    backgroundColor: '#151718', borderTopLeftRadius: 20, borderTopRightRadius: 20, overflow: 'hidden',
+    backgroundColor: GIFT_BOX_BG, borderTopLeftRadius: 20, borderTopRightRadius: 20, overflow: 'hidden',
   },
   handleArea: { alignItems: 'center', paddingTop: 8, paddingBottom: 6 },
   handle: { width: 36, height: 4, borderRadius: 2, backgroundColor: 'rgba(255,255,255,0.25)' },
 
-  // ID Level + wallet: two aligned rows — label/levels left, coin amount right
-  levelBox: {
-    backgroundColor: '#1E2022',
-    paddingHorizontal: 14, paddingVertical: 10,
+  // Recipients (left) and wallet coins (right) in one bar
+  levelBar: {
+    flexDirection: 'row', alignItems: 'center',
+    marginHorizontal: 12, marginBottom: 6, paddingLeft: 10, height: LEVEL_BAR_H,
+    backgroundColor: GIFT_BOX_BG, borderRadius: 12, overflow: 'hidden',
   },
-  infoRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 10, minHeight: 20 },
-  // Small gap between the ID Level row and the wallet line
-  levelTrack: { height: 6, marginTop: 8, backgroundColor: 'rgba(255,255,255,0.15)', borderRadius: 3, overflow: 'hidden' },
-  levelFill: { height: '100%', backgroundColor: '#A855F7', borderRadius: 3 },
-  walletRow: { marginTop: 8 },
-  levelPath: { flexDirection: 'row', alignItems: 'center', gap: 6, flexShrink: 0 },
-  levelText: { fontSize: 13, fontWeight: '700', color: '#FFFFFF' },
-  infoValue: { flexDirection: 'row', alignItems: 'center', gap: 5, flexShrink: 1, justifyContent: 'flex-end' },
-  infoCoin: { width: 15, height: 15 },
-  infoNumber: { fontSize: 13, fontWeight: '800', color: RC.numberOnDark },
-  infoLabel: { fontSize: 12, fontWeight: '500', color: 'rgba(255,255,255,0.6)', flexShrink: 1 },
+  levelSide: { flex: 1, minWidth: 0, justifyContent: 'center' },
+  peopleList: { alignItems: 'center', gap: 8, paddingRight: 4 },
+  personRing: {
+    width: 38, height: 38, borderRadius: 19, padding: 2,
+    borderWidth: 2, borderColor: 'transparent',
+  },
+  personRingSelected: { borderColor: '#A855F7' },
+  personAvatar: { width: '100%', height: '100%', borderRadius: 15 },
+  hostTag: {
+    position: 'absolute', bottom: -4, alignSelf: 'center',
+    backgroundColor: '#F5B83D', borderRadius: 5, paddingHorizontal: 3,
+  },
+  hostTagText: { fontSize: 7, fontWeight: '800', color: '#1C1E22' },
+  personCheck: {
+    position: 'absolute', top: -3, right: -3, width: 14, height: 14, borderRadius: 7,
+    backgroundColor: '#A855F7', alignItems: 'center', justifyContent: 'center',
+    borderWidth: 1.5, borderColor: '#2B2724',
+  },
+  noTargets: { fontSize: 12, fontWeight: '600', color: 'rgba(255,255,255,0.6)' },
+  walletSide: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 6, height: '100%', minWidth: 96, paddingLeft: 10, paddingRight: 14 },
+  walletCoin: { width: 20, height: 20 },
+  walletCoins: { fontSize: 15, fontWeight: '800', color: '#FFFFFF' },
 
   tabsScroll: { flexShrink: 0, maxHeight: 40 },
   tabsContent: { paddingHorizontal: 12, gap: 4 },
@@ -406,54 +400,18 @@ const s = StyleSheet.create({
 
   bottomBar: {
     flexDirection: 'row', alignItems: 'center',
-    paddingHorizontal: 12, paddingVertical: 10, backgroundColor: '#1E2022',
-    borderTopWidth: StyleSheet.hairlineWidth, borderTopColor: 'rgba(255,255,255,0.08)', gap: 8,
+    paddingHorizontal: 12, paddingVertical: 10, backgroundColor: GIFT_BOX_BG,
+    borderTopWidth: 1, borderTopColor: 'rgba(255,255,255,0.14)', gap: 10,
   },
-  userPicker: {
-    flex: 1, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between',
-    backgroundColor: '#26282B', borderRadius: 8, paddingHorizontal: 14, paddingVertical: 12,
+  qtyScroll: { flex: 1 },
+  qtyList: { gap: 8, alignItems: 'center' },
+  qtyItem: {
+    minWidth: 44, height: 36, paddingHorizontal: 10, borderRadius: 10,
+    backgroundColor: '#1C1D20', alignItems: 'center', justifyContent: 'center',
   },
-  userPickerText: { fontSize: 13, fontWeight: '600', color: '#FFFFFF', flex: 1 },
-  qtyPicker: {
-    flexDirection: 'row', alignItems: 'center', gap: 6,
-    backgroundColor: '#26282B', borderRadius: 8, paddingHorizontal: 14, paddingVertical: 12,
-    minWidth: 72, justifyContent: 'center',
-  },
-  qtyText: { fontSize: 13, fontWeight: '700', color: RC.numberOnDark },
-  sendBtn: { width: 44, height: 44, borderRadius: 10, backgroundColor: '#7A0EED', alignItems: 'center', justifyContent: 'center' },
-  sendBtnDisabled: { backgroundColor: 'rgba(255,255,255,0.15)' },
-
-  // User dropdown
-  dropdown: {
-    position: 'absolute', left: 12, right: 12, bottom: 70,
-    backgroundColor: '#26282B', borderRadius: 14, elevation: 8,
-    shadowColor: '#000', shadowOpacity: 0.4, shadowRadius: 12, shadowOffset: { width: 0, height: -2 },
-    borderWidth: 1, borderColor: 'rgba(255,255,255,0.1)', maxHeight: 220, overflow: 'hidden',
-  },
-  dropdownItem: {
-    flexDirection: 'row', alignItems: 'center', gap: 10,
-    paddingHorizontal: 14, paddingVertical: 10,
-    borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: 'rgba(255,255,255,0.08)',
-  },
-  dropdownItemSelected: { backgroundColor: 'rgba(168,85,247,0.15)' },
-  dropdownAvatar: { width: 34, height: 34, borderRadius: 17 },
-  dropdownAvatarFallback: { backgroundColor: 'rgba(255,255,255,0.1)', alignItems: 'center', justifyContent: 'center' },
-  dropdownInitial: { fontSize: 14, fontWeight: '700', color: '#A855F7' },
-  dropdownName: { fontSize: 13, fontWeight: '600', color: '#FFFFFF', flex: 1 },
-  dropdownNameSelected: { color: '#A855F7' },
-  hostChip: { backgroundColor: '#7A0EED', borderRadius: 6, paddingHorizontal: 6, paddingVertical: 2 },
-  hostChipText: { fontSize: 10, fontWeight: '800', color: '#fff', letterSpacing: 0.3 },
-
-  // Qty dropdown
-  qtyDropdown: {
-    position: 'absolute', right: 60, bottom: 70,
-    backgroundColor: '#26282B', borderRadius: 12, elevation: 8,
-    shadowColor: '#000', shadowOpacity: 0.4, shadowRadius: 10, shadowOffset: { width: 0, height: -2 },
-    borderWidth: 1, borderColor: 'rgba(255,255,255,0.1)',
-  },
-  qtyList: { paddingHorizontal: 8, paddingVertical: 10, gap: 6 },
-  qtyItem: { width: 44, height: 44, borderRadius: 10, backgroundColor: '#33353A', alignItems: 'center', justifyContent: 'center' },
   qtyItemSelected: { backgroundColor: '#7A0EED' },
   qtyItemText: { fontSize: 13, fontWeight: '700', color: RC.numberOnDark },
-  qtyItemTextSelected: { color: RC.numberOnDark },
+  qtyItemTextSelected: { color: '#FFFFFF' },
+  sendBtn: { width: 44, height: 44, borderRadius: 10, backgroundColor: '#7A0EED', alignItems: 'center', justifyContent: 'center' },
+  sendBtnDisabled: { backgroundColor: 'rgba(255,255,255,0.15)' },
 });

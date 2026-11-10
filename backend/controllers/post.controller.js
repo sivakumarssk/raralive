@@ -157,11 +157,124 @@ async function getFeed(req, res, next) {
   } catch (err) { next(err); }
 }
 
+/** GET /api/posts/:id — one post (shared links and the post page open this) */
+async function getPost(req, res, next) {
+  try {
+    if (!isUuid(req.params.id)) return res.status(404).json({ success: false, message: 'Post not found.' });
+    const post = await getPostWithMedia(req.params.id);
+    if (!post) return res.status(404).json({ success: false, message: 'Post not found.' });
+    return res.json({ success: true, data: post });
+  } catch (err) { next(err); }
+}
+
 /** GET /api/posts/my — current user's posts */
 async function getMyPosts(req, res, next) {
   try {
     const r = await db.query(`${POST_SELECT} WHERE p.user_id = $1 ORDER BY p.created_at DESC`, [req.user.id]);
     return res.json({ success: true, data: r.rows });
+  } catch (err) { next(err); }
+}
+
+// Saved posts are private to the user who saved them (shown on their own
+// profile only) — unlike likes, there's no public count.
+let savesReady = null;
+function ensureSavesTable() {
+  if (!savesReady) {
+    savesReady = db.query(`
+    CREATE TABLE IF NOT EXISTS post_saves (
+      post_id    UUID NOT NULL REFERENCES posts(id) ON DELETE CASCADE,
+      user_id    UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      PRIMARY KEY (post_id, user_id)
+    );
+    CREATE INDEX IF NOT EXISTS idx_post_saves_user ON post_saves (user_id, created_at DESC);
+    `).catch((err) => { savesReady = null; throw err; });
+  }
+  return savesReady;
+}
+
+/** POST /api/posts/:id/save — toggle save */
+async function toggleSave(req, res, next) {
+  try {
+    if (!isUuid(req.params.id)) return res.status(404).json({ success: false, message: 'Post not found.' });
+    await ensureSavesTable();
+    const removed = await db.query(
+      'DELETE FROM post_saves WHERE post_id=$1 AND user_id=$2', [req.params.id, req.user.id]
+    );
+    if (removed.rowCount) return res.json({ success: true, data: { saved: false } });
+    const added = await db.query(
+      `INSERT INTO post_saves (post_id, user_id)
+       SELECT id, $2 FROM posts WHERE id = $1
+       ON CONFLICT DO NOTHING`,
+      [req.params.id, req.user.id]
+    );
+    if (!added.rowCount) return res.status(404).json({ success: false, message: 'Post not found.' });
+    return res.json({ success: true, data: { saved: true } });
+  } catch (err) { next(err); }
+}
+
+/** GET /api/posts/saved — the current user's saved posts, most recently saved first */
+async function getSavedPosts(req, res, next) {
+  try {
+    await ensureSavesTable();
+    const r = await db.query(
+      `${POST_SELECT}
+       JOIN post_saves ps ON ps.post_id = p.id AND ps.user_id = $1
+       ORDER BY ps.created_at DESC`,
+      [req.user.id]
+    );
+    return res.json({ success: true, data: r.rows });
+  } catch (err) { next(err); }
+}
+
+/**
+ * GET /api/posts/search?q=&suggest=1
+ * People by name or @username, posts by tag name (admin tags and older
+ * free-text tags), and the matching tag names. `suggest=1` is the light
+ * version used while typing: people + tags, no posts.
+ */
+async function search(req, res, next) {
+  try {
+    // "#music" and "music" search the same; % and _ are literal, not wildcards
+    const q = String(req.query.q ?? '').trim().replace(/^[#@]+/, '').slice(0, 50);
+    if (!q) return res.json({ success: true, data: { users: [], tags: [], posts: [] } });
+    const like = `%${q.replace(/[\\%_]/g, (c) => `\\${c}`)}%`;
+    const prefix = `${q.replace(/[\\%_]/g, (c) => `\\${c}`)}%`;
+    const suggest = req.query.suggest === '1';
+
+    const [users, tags, posts] = await Promise.all([
+      db.query(
+        `SELECT u.id, u.full_name, u.username, u.avatar_url, u.gender,
+                (SELECT COUNT(*)::int FROM user_follows f WHERE f.following_id = u.id) AS followers_count
+         FROM users u
+         WHERE (u.username ILIKE $1 OR u.full_name ILIKE $1)
+           AND (u.username IS NOT NULL OR u.full_name IS NOT NULL)
+         ORDER BY (u.username ILIKE $2 OR u.full_name ILIKE $2) DESC, followers_count DESC, u.created_at DESC
+         LIMIT $3`,
+        [like, prefix, suggest ? 5 : 20]
+      ),
+      db.query(
+        `SELECT t.id, t.name, t.parent_id,
+                (SELECT COUNT(*)::int FROM post_tag_links l WHERE l.tag_id = t.id) AS posts_count
+         FROM post_tags t
+         WHERE t.is_active AND t.name ILIKE $1
+         ORDER BY (t.name ILIKE $2) DESC, posts_count DESC, t.name
+         LIMIT 8`,
+        [like, prefix]
+      ),
+      suggest ? { rows: [] } : db.query(
+        `${POST_SELECT}
+         WHERE EXISTS (
+                 SELECT 1 FROM post_tag_links l JOIN post_tags t ON t.id = l.tag_id
+                 WHERE l.post_id = p.id AND t.is_active AND t.name ILIKE $1)
+            OR EXISTS (SELECT 1 FROM unnest(p.tags) AS legacy(tag) WHERE ltrim(legacy.tag, '#') ILIKE $1)
+         ORDER BY p.created_at DESC
+         LIMIT 30`,
+        [like]
+      ),
+    ]);
+
+    return res.json({ success: true, data: { users: users.rows, tags: tags.rows, posts: posts.rows } });
   } catch (err) { next(err); }
 }
 
@@ -189,14 +302,16 @@ async function toggleLike(req, res, next) {
   } catch (err) { next(err); }
 }
 
-/** GET /api/posts/:id/liked — check if current user liked a post */
+/** GET /api/posts/:id/liked — whether the current user liked (and saved) a post */
 async function checkLiked(req, res, next) {
   try {
+    await ensureSavesTable();
     const r = await db.query(
-      'SELECT 1 FROM post_likes WHERE post_id=$1 AND user_id=$2',
+      `SELECT EXISTS (SELECT 1 FROM post_likes WHERE post_id=$1 AND user_id=$2) AS liked,
+              EXISTS (SELECT 1 FROM post_saves WHERE post_id=$1 AND user_id=$2) AS saved`,
       [req.params.id, req.user.id]
     );
-    return res.json({ success: true, data: { liked: r.rows.length > 0 } });
+    return res.json({ success: true, data: r.rows[0] });
   } catch (err) { next(err); }
 }
 
@@ -255,4 +370,4 @@ async function getUserPosts(req, res, next) {
   } catch (err) { next(err); }
 }
 
-module.exports = { createPost, getFeed, getMyPosts, getUserPosts, toggleLike, checkLiked, addComment, getComments };
+module.exports = { search, getPost, createPost, getFeed, getMyPosts, getUserPosts, toggleLike, checkLiked, toggleSave, getSavedPosts, addComment, getComments };

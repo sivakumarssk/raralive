@@ -175,7 +175,6 @@ export function NotificationsScreen() {
         backgroundColor="#FFFFFF"
         noBottomShadow
       />
-      <View style={styles.headerGap} />
 
       {loading ? (
         <View style={styles.centerWrap}>
@@ -203,11 +202,11 @@ export function NotificationsScreen() {
 
 const styles = StyleSheet.create({
   safe:            { flex: 1, backgroundColor: '#FFFFFF' },
-  headerGap:       { height: 8, backgroundColor: '#F5F3FA' },
   centerWrap:      { flex: 1, alignItems: 'center', justifyContent: 'center', gap: 12, paddingHorizontal: 40 },
   emptyTitle:      { fontSize: 18, fontWeight: '700', color: '#1C1E22' },
   emptySub:        { fontSize: 13, color: '#ABADB2', textAlign: 'center', lineHeight: 20 },
-  list:            { paddingHorizontal: 16, paddingTop: 12, paddingBottom: 32 },
+  // Straight under the header, like the Live page — no band, just a little room
+  list:            { paddingHorizontal: 16, paddingTop: 4, paddingBottom: 32 },
   separator:       { height: StyleSheet.hairlineWidth, backgroundColor: '#E8E6F0', marginLeft: 78 },
 
   notifRow: {

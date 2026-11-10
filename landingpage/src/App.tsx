@@ -8,6 +8,7 @@ import Terms from './pages/Terms'
 import DeleteAccount from './pages/DeleteAccount'
 import ChildSafety from './pages/ChildSafety'
 import NotFound from './pages/NotFound'
+import OpenInApp from './pages/OpenInApp'
 
 function ScrollToTop() {
   const { pathname, hash } = useLocation()
@@ -33,6 +34,10 @@ export default function App() {
           <Route path="/terms" element={<Terms />} />
           <Route path="/delete-account" element={<DeleteAccount />} />
           <Route path="/child-safety" element={<ChildSafety />} />
+          {/* Shared from the app — open it there, or get it on Google Play */}
+          <Route path="/user/:id" element={<OpenInApp kind="user" />} />
+          <Route path="/room/:id" element={<OpenInApp kind="room" />} />
+          <Route path="/post/:id" element={<OpenInApp kind="post" />} />
           <Route path="*" element={<NotFound />} />
         </Routes>
       </main>

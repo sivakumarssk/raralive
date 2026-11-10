@@ -1,4 +1,4 @@
-import { Ionicons } from '@expo/vector-icons';
+import { Ionicons, MaterialCommunityIcons } from '@expo/vector-icons';
 import { LinearGradient } from 'expo-linear-gradient';
 import { useEffect, useState } from 'react';
 import {
@@ -17,13 +17,32 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { BASE_URL, type MyRoom } from '@/services/api';
 import { authStore } from '@/store/auth-store';
+import { ROOM_NAME_MAX, charCount, limitChars } from '@/utils/text-limits';
+import { ROOM_TAGS } from '../room-tags';
 import { LocationPicker, type PickedLocation } from './location-picker';
 
-const TAGS = [
-  'Music', 'Gaming', 'Talk', 'Comedy', 'Podcast',
-  'EDM', 'Hip-Hop', 'Sports', 'News', 'Tech',
-  'Chill', 'Study', 'Fitness', 'Art', 'Food',
-];
+const BRAND_GRADIENT = ['#7A0EED', '#FF1A8C'] as const;
+const MAX_TAGS = 2;
+
+// One scale for the whole sheet so every row lines up.
+const C = {
+  brand: '#7A0EED',
+  label: '#6A11D8',
+  title: '#1E1446',
+  text: '#2E1F5E',
+  muted: '#8C8AA0',
+  placeholder: '#A9A6BC',
+  border: '#DDD0F5',
+  surface: '#F7F4FD',
+  surfaceActive: '#F3E9FF',
+  error: '#E2336B',
+};
+const FIELD_H = 48;   // inputs, location and the Create button
+const RADIUS = 14;    // every box
+const PAD_X = 14;     // inner left/right padding of every box
+const ICON = 20;      // leading icon in every box
+const ROW_GAP = 10;   // icon ↔ text inside a box
+const SECTION_GAP = 18;
 
 const BASE = BASE_URL;
 
@@ -66,10 +85,18 @@ export function CreateRoomSheet({ visible, onClose, hasPublic, hasPrivate, onCre
     if (visible) setVisibility(hasPublic ? 'private' : 'public');
   }, [visible, hasPublic]);
 
+  // Tags are optional, at most MAX_TAGS.
   const toggleTag = (tag: string) => {
-    setSelectedTags(prev =>
-      prev.includes(tag) ? prev.filter(t => t !== tag) : [...prev, tag]
-    );
+    if (selectedTags.includes(tag)) {
+      setSelectedTags(prev => prev.filter(t => t !== tag));
+      if (errors.tags) setErrors(p => ({ ...p, tags: undefined }));
+      return;
+    }
+    if (selectedTags.length >= MAX_TAGS) {
+      setErrors(p => ({ ...p, tags: `You can pick up to ${MAX_TAGS} tags.` }));
+      return;
+    }
+    setSelectedTags(prev => [...prev, tag]);
     if (errors.tags) setErrors(p => ({ ...p, tags: undefined }));
   };
 
@@ -78,7 +105,6 @@ export function CreateRoomSheet({ visible, onClose, hasPublic, hasPrivate, onCre
     if (!name.trim()) next.name = 'Room name is required.';
     if (visibility === 'public' && !agentCode.trim()) next.agentCode = 'Agent code is required for public rooms.';
     if (!location) next.location = 'Select your location.';
-    if (selectedTags.length === 0) next.tags = 'Select at least one tag.';
     setErrors(next);
     return Object.keys(next).length === 0;
   };
@@ -138,9 +164,12 @@ export function CreateRoomSheet({ visible, onClose, hasPublic, hasPrivate, onCre
           <View style={sheet.handle} />
 
           <View style={sheet.headerRow}>
+            <LinearGradient colors={BRAND_GRADIENT} start={{ x: 0, y: 0 }} end={{ x: 1, y: 1 }} style={sheet.headerIcon}>
+              <MaterialCommunityIcons name="chat" size={18} color="#FFFFFF" />
+            </LinearGradient>
             <Text style={sheet.headerTitle}>Create Chat Room</Text>
             <TouchableOpacity onPress={handleClose} style={sheet.closeBtn} hitSlop={8}>
-              <Ionicons name="close" size={20} color="#60626A" />
+              <Ionicons name="close" size={18} color={C.text} />
             </TouchableOpacity>
           </View>
 
@@ -153,21 +182,21 @@ export function CreateRoomSheet({ visible, onClose, hasPublic, hasPrivate, onCre
             <View style={sheet.field}>
               <Text style={sheet.label}>Room name</Text>
               <View style={[sheet.inputBox, errors.name && sheet.inputBoxError]}>
-                <Ionicons name="chatbubbles-outline" size={18} color="#7A0EED" />
+                <Ionicons name="chatbubble-outline" size={ICON} color={C.brand} />
                 <TextInput
                   style={sheet.input}
                   placeholder="Give your room a name"
-                  placeholderTextColor="#ABADB2"
+                  placeholderTextColor={C.placeholder}
                   value={name}
                   onChangeText={v => {
-                    setName(v);
+                    // Any text (emoji, fancy fonts) — counted as people see it
+                    setName(limitChars(v, ROOM_NAME_MAX));
                     if (errors.name) setErrors(p => ({ ...p, name: undefined }));
                   }}
-                  maxLength={40}
                   returnKeyType="done"
                   underlineColorAndroid="transparent"
                 />
-                <Text style={sheet.charCount}>{name.length}/40</Text>
+                <Text style={sheet.charCount}>{charCount(name)}/{ROOM_NAME_MAX}</Text>
               </View>
               {errors.name ? <Text style={sheet.errorText}>{errors.name}</Text> : null}
             </View>
@@ -185,9 +214,9 @@ export function CreateRoomSheet({ visible, onClose, hasPublic, hasPrivate, onCre
                       <View style={[sheet.radioOuter, visibility === 'public' && sheet.radioOuterActive]}>
                         {visibility === 'public' && <View style={sheet.radioInner} />}
                       </View>
-                      <Ionicons name="earth-outline" size={20} color={visibility === 'public' ? '#7A0EED' : '#ABADB2'} />
+                      <Ionicons name="earth" size={ICON} color={visibility === 'public' ? C.brand : C.muted} />
                       <View style={sheet.radioTextBlock}>
-                        <Text style={[sheet.radioTitle, visibility === 'public' && sheet.radioTitleActive]}>Public</Text>
+                        <Text numberOfLines={1} style={[sheet.radioTitle, visibility === 'public' && sheet.radioTitleActive]}>Public</Text>
                         <Text style={sheet.radioSub}>Anyone can join</Text>
                       </View>
                     </TouchableOpacity>
@@ -201,9 +230,9 @@ export function CreateRoomSheet({ visible, onClose, hasPublic, hasPrivate, onCre
                       <View style={[sheet.radioOuter, visibility === 'private' && sheet.radioOuterActive]}>
                         {visibility === 'private' && <View style={sheet.radioInner} />}
                       </View>
-                      <Ionicons name="lock-closed-outline" size={20} color={visibility === 'private' ? '#7A0EED' : '#ABADB2'} />
+                      <Ionicons name="lock-closed" size={ICON} color={visibility === 'private' ? C.brand : C.muted} />
                       <View style={sheet.radioTextBlock}>
-                        <Text style={[sheet.radioTitle, visibility === 'private' && sheet.radioTitleActive]}>Private</Text>
+                        <Text numberOfLines={1} style={[sheet.radioTitle, visibility === 'private' && sheet.radioTitleActive]}>Private</Text>
                         <Text style={sheet.radioSub}>Invite only</Text>
                       </View>
                     </TouchableOpacity>
@@ -222,11 +251,11 @@ export function CreateRoomSheet({ visible, onClose, hasPublic, hasPrivate, onCre
                   </View>
                 </View>
                 <View style={[sheet.inputBox, errors.agentCode && sheet.inputBoxError]}>
-                  <Ionicons name="key-outline" size={18} color="#7A0EED" />
+                  <MaterialCommunityIcons name="card-account-details" size={ICON} color={C.brand} />
                   <TextInput
                     style={sheet.input}
                     placeholder="Enter your agent code"
-                    placeholderTextColor="#ABADB2"
+                    placeholderTextColor={C.placeholder}
                     value={agentCode}
                     onChangeText={v => {
                       setAgentCode(v);
@@ -248,30 +277,41 @@ export function CreateRoomSheet({ visible, onClose, hasPublic, hasPrivate, onCre
                 onPress={() => setShowLocationPicker(true)}
                 activeOpacity={0.85}
                 style={[sheet.locationSelect, location && sheet.locationSelectFilled, errors.location && sheet.inputBoxError]}>
-                <Ionicons name="location-outline" size={18} color="#7A0EED" />
+                <MaterialCommunityIcons name="map-marker" size={ICON} color={C.brand} />
                 <Text style={[sheet.locationText, !location && sheet.locationPlaceholder]} numberOfLines={1}>
                   {location ? `${location.city}, ${location.state}` : 'Select state & city'}
                 </Text>
-                <Ionicons name="chevron-down" size={16} color="#ABADB2" />
+                <Ionicons name="chevron-forward" size={16} color={C.brand} />
               </TouchableOpacity>
               {errors.location ? <Text style={sheet.errorText}>{errors.location}</Text> : null}
             </View>
 
             {/* Tags */}
             <View style={sheet.field}>
-              <Text style={sheet.label}>Select tags</Text>
-              <Text style={sheet.hint}>Pick tags that describe your room.</Text>
+              <View style={sheet.labelBlock}>
+                <Text style={sheet.label}>Select tags</Text>
+                <Text style={sheet.hint}>Optional · pick up to {MAX_TAGS} tags that describe your room.</Text>
+              </View>
               <View style={sheet.tagsWrap}>
-                {TAGS.map(tag => {
-                  const active = selectedTags.includes(tag);
+                {ROOM_TAGS.map(tag => {
+                  const active = selectedTags.includes(tag.label);
+                  const atLimit = !active && selectedTags.length >= MAX_TAGS;
+                  const content = (
+                    <>
+                      <MaterialCommunityIcons name={tag.icon} size={14} color={active ? '#FFFFFF' : tag.color} />
+                      <Text style={[sheet.tagText, active && sheet.tagTextActive]}>{tag.label}</Text>
+                      {active && <Ionicons name="checkmark" size={12} color="#FFFFFF" />}
+                    </>
+                  );
                   return (
-                    <TouchableOpacity
-                      key={tag}
-                      onPress={() => toggleTag(tag)}
-                      activeOpacity={0.8}
-                      style={[sheet.tag, active && sheet.tagActive]}>
-                      {active && <Ionicons name="checkmark" size={12} color="#FFFFFF" style={sheet.tagCheck} />}
-                      <Text style={[sheet.tagText, active && sheet.tagTextActive]}>{tag}</Text>
+                    <TouchableOpacity key={tag.label} onPress={() => toggleTag(tag.label)} activeOpacity={0.8}>
+                      {active ? (
+                        <LinearGradient colors={BRAND_GRADIENT} start={{ x: 0, y: 0.5 }} end={{ x: 1, y: 0.5 }} style={[sheet.tag, sheet.tagActive]}>
+                          {content}
+                        </LinearGradient>
+                      ) : (
+                        <View style={[sheet.tag, atLimit && sheet.tagDimmed]}>{content}</View>
+                      )}
                     </TouchableOpacity>
                   );
                 })}
@@ -281,7 +321,7 @@ export function CreateRoomSheet({ visible, onClose, hasPublic, hasPrivate, onCre
 
             {errors.api ? (
               <View style={sheet.apiErrorCard}>
-                <Ionicons name="alert-circle-outline" size={16} color="#E14C57" />
+                <Ionicons name="alert-circle-outline" size={16} color={C.error} />
                 <Text style={sheet.apiErrorText}>{errors.api}</Text>
               </View>
             ) : null}
@@ -290,13 +330,13 @@ export function CreateRoomSheet({ visible, onClose, hasPublic, hasPrivate, onCre
 
           <TouchableOpacity onPress={handleCreate} activeOpacity={0.9} style={sheet.createBtn} disabled={submitting}>
             <LinearGradient
-              colors={['#7A0EED', '#B50357']}
+              colors={BRAND_GRADIENT}
               start={{ x: 0, y: 0.5 }}
               end={{ x: 1, y: 0.5 }}
               style={sheet.createBtnGradient}>
               {submitting
                 ? <ActivityIndicator size="small" color="#FFFFFF" />
-                : <Ionicons name="add-circle-outline" size={20} color="#FFFFFF" />}
+                : <Ionicons name="add-circle-outline" size={ICON} color="#FFFFFF" />}
               <Text style={sheet.createBtnLabel}>{submitting ? 'Creating…' : 'Create Room'}</Text>
             </LinearGradient>
           </TouchableOpacity>
@@ -323,11 +363,11 @@ const sheet = StyleSheet.create({
   overlay: { ...StyleSheet.absoluteFillObject, backgroundColor: 'rgba(0,0,0,0.45)' },
   kavWrapper: { flex: 1, justifyContent: 'flex-end' },
   container: {
-    backgroundColor: '#FFFFFF',
+    backgroundColor: '#FCFBFF',
     borderTopLeftRadius: 28,
     borderTopRightRadius: 28,
-    paddingHorizontal: 20,
-    paddingTop: 12,
+    paddingHorizontal: 18,
+    paddingTop: 10,
     maxHeight: '92%',
     shadowColor: '#000',
     shadowOpacity: 0.18,
@@ -335,71 +375,88 @@ const sheet = StyleSheet.create({
     shadowOffset: { width: 0, height: -6 },
     elevation: 20,
   },
-  handle: { width: 40, height: 4, borderRadius: 2, backgroundColor: '#E0DDED', alignSelf: 'center', marginBottom: 16 },
-  headerRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: 20 },
-  headerTitle: { fontSize: 18, fontWeight: '800', color: '#1C1E22', letterSpacing: -0.3 },
-  closeBtn: { width: 32, height: 32, borderRadius: 16, backgroundColor: '#F4F5F8', alignItems: 'center', justifyContent: 'center' },
-  scrollContent: { gap: 20, paddingBottom: 12 },
+  handle: { width: 40, height: 4, borderRadius: 2, backgroundColor: '#D9D3EA', alignSelf: 'center', marginBottom: 14 },
+
+  // Header
+  headerRow: { flexDirection: 'row', alignItems: 'center', gap: ROW_GAP, marginBottom: SECTION_GAP },
+  headerIcon: { width: 32, height: 32, borderRadius: 10, alignItems: 'center', justifyContent: 'center' },
+  headerTitle: { flex: 1, fontSize: 18, fontWeight: '800', color: C.title, letterSpacing: -0.3 },
+  closeBtn: { width: 32, height: 32, borderRadius: 16, backgroundColor: '#EFEBF8', alignItems: 'center', justifyContent: 'center' },
+
+  // Sections
+  scrollContent: { gap: SECTION_GAP, paddingBottom: 4 },
   field: { gap: 8 },
   labelRow: { flexDirection: 'row', alignItems: 'center', gap: 8 },
-  label: { fontSize: 12, fontWeight: '700', color: '#7A0EED', letterSpacing: 0.2 },
-  requiredBadge: { backgroundColor: '#FFF0F1', paddingHorizontal: 7, paddingVertical: 2, borderRadius: 5 },
-  requiredText: { fontSize: 9, fontWeight: '700', color: '#E14C57', letterSpacing: 0.5 },
+  labelBlock: { gap: 4 },
+  label: { fontSize: 13, fontWeight: '700', color: C.label },
+  requiredBadge: { backgroundColor: '#FFE9F0', paddingHorizontal: 8, paddingVertical: 2, borderRadius: 8 },
+  requiredText: { fontSize: 10, fontWeight: '700', color: C.error },
+  hint: { fontSize: 12, color: C.muted },
+  errorText: { fontSize: 12, fontWeight: '500', color: C.error },
+
+  // Text inputs
   inputBox: {
-    height: 50, borderRadius: 12, backgroundColor: '#F7F5FF',
-    borderWidth: 1, borderColor: 'transparent',
-    flexDirection: 'row', alignItems: 'center', paddingHorizontal: 14, gap: 10,
+    height: FIELD_H, borderRadius: RADIUS, backgroundColor: '#FFFFFF',
+    borderWidth: 1.2, borderColor: C.border,
+    flexDirection: 'row', alignItems: 'center', paddingHorizontal: PAD_X, gap: ROW_GAP,
   },
-  inputBoxError: { borderColor: '#E14C57' },
-  input: { flex: 1, fontSize: 14, color: '#1C1E22' },
-  charCount: { fontSize: 11, color: '#ABADB2', fontWeight: '500' },
-  hint: { fontSize: 11, color: '#ABADB2', lineHeight: 16 },
-  errorText: { fontSize: 12, color: '#E14C57', fontWeight: '500' },
+  inputBoxError: { borderColor: '#F07A9C' },
+  input: { flex: 1, fontSize: 14, fontWeight: '500', color: C.text, padding: 0 },
+  charCount: { fontSize: 12, fontWeight: '500', color: C.muted },
+
+  // Visibility
+  radioRow: { flexDirection: 'row', gap: ROW_GAP },
+  radioCard: {
+    // A little taller than the inputs so the subtitle shows in full
+    flex: 1, minHeight: 56, flexDirection: 'row', alignItems: 'center', gap: ROW_GAP,
+    paddingHorizontal: PAD_X, paddingVertical: 8, borderRadius: RADIUS, backgroundColor: C.surface,
+    borderWidth: 1.2, borderColor: '#ECE7F7',
+  },
+  radioCardActive: { borderColor: C.brand, backgroundColor: C.surfaceActive },
+  radioOuter: { width: 18, height: 18, borderRadius: 9, borderWidth: 2, borderColor: '#B4AFC6', alignItems: 'center', justifyContent: 'center' },
+  radioOuterActive: { borderColor: C.brand },
+  radioInner: { width: 8, height: 8, borderRadius: 4, backgroundColor: C.brand },
+  radioTextBlock: { flex: 1 },
+  radioTitle: { fontSize: 14, fontWeight: '700', color: C.text },
+  radioTitleActive: { color: C.text },
+  radioSub: { fontSize: 11, color: C.muted },
+
+  // Location
+  locationSelect: {
+    height: FIELD_H, borderRadius: RADIUS, backgroundColor: C.surfaceActive,
+    borderWidth: 1.2, borderColor: '#E4D8F8',
+    flexDirection: 'row', alignItems: 'center', paddingHorizontal: PAD_X, gap: ROW_GAP,
+  },
+  locationSelectFilled: { borderColor: C.brand },
+  locationText: { flex: 1, fontSize: 14, fontWeight: '600', color: C.text },
+  locationPlaceholder: { color: C.label },
+
+  // Tags — same weight selected or not, so picking one doesn't shift the row
+  tagsWrap: { flexDirection: 'row', flexWrap: 'wrap', gap: 8 },
+  tag: {
+    flexDirection: 'row', alignItems: 'center', gap: 6,
+    height: 32, paddingHorizontal: 10,
+    borderRadius: 16, backgroundColor: C.surface,
+    borderWidth: 1.2, borderColor: '#ECE7F7',
+  },
+  tagActive: { borderColor: 'transparent' },
+  tagDimmed: { opacity: 0.45 },
+  tagText: { fontSize: 12, fontWeight: '600', color: C.text },
+  tagTextActive: { color: '#FFFFFF' },
+
   apiErrorCard: {
     flexDirection: 'row', alignItems: 'center', gap: 8,
-    backgroundColor: '#FFF0F1', borderRadius: 10, padding: 12,
-    borderWidth: 1, borderColor: '#FFCDD0',
+    backgroundColor: '#FFF0F3', borderRadius: RADIUS, paddingHorizontal: PAD_X, paddingVertical: 12,
+    borderWidth: 1, borderColor: '#FFCDD8',
   },
-  apiErrorText: { flex: 1, fontSize: 13, color: '#E14C57', fontWeight: '500', lineHeight: 18 },
-  radioRow: { flexDirection: 'row', gap: 12 },
-  radioCard: {
-    flex: 1, flexDirection: 'row', alignItems: 'center', gap: 10,
-    padding: 14, borderRadius: 14, backgroundColor: '#F7F5FF',
-    borderWidth: 1.5, borderColor: 'transparent',
-  },
-  radioCardActive: { borderColor: '#7A0EED', backgroundColor: '#F4EEFF' },
-  radioOuter: { width: 18, height: 18, borderRadius: 9, borderWidth: 2, borderColor: '#ABADB2', alignItems: 'center', justifyContent: 'center' },
-  radioOuterActive: { borderColor: '#7A0EED' },
-  radioInner: { width: 8, height: 8, borderRadius: 4, backgroundColor: '#7A0EED' },
-  radioTextBlock: { flex: 1, gap: 1 },
-  radioTitle: { fontSize: 13, fontWeight: '600', color: '#60626A' },
-  radioTitleActive: { color: '#7A0EED', fontWeight: '700' },
-  radioSub: { fontSize: 11, color: '#ABADB2' },
-  // Same box as the text inputs above it
-  locationSelect: {
-    height: 50, borderRadius: 12, backgroundColor: '#F7F5FF',
-    borderWidth: 1, borderColor: 'transparent',
-    flexDirection: 'row', alignItems: 'center', paddingHorizontal: 14, gap: 10,
-  },
-  locationSelectFilled: { borderColor: '#7A0EED', backgroundColor: '#F4EEFF' },
-  locationText: { flex: 1, fontSize: 14, fontWeight: '500', color: '#1C1E22' },
-  locationPlaceholder: { color: '#ABADB2' },
-  tagsWrap: { flexDirection: 'row', flexWrap: 'wrap', gap: 8, marginTop: 4 },
-  tag: {
-    flexDirection: 'row', alignItems: 'center',
-    paddingHorizontal: 14, paddingVertical: 7,
-    borderRadius: 20, backgroundColor: '#F4F5F8',
-    borderWidth: 1, borderColor: 'transparent',
-  },
-  tagActive: { backgroundColor: '#7A0EED', borderColor: '#7A0EED' },
-  tagCheck: { marginRight: 4 },
-  tagText: { fontSize: 13, fontWeight: '500', color: '#60626A' },
-  tagTextActive: { color: '#FFFFFF', fontWeight: '600' },
+  apiErrorText: { flex: 1, fontSize: 13, fontWeight: '500', color: C.error, lineHeight: 18 },
+
+  // Create button
   createBtn: {
-    marginTop: 12, borderRadius: 48, overflow: 'hidden',
-    shadowColor: '#7A0EED', shadowOpacity: 0.28, shadowRadius: 12,
+    marginTop: 14, borderRadius: 24, overflow: 'hidden',
+    shadowColor: C.brand, shadowOpacity: 0.28, shadowRadius: 12,
     shadowOffset: { width: 0, height: 4 }, elevation: 4,
   },
-  createBtnGradient: { height: 52, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8 },
-  createBtnLabel: { color: '#FFFFFF', fontSize: 16, fontWeight: '700' },
+  createBtnGradient: { height: FIELD_H, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: ROW_GAP },
+  createBtnLabel: { color: '#FFFFFF', fontSize: 15, fontWeight: '700' },
 });

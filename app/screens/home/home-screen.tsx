@@ -26,13 +26,18 @@ import {
 } from 'react-native';
 import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
 import { AppScreenHeader } from '@/components/ui/app-screen-header';
+import { BoldIcon } from '@/components/ui/bold-icon';
+import { sharePost } from '@/utils/share';
 import { apiPostTags, apiTrendingPostTags, BASE_URL, MEDIA_BASE, type PostTag } from '@/services/api';
 import { authStore } from '@/store/auth-store';
 import { earningsConfigStore } from '@/store/earnings-config-store';
 import { BannerCarousel, fetchBanners, type Banner } from '@/screens/chat-rooms/components/banner-carousel';
 import { avatarSource } from '@/utils/default-avatar';
 
-const COIN_IMG = require('@/assets/tabs/coin.png') as number;
+// Post action icons drawn as thick as the bottom tab bar's (same line weight
+// on screen at these smaller sizes) — size unchanged.
+export const POST_ICON_WEIGHT = 12;
+
 const { width: SCREEN_W } = Dimensions.get('window');
 
 // ── Types ─────────────────────────────────────────────────────────────────────
@@ -44,7 +49,7 @@ type PostMedia = {
   sort_order: number;
 };
 
-type FeedPost = {
+export type FeedPost = {
   id: string;
   caption: string | null;
   allow_comments: boolean;
@@ -78,7 +83,7 @@ function resolveMedia(url: string | null | undefined): string | null {
   return `${MEDIA_BASE}/${url.replace(/^\/+/, '')}`;
 }
 
-function timeAgo(dateStr: string) {
+export function timeAgo(dateStr: string) {
   const diff = Date.now() - new Date(dateStr).getTime();
   const m = Math.floor(diff / 60000);
   if (m < 1) return 'just now';
@@ -95,7 +100,7 @@ function avatarColor(str: string) {
   return AVATAR_COLORS[h % AVATAR_COLORS.length];
 }
 
-function formatCount(n: number) {
+export function formatCount(n: number) {
   return n >= 1000 ? `${(n / 1000).toFixed(1)}k` : String(n);
 }
 
@@ -139,15 +144,16 @@ function HeaderRight() {
 
   return (
     <View style={hdr.row}>
-      <TouchableOpacity style={hdr.iconBtn} activeOpacity={0.75} hitSlop={8} onPress={() => router.push('/wallet' as any)}>
-        <Image source={COIN_IMG} style={hdr.coinImg} resizeMode="contain" />
+      <TouchableOpacity style={hdr.iconBtn} activeOpacity={0.75} hitSlop={8} onPress={() => router.push('/search' as never)} accessibilityLabel="Search">
+        <BoldIcon name="search-outline" size={24} color="#1C1E22" weight={7} />
       </TouchableOpacity>
       <TouchableOpacity
         style={hdr.iconBtn}
         activeOpacity={0.75}
         hitSlop={8}
         onPress={() => router.push('/notifications' as any)}>
-        <Ionicons name="notifications-outline" size={24} color="#1C1E22" />
+        {/* Weight 7 at this size = the bottom tab bar's line thickness */}
+        <BoldIcon name="notifications-outline" size={24} color="#1C1E22" weight={7} />
         {unreadCount > 0 && (
           <View style={hdr.badge}>
             <Text style={hdr.badgeText}>{badgeLabel}</Text>
@@ -222,7 +228,7 @@ function TagChips({ title, chips, selected, onSelect }: {
 
 // ── Avatar ────────────────────────────────────────────────────────────────────
 
-function Avatar({ initial, color, size = 42, uri }: {
+export function Avatar({ initial, color, size = 42, uri }: {
   initial: string; color: string; size?: number; uri?: string | null;
 }) {
   return (
@@ -263,7 +269,7 @@ type CommentsSheetProps = {
   onCountChange: (postId: string, n: number) => void;
 };
 
-function CommentsSheet({ visible, postId, allowComments, onClose, onCountChange }: CommentsSheetProps) {
+export function CommentsSheet({ visible, postId, allowComments, onClose, onCountChange }: CommentsSheetProps) {
   const insets = useSafeAreaInsets();
   const { height: SCREEN_H } = Dimensions.get('window');
   // Half the screen; the comment list scrolls inside it
@@ -479,19 +485,26 @@ function safePlayer(fn: () => void) {
   try { fn(); } catch { /* player already released */ }
 }
 
-function PostCard({ post, currentUserId, onOpenComments, following, onFollowChange, onTagPress }: {
-  post: FeedPost;
+/**
+ * Everything a post does — like, save, follow, download, double-tap heart,
+ * video play/pause/autoplay — shared by the feed card (PostCard) and the
+ * full-screen post page (PostReel), so both behave the same.
+ */
+export function usePostInteractions(post: FeedPost, { currentUserId, following, onFollowChange, onOpenPost, autoPlay = false }: {
   currentUserId: string;
-  onOpenComments: (postId: string, allowComments: boolean) => void;
   following: boolean;
   onFollowChange: (userId: string, nowFollowing: boolean) => void;
-  onTagPress?: (tag: { id: string; parent_id: string | null }) => void;
+  /** Single tap on the media opens the post's own page (instead of play/pause). */
+  onOpenPost?: () => void;
+  /** A video starts playing as soon as its screen is in view. */
+  autoPlay?: boolean;
 }) {
   const firstMedia = post.media?.[0];
   const mediaUri = firstMedia ? resolveMedia(firstMedia.media_url) : null;
   const isVideo = firstMedia?.media_type === 'video';
 
   const [liked, setLiked] = useState(false);
+  const [saved, setSaved] = useState(false);
   const [likesCount, setLikesCount] = useState(post.likes_count);
   const [commentsCount] = useState(post.comments_count);
   const [downloading, setDownloading] = useState(false);
@@ -534,19 +547,24 @@ function PostCard({ post, currentUserId, onOpenComments, following, onFollowChan
     );
   }, [mediaUri, isVideo]);
 
+  // autoPlay: start the video when the screen comes into view (the post page).
   // Pause video when user switches away from this tab. This cleanup also runs
   // when the card unmounts (reload, list recycling), and by then
   // useVideoPlayer may already have released the native player — calling
   // pause() on it throws "shared object already released", so guard it.
   useFocusEffect(
     useCallback(() => {
+      if (autoPlay && isVideo && videoPlayer) {
+        safePlayer(() => videoPlayer.play());
+        setVideoPlaying(true);
+      }
       return () => {
         if (isVideo && videoPlayer) {
           safePlayer(() => videoPlayer.pause());
           setVideoPlaying(false);
         }
       };
-    }, [isVideo, videoPlayer]),
+    }, [autoPlay, isVideo, videoPlayer]),
   );
 
   // Fetch liked state once on mount
@@ -557,7 +575,7 @@ function PostCard({ post, currentUserId, onOpenComments, following, onFollowChan
     if (!token) return;
     fetch(`${BASE_URL}/posts/${post.id}/liked`, { headers: { Authorization: `Bearer ${token}` } })
       .then(r => r.json())
-      .then(j => { if (j.success) setLiked(j.data.liked); })
+      .then(j => { if (j.success) { setLiked(j.data.liked); setSaved(!!j.data.saved); } })
       .catch(() => {});
   }, [post.id]);
 
@@ -609,6 +627,18 @@ function PostCard({ post, currentUserId, onOpenComments, following, onFollowChan
       });
   };
 
+  // Saved posts show in your profile's Saved tab. Optimistic, like the like button.
+  const handleSave = () => {
+    const token = authStore.getToken();
+    if (!token) return;
+    const wasSaved = saved;
+    setSaved(!wasSaved);
+    fetch(`${BASE_URL}/posts/${post.id}/save`, { method: 'POST', headers: { Authorization: `Bearer ${token}` } })
+      .then(r => r.json())
+      .then(j => { if (j.success) setSaved(j.data.saved); else setSaved(wasSaved); })
+      .catch(() => setSaved(wasSaved));
+  };
+
   const toggleVideo = () => {
     if (videoPlaying) {
       safePlayer(() => videoPlayer.pause());
@@ -646,6 +676,19 @@ function PostCard({ post, currentUserId, onOpenComments, following, onFollowChan
       return;
     }
     lastTapRef.current = now;
+    if (onOpenPost) {
+      // Single tap → the post's page (after the double-tap window, so a
+      // double tap still only likes). A playing video stops first.
+      singleTapTimer.current = setTimeout(() => {
+        singleTapTimer.current = null;
+        if (isVideo && videoPlaying) {
+          safePlayer(() => videoPlayer.pause());
+          setVideoPlaying(false);
+        }
+        onOpenPost();
+      }, DOUBLE_TAP_MS);
+      return;
+    }
     if (isVideo && !mediaError) {
       singleTapTimer.current = setTimeout(() => {
         singleTapTimer.current = null;
@@ -678,6 +721,36 @@ function PostCard({ post, currentUserId, onOpenComments, following, onFollowChan
       setDownloading(false);
     }
   };
+
+  return {
+    mediaUri, isVideo, mediaError, setMediaError, mediaHeight,
+    liked, saved, likesCount, commentsCount, downloading, followLoading, videoPlaying,
+    likeScale, bigHeartScale, bigHeartOpacity,
+    isOwnPost, displayName, initial, color, avatarUri, videoPlayer,
+    handleFollow, handleLike, handleSave, handleMediaTap, handleDownload,
+  };
+}
+
+export function PostCard({ post, currentUserId, onOpenComments, following, onFollowChange, onTagPress, onOpenPost, autoPlay = false }: {
+  post: FeedPost;
+  currentUserId: string;
+  onOpenComments: (postId: string, allowComments: boolean) => void;
+  following: boolean;
+  onFollowChange: (userId: string, nowFollowing: boolean) => void;
+  onTagPress?: (tag: { id: string; parent_id: string | null }) => void;
+  /** Single tap on the media opens the post's own page (the feed passes it;
+   *  the post page itself doesn't, so there a tap plays/pauses a video). */
+  onOpenPost?: () => void;
+  /** A video starts playing as soon as its screen is in view (the post page). */
+  autoPlay?: boolean;
+}) {
+  const {
+    mediaUri, isVideo, mediaError, setMediaError, mediaHeight,
+    liked, saved, likesCount, commentsCount, downloading, followLoading, videoPlaying,
+    likeScale, bigHeartScale, bigHeartOpacity,
+    isOwnPost, displayName, initial, color, avatarUri, videoPlayer,
+    handleFollow, handleLike, handleSave, handleMediaTap, handleDownload,
+  } = usePostInteractions(post, { currentUserId, following, onFollowChange, onOpenPost, autoPlay });
 
   return (
     <View style={card.container}>
@@ -764,30 +837,40 @@ function PostCard({ post, currentUserId, onOpenComments, following, onFollowChan
         <View style={card.actionsLeft}>
           <TouchableOpacity style={card.actionBtn} onPress={handleLike} activeOpacity={0.8}>
             <Animated.View style={{ transform: [{ scale: likeScale }] }}>
-              <Ionicons
+              <BoldIcon
                 name={liked ? 'heart' : 'heart-outline'}
                 size={22}
                 color={liked ? '#E14C57' : '#60626A'}
+                weight={POST_ICON_WEIGHT}
               />
             </Animated.View>
             <Text style={[card.actionCount, liked && { color: '#E14C57' }]}>{formatCount(likesCount)}</Text>
           </TouchableOpacity>
 
           <TouchableOpacity style={card.actionBtn} onPress={() => onOpenComments(post.id, post.allow_comments)} activeOpacity={0.8}>
-            <Ionicons name="chatbubble-outline" size={20} color="#60626A" />
+            <BoldIcon name="chatbubble-outline" size={20} color="#60626A" weight={POST_ICON_WEIGHT} />
             <Text style={card.actionCount}>{formatCount(commentsCount)}</Text>
           </TouchableOpacity>
 
-          <TouchableOpacity style={card.actionBtn} activeOpacity={0.8}>
-            <Ionicons name="share-social-outline" size={21} color="#60626A" />
+          <TouchableOpacity
+            style={card.actionBtn}
+            activeOpacity={0.8}
+            onPress={() => sharePost({ id: post.id, authorName: displayName, caption: post.caption })}
+            accessibilityLabel="Share post">
+            <BoldIcon name="arrow-redo-outline" size={21} color="#60626A" weight={POST_ICON_WEIGHT} />
           </TouchableOpacity>
         </View>
 
-        <TouchableOpacity style={card.actionBtn} onPress={handleDownload} disabled={downloading} activeOpacity={0.8}>
-          {downloading
-            ? <ActivityIndicator size="small" color="#7A0EED" />
-            : <Ionicons name="download-outline" size={22} color="#60626A" />}
-        </TouchableOpacity>
+        <View style={card.actionsRight}>
+          <TouchableOpacity style={card.actionBtn} onPress={handleSave} activeOpacity={0.8} accessibilityLabel={saved ? 'Remove from saved' : 'Save post'}>
+            <BoldIcon name={saved ? 'bookmark' : 'bookmark-outline'} size={21} color={saved ? '#7A0EED' : '#60626A'} weight={POST_ICON_WEIGHT} />
+          </TouchableOpacity>
+          <TouchableOpacity style={card.actionBtn} onPress={handleDownload} disabled={downloading} activeOpacity={0.8}>
+            {downloading
+              ? <ActivityIndicator size="small" color="#7A0EED" />
+              : <BoldIcon name="download-outline" size={22} color="#60626A" weight={POST_ICON_WEIGHT} />}
+          </TouchableOpacity>
+        </View>
       </View>
 
       {/* Caption with read more */}
@@ -957,6 +1040,7 @@ export function HomeScreen() {
                 following={!!followMap[item.user_id]}
                 onFollowChange={handleFollowChange}
                 onTagPress={openTag}
+                onOpenPost={() => router.push(`/post/${item.id}` as never)}
               />
             )}
           />
@@ -989,11 +1073,10 @@ const styles = StyleSheet.create({
 });
 
 const hdr = StyleSheet.create({
-  // Box as wide as the icon → even 14px gaps (same as the chat rooms header);
-  // hitSlop keeps the tap target generous.
-  row:      { flexDirection: 'row', alignItems: 'center', gap: 14 },
-  iconBtn:  { width: 28, height: 38, alignItems: 'center', justifyContent: 'center', position: 'relative' },
-  coinImg:  { width: 28, height: 28 },
+  // Each box exactly as wide as its 24px icon, so the one 12px gap is the
+  // visible space between search, bell and avatar; hitSlop keeps taps easy.
+  row:      { flexDirection: 'row', alignItems: 'center', gap: 12 },
+  iconBtn:  { width: 24, height: 38, alignItems: 'center', justifyContent: 'center', position: 'relative' },
   badge: {
     position: 'absolute', top: 4, right: -4,
     minWidth: 16, height: 16, borderRadius: 8,
@@ -1072,6 +1155,7 @@ const card = StyleSheet.create({
 
   actions:    { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingHorizontal: 16, paddingVertical: 10 },
   actionsLeft:{ flexDirection: 'row', alignItems: 'center', gap: 18 },
+  actionsRight:{ flexDirection: 'row', alignItems: 'center', gap: 16 },
   actionBtn:  { flexDirection: 'row', alignItems: 'center', gap: 5 },
   actionCount:{ fontSize: 13, fontWeight: '600', color: '#60626A' },
 });

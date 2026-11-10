@@ -8,6 +8,7 @@ const agencyModel = require('../models/agency.model');
 const sessions = require('../utils/session-version');
 const ioInstance = require('../utils/io-instance');
 const { sendOtpSms, SmsError } = require('../utils/msg91');
+const { USERNAME_RE, USERNAME_RULE, FULL_NAME_MAX, BIO_MAX, charCount } = require('../utils/text-limits');
 
 const PROFILE_GENDERS = ['male', 'female', 'other'];
 
@@ -361,8 +362,8 @@ async function verifyOtp(req, res, next) {
 async function checkUsername(req, res, next) {
   try {
     const username = String(req.query.username ?? '').trim();
-    if (!/^[a-zA-Z0-9_]{3,20}$/.test(username)) {
-      return res.status(400).json({ success: false, message: 'Use 3–20 characters (letters, numbers, underscore).' });
+    if (!USERNAME_RE.test(username)) {
+      return res.status(400).json({ success: false, message: USERNAME_RULE });
     }
     const available = !(await userModel.isUsernameTaken(username));
     return res.json({ success: true, data: { available } });
@@ -381,8 +382,21 @@ async function completeProfile(req, res, next) {
 
     const { fullName, username, gender, dateOfBirth, preferredLanguage, bio, location } = req.body;
 
-    if (!username || !/^[a-zA-Z0-9_]{3,20}$/.test(username.trim())) {
-      return res.status(400).json({ success: false, message: 'Username is required (3–20 characters, letters/numbers/underscore).' });
+    // Names and bio follow utils/text-limits.js. An existing username or name
+    // that predates those rules stays valid until it's changed.
+    const existing = await userModel.findById(userId);
+    const newUsername = String(username ?? '').trim();
+    if (!newUsername) {
+      return res.status(400).json({ success: false, message: 'Username is required.', fields: ['username'] });
+    }
+    if (newUsername !== existing?.username && !USERNAME_RE.test(newUsername)) {
+      return res.status(400).json({ success: false, message: USERNAME_RULE, fields: ['username'] });
+    }
+    if (typeof fullName === 'string' && fullName.trim() !== (existing?.full_name ?? '') && charCount(fullName.trim()) > FULL_NAME_MAX) {
+      return res.status(400).json({ success: false, message: `Full name can be up to ${FULL_NAME_MAX} characters.`, fields: ['fullName'] });
+    }
+    if (typeof bio === 'string' && charCount(bio) > BIO_MAX) {
+      return res.status(400).json({ success: false, message: `Bio can be up to ${BIO_MAX} characters.`, fields: ['bio'] });
     }
 
     // Gender and date of birth are mandatory. Bio is optional — never checked.
@@ -402,7 +416,6 @@ async function completeProfile(req, res, next) {
     // Exempt: the very first save right after phone verification, which only
     // sets the username chosen at registration — this guard lets that save
     // through even if gender / date of birth were not sent.
-    const existing = await userModel.findById(userId);
     if (existing?.username) {
       const missing = [];
       if (!genderValue && !existing.gender) missing.push({ field: 'gender', label: 'Gender' });

@@ -15,10 +15,12 @@ import {
 } from 'react-native';
 import { BASE_URL, MEDIA_BASE } from '@/services/api';
 import { authStore } from '@/store/auth-store';
+import { socketStore, type ProfileCard } from '@/store/socket-store';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Image as ExpoImage } from 'expo-image';
 import { USER_LEVEL_IMAGES, formatCoins, getUserLevel } from '@/utils/userLevel';
 import { REPORT_GUIDANCE, ReportReasonModal, USER_REPORT_REASONS } from './report-reason-modal';
+import { ExitIcon } from '@/components/ui/exit-icon';
 import { avatarSource } from '@/utils/default-avatar';
 
 function resolveAvatar(url: string | null | undefined): string | null {
@@ -28,6 +30,43 @@ function resolveAvatar(url: string | null | undefined): string | null {
 }
 
 type GiftStats = { sent: number; received: number };
+
+// Profile cards already fetched this session, by room + user, so reopening
+// someone shows their numbers instantly (then refreshes them).
+const profileCardCache = new Map<string, ProfileCard>();
+
+function patchCachedCard(roomId: string, userId: string, following: boolean) {
+  const key = `${roomId}:${userId}`;
+  const card = profileCardCache.get(key);
+  if (!card || card.is_following === following) return;
+  profileCardCache.set(key, {
+    ...card,
+    is_following: following,
+    followers_count: Math.max(0, card.followers_count + (following ? 1 : -1)),
+  });
+}
+
+/** Fallback when the room socket isn't connected: the three HTTP calls. */
+async function fetchProfileCardOverHttp(roomId: string, userId: string): Promise<ProfileCard | null> {
+  const token = authStore.getToken();
+  const [stats, profile, follow] = await Promise.all([
+    fetch(`${BASE_URL}/rooms/${roomId}/users/${userId}/gift-stats`).then(r => r.json()).catch(() => null),
+    fetch(`${BASE_URL}/auth/users/${userId}`).then(r => r.json()).catch(() => null),
+    token
+      ? fetch(`${BASE_URL}/auth/follow/${userId}`, { headers: { Authorization: `Bearer ${token}` } }).then(r => r.json()).catch(() => null)
+      : Promise.resolve(null),
+  ]);
+  if (!profile?.success) return null;
+  return {
+    username: profile.data.username ?? null,
+    cover_url: profile.data.cover_url ?? null,
+    followers_count: Number(profile.data.followers_count) || 0,
+    coins_gifted: Number(profile.data.coins_gifted) || 0,
+    room_sent: stats?.success ? stats.data.sent : 0,
+    room_received: stats?.success ? stats.data.received : 0,
+    is_following: !!follow?.following,
+  };
+}
 
 export type UserProfileSheetTarget = {
   userId: string;
@@ -98,32 +137,40 @@ export function UserProfileSheet({
 
   useEffect(() => {
     if (!visible || !target) return;
-    const token = authStore.getToken();
-    setLoading(true);
-    setGiftStats(null);
-    setCoverUrl(null);
-    setUsername(null);
-    setLevel(null);
+    let cancelled = false;
+    const key = `${roomId}:${target.userId}`;
+    const apply = (card: ProfileCard) => {
+      profileCardCache.set(key, card);
+      if (cancelled) return;
+      setGiftStats({ sent: card.room_sent, received: card.room_received });
+      setFollowersCount(card.followers_count);
+      setCoverUrl(card.cover_url);
+      setUsername(card.username);
+      setLevel(getUserLevel(card.coins_gifted || 0));
+      setIsFollowing(card.is_following);
+      setLoading(false);
+    };
 
-    Promise.all([
-      fetch(`${BASE_URL}/rooms/${roomId}/users/${target.userId}/gift-stats`)
-        .then(r => r.json()).catch(() => null),
-      fetch(`${BASE_URL}/auth/users/${target.userId}`)
-        .then(r => r.json()).catch(() => null),
-      token
-        ? fetch(`${BASE_URL}/auth/follow/${target.userId}`, { headers: { Authorization: `Bearer ${token}` } })
-            .then(r => r.json()).catch(() => null)
-        : Promise.resolve(null),
-    ]).then(([statsJson, profileJson, followJson]) => {
-      if (statsJson?.success) setGiftStats(statsJson.data);
-      if (profileJson?.success) {
-        setFollowersCount(profileJson.data.followers_count ?? null);
-        setCoverUrl(profileJson.data.cover_url ?? null);
-        setUsername(profileJson.data.username ?? null);
-        if (profileJson.data.coins_gifted != null) setLevel(getUserLevel(Number(profileJson.data.coins_gifted) || 0));
-      }
-      if (followJson?.success) setIsFollowing(!!followJson.following);
-    }).finally(() => setLoading(false));
+    // Opened this person before → show that at once, refresh it quietly
+    const cached = profileCardCache.get(key);
+    if (cached) {
+      apply(cached);
+    } else {
+      setLoading(true);
+      setGiftStats(null);
+      setCoverUrl(null);
+      setUsername(null);
+      setLevel(null);
+    }
+
+    // One request over the open room socket; plain HTTP only if it can't answer
+    socketStore.requestProfileCard(roomId, target.userId)
+      .then(card => card ?? fetchProfileCardOverHttp(roomId, target.userId))
+      .then(card => {
+        if (card) apply(card);
+        else if (!cancelled) setLoading(false);
+      });
+    return () => { cancelled = true; };
   }, [visible, target?.userId, roomId]);
 
   async function handleToggleFollow() {
@@ -133,6 +180,7 @@ export function UserProfileSheet({
     setFollowBusy(true);
     const wasFollowing = isFollowing;
     setIsFollowing(!wasFollowing);
+    patchCachedCard(roomId, target.userId, !wasFollowing);
     try {
       await fetch(`${BASE_URL}/auth/follow/${target.userId}`, {
         method: wasFollowing ? 'DELETE' : 'POST',
@@ -140,6 +188,7 @@ export function UserProfileSheet({
       });
     } catch {
       setIsFollowing(wasFollowing);
+      patchCachedCard(roomId, target.userId, wasFollowing);
     } finally {
       setFollowBusy(false);
     }
@@ -256,7 +305,7 @@ export function UserProfileSheet({
         <View style={ps.actions}>
           {!isSelf && (
             <ActionRow
-              icon="gift" iconColor="#E8944A" label="Send Gifts"
+              icon="gift" iconColor="#E8944A" label="Send Gifts" highlight
               onPress={() => { onClose(); onSendGift(target.userId, target.userName); }}
             />
           )}
@@ -264,16 +313,16 @@ export function UserProfileSheet({
           {isSelf && selfOnStage && onToggleSelfMute && (
             <ActionRow
               icon={selfIsMuted ? 'mic' : 'mic-off'}
-              iconColor={selfIsMuted ? '#7A0EED' : '#E14C57'}
+              iconColor={selfIsMuted ? '#7A0EED' : undefined}
               label={selfIsMuted ? 'Unmute' : 'Mute'}
               onPress={() => { onClose(); onToggleSelfMute(); }}
             />
           )}
           {isSelf && canExitStage && onExitStage && (
-            <ActionRow icon="exit" label="Exit Audio" danger onPress={() => { onClose(); onExitStage(); }} />
+            <ActionRow icon="exit" iconNode={<ExitIcon />} label="Exit Audio" danger onPress={() => { onClose(); onExitStage(); }} />
           )}
           {isSelf && onReturnToStage && (
-            <ActionRow icon="mic" iconColor="#7A0EED" label="Join Audio" onPress={() => { onClose(); onReturnToStage(); }} />
+            <ActionRow icon="mic" iconColor="#7A0EED" label="Join Audio" highlight onPress={() => { onClose(); onReturnToStage(); }} />
           )}
           <ActionRow icon="person" label="View Profile" onPress={handleViewProfile} />
           {!isSelf && (
@@ -296,7 +345,6 @@ export function UserProfileSheet({
               <>
                 <ActionRow
                   icon={targetIsMuted ? 'mic' : 'mic-off'}
-                  iconColor={targetIsMuted ? '#7A0EED' : '#E14C57'}
                   label={targetIsMuted ? 'Unmute' : 'Mute'}
                   onPress={() => { onClose(); onToggleTargetMute(target.userId, !targetIsMuted); }}
                 />
@@ -330,11 +378,14 @@ export function UserProfileSheet({
   );
 }
 
-function ActionRow({ icon, iconColor, label, onPress, danger, disabled }: {
+function ActionRow({ icon, iconNode, iconColor, label, onPress, highlight, danger, disabled }: {
   icon: keyof typeof Ionicons.glyphMap;
+  /** Drawn instead of the Ionicons icon (for icons Ionicons doesn't have). */
+  iconNode?: React.ReactNode;
   iconColor?: string;
   label: string;
   onPress: () => void;
+  highlight?: boolean;
   danger?: boolean;
   disabled?: boolean;
 }) {
@@ -343,8 +394,8 @@ function ActionRow({ icon, iconColor, label, onPress, danger, disabled }: {
       activeOpacity={0.75}
       disabled={disabled}
       onPress={onPress}
-      style={ps.actionRow}>
-      <Ionicons name={icon} size={20} color={danger ? '#E14C57' : iconColor ?? '#1C1E22'} />
+      style={[ps.actionRow, highlight && ps.actionRowHighlight]}>
+      {iconNode ?? <Ionicons name={icon} size={20} color={danger ? '#E14C57' : iconColor ?? '#1C1E22'} />}
       <Text style={[ps.actionText, danger && ps.dangerText]}>{label}</Text>
     </TouchableOpacity>
   );
@@ -402,9 +453,14 @@ const ps = StyleSheet.create({
   statLabel: { fontSize: 12, color: '#8A8C93' },
   divider: { height: StyleSheet.hairlineWidth, backgroundColor: '#ECE9F4', marginHorizontal: 16, marginBottom: 12 },
 
-  // Action rows — plain, straight on the white sheet
-  actions: { paddingHorizontal: 16 },
-  actionRow: { flexDirection: 'row', alignItems: 'center', gap: 14, height: 46, paddingHorizontal: 4 },
+  // Rounded action rows
+  actions: { paddingHorizontal: 16, gap: 8 },
+  actionRow: {
+    flexDirection: 'row', alignItems: 'center', gap: 14,
+    height: 46, paddingHorizontal: 16, borderRadius: 12,
+    backgroundColor: '#F5F4F8',
+  },
+  actionRowHighlight: { backgroundColor: '#FFF5DC' },
   actionText: { fontSize: 14, fontWeight: '600', color: '#1C1E22' },
   dangerText: { color: '#E14C57' },
 });

@@ -2,35 +2,36 @@ import { Ionicons } from '@expo/vector-icons';
 import { Image as ExpoImage } from 'expo-image';
 import { Image, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
 import { getLevelImage } from '@/screens/room-detail/components/room-level-up';
+import { avatarSource } from '@/utils/default-avatar';
+import type { RoomTag } from '../room-tags';
+import { RoomTagChips } from './room-tag-chips';
 
 export type MyChatRoom = {
   id: string;
   name: string;
   onlineCount: number;
   avatarUri?: string;
+  /** Picks the default avatar when there's no photo, like the profile does. */
+  hostGender?: string | null;
   level?: number;
   location?: string;
+  tags?: RoomTag[];
 };
 
 type MyChatroomCardProps = {
   room: MyChatRoom;
   onPress?: () => void;
+  onLongPress?: () => void;
 };
 
-export function MyChatroomCard({ room, onPress }: MyChatroomCardProps) {
+export function MyChatroomCard({ room, onPress, onLongPress }: MyChatroomCardProps) {
   const levelImg = getLevelImage(room.level ?? 0);
   return (
     <View style={styles.wrapper}>
-      <TouchableOpacity onPress={onPress} activeOpacity={0.85} style={styles.card}>
+      <TouchableOpacity onPress={onPress} onLongPress={onLongPress} delayLongPress={400} activeOpacity={0.85} style={styles.card}>
         {/* Avatar */}
         <View style={styles.avatarContainer}>
-          {room.avatarUri ? (
-            <Image source={{ uri: room.avatarUri }} style={styles.avatar} />
-          ) : (
-            <View style={styles.avatarFallback}>
-              <Ionicons name="person" size={20} color="#7A0EED" />
-            </View>
-          )}
+          <Image source={avatarSource(room.avatarUri, room.hostGender)} style={styles.avatar} />
           <View style={styles.avatarRing} />
         </View>
 
@@ -48,6 +49,12 @@ export function MyChatroomCard({ room, onPress }: MyChatroomCardProps) {
                 <Ionicons name="location" size={12} color="#3B82F6" />
                 <Text style={styles.locationText} numberOfLines={1} ellipsizeMode="tail">{room.location}</Text>
               </View>
+            )}
+            {!!room.tags?.length && (
+              <>
+                <Text style={styles.pipe}>|</Text>
+                <RoomTagChips tags={room.tags} />
+              </>
             )}
           </View>
         </View>
@@ -87,15 +94,6 @@ const styles = StyleSheet.create({
     height: 40,
     borderRadius: 20,
     margin: 2,
-  },
-  avatarFallback: {
-    width: 40,
-    height: 40,
-    borderRadius: 20,
-    margin: 2,
-    backgroundColor: '#EDE8F7',
-    alignItems: 'center',
-    justifyContent: 'center',
   },
   avatarRing: {
     position: 'absolute',
@@ -152,5 +150,6 @@ const styles = StyleSheet.create({
     fontWeight: '500',
     color: '#60626A',
     flexShrink: 1,
+    maxWidth: 90, // long city names end in …
   },
 });

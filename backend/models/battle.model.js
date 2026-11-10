@@ -181,9 +181,11 @@ async function createNotification({ userId, type, title, body, data }) {
 /**
  * Get all notifications for a user, latest first, limit 50.
  */
+// Battle invites are no longer saved as notifications; older ones are hidden
+// (they're live popups only — a stored one can't be acted on later).
 async function getNotificationsForUser(userId) {
   const result = await db.query(
-    `SELECT * FROM notifications WHERE user_id=$1 ORDER BY created_at DESC LIMIT 50`,
+    `SELECT * FROM notifications WHERE user_id=$1 AND type <> 'battle_invite' ORDER BY created_at DESC LIMIT 50`,
     [userId]
   );
   return result.rows;
@@ -204,7 +206,7 @@ async function markAllReadForUser(userId) {
  */
 async function countUnreadForUser(userId) {
   const result = await db.query(
-    `SELECT COUNT(*) AS count FROM notifications WHERE user_id=$1 AND is_read=FALSE`,
+    `SELECT COUNT(*) AS count FROM notifications WHERE user_id=$1 AND is_read=FALSE AND type <> 'battle_invite'`,
     [userId]
   );
   return parseInt(result.rows[0].count, 10);

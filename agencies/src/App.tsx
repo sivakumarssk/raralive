@@ -14,6 +14,7 @@ import { ReportsPage } from './pages/ReportsPage';
 import { SupportPage } from './pages/SupportPage';
 import { PocAgenciesPage, PocLoginPage } from './pages/PocPages';
 import { NotFoundPage } from './pages/NotFoundPage';
+import { PortalHome } from './pages/PortalHome';
 
 // Guard: must be logged in. If default password, force reset. Otherwise allow through.
 function RequireAuth() {
@@ -42,6 +43,18 @@ function RedirectIfAuth({ children }: { children: React.ReactNode }) {
     return <Navigate to={`/agency/${code}/dashboard`} replace />;
   }
   return <>{children}</>;
+}
+
+// The bare site address: send a signed-in session back to its portal. Agencies
+// sign in from their own link, so with no session there's nothing to open here
+// except the POC sign-in.
+function HomeRedirect() {
+  const { token, agency, poc, pocAgency, isDefaultPassword } = useAuth();
+  if (token && agency) {
+    return <Navigate to={`/agency/${agency.agentCode}/${isDefaultPassword ? 'reset-password' : 'dashboard'}`} replace />;
+  }
+  if (token && poc) return <Navigate to={pocAgency ? `/poc/${pocAgency.id}/dashboard` : '/poc/agencies'} replace />;
+  return <PortalHome />;
 }
 
 function RequirePoc() {
@@ -77,6 +90,8 @@ function App() {
     <BrowserRouter>
       <AuthProvider>
         <Routes>
+          <Route path="/" element={<HomeRedirect />} />
+
           {/* Agency entry — validates code, shows 404 or landing */}
           <Route path="/agency/:code" element={<AgencyEntryPage />} />
 

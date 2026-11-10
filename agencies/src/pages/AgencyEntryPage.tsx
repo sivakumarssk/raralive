@@ -9,7 +9,7 @@ type ValidateResult = {
   agencyName: string;
 };
 
-type State = 'loading' | 'valid' | 'invalid' | 'suspended';
+type State = 'loading' | 'valid' | 'invalid' | 'suspended' | 'offline';
 
 export function AgencyEntryPage() {
   const { code } = useParams<{ code: string }>();
@@ -17,13 +17,18 @@ export function AgencyEntryPage() {
   const [state, setState] = useState<State>('loading');
   const [agencyName, setAgencyName] = useState('');
   const [suspendedMsg, setSuspendedMsg] = useState('');
+  const [attempt, setAttempt] = useState(0);
 
   useEffect(() => {
     if (!code) { setState('invalid'); return; }
 
+    setState('loading');
     api.get<ValidateResult>(`/agency/validate/${code.toUpperCase()}`).then(result => {
       if (!result.ok) {
-        if (result.message.includes('suspended')) {
+        // No reply isn't "no such agency" — say so instead of showing a 404
+        if (result.network) {
+          setState('offline');
+        } else if (result.message.includes('suspended')) {
           setSuspendedMsg(result.message);
           setState('suspended');
         } else {
@@ -34,7 +39,7 @@ export function AgencyEntryPage() {
       setAgencyName(result.data.agencyName);
       setState('valid');
     });
-  }, [code]);
+  }, [code, attempt]);
 
   if (state === 'loading') {
     return (
@@ -47,6 +52,22 @@ export function AgencyEntryPage() {
             <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
             <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v8z" />
           </svg>
+        </div>
+      </div>
+    );
+  }
+
+  if (state === 'offline') {
+    return (
+      <div className="min-h-screen bg-gradient-to-br from-[#EDE8F7] via-[#F5F2FF] to-[#FFF0F8] flex items-center justify-center px-4">
+        <div className="bg-white rounded-2xl shadow-lg shadow-purple-100 p-8 max-w-sm w-full text-center">
+          <h1 className="text-lg font-bold text-gray-900">Can't reach the server</h1>
+          <p className="text-sm text-gray-500 mt-2">Check your internet connection and try again.</p>
+          <button
+            onClick={() => setAttempt(a => a + 1)}
+            className="mt-6 w-full py-2.5 rounded-xl bg-gradient-to-r from-purple-600 to-pink-600 text-white font-semibold text-sm">
+            Try again
+          </button>
         </div>
       </div>
     );

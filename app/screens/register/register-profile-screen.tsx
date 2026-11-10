@@ -19,6 +19,7 @@ import { GradientButton } from '@/components/ui/gradient-button';
 import { ScreenBackground } from '@/components/ui/screen-background';
 import { apiCompleteProfile } from '@/services/api';
 import { authStore } from '@/store/auth-store';
+import { BIO_MAX, FULL_NAME_MAX, charCount, limitChars } from '@/utils/text-limits';
 
 // ── Main screen ───────────────────────────────────────────────────────────────
 
@@ -27,7 +28,6 @@ type RegisterProfileScreenProps = {
   onComplete?: () => void;
 };
 
-const BIO_MAX = 150;
 
 export function RegisterProfileScreen({ onSkip, onComplete }: RegisterProfileScreenProps) {
   const storedUser = authStore.getUser();
@@ -189,7 +189,7 @@ export function RegisterProfileScreen({ onSkip, onComplete }: RegisterProfileScr
                   value={fullName}
                   returnKeyType="next"
                   onChangeText={(v) => {
-                    setFullName(v);
+                    setFullName(limitChars(v, FULL_NAME_MAX));
                     if (errors.fullName) setErrors((p) => ({ ...p, fullName: undefined }));
                   }}
                 />
@@ -226,7 +226,7 @@ export function RegisterProfileScreen({ onSkip, onComplete }: RegisterProfileScr
             <View style={styles.field}>
               <View style={styles.labelRow}>
                 <Text style={styles.label}>Bio</Text>
-                <Text style={styles.counter}>{bio.length}/{BIO_MAX}</Text>
+                <Text style={styles.counter}>{charCount(bio)}/{BIO_MAX}</Text>
               </View>
               <View style={[styles.inputBox, styles.bioBox]}>
                 <TextInput
@@ -235,9 +235,8 @@ export function RegisterProfileScreen({ onSkip, onComplete }: RegisterProfileScr
                   style={[styles.input, styles.bioInput]}
                   underlineColorAndroid="transparent"
                   multiline
-                  maxLength={BIO_MAX}
                   value={bio}
-                  onChangeText={setBio}
+                  onChangeText={(v) => setBio(limitChars(v, BIO_MAX))}
                 />
               </View>
             </View>

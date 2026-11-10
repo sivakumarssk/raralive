@@ -104,18 +104,10 @@ async function sendBattleInvite(req, res, next) {
       io.to(from_room_id).emit('battle_invite_sent', { invite_id: invite.id });
     }
 
-    // Notify target room host via DB notification. Respond with the full
-    // invite (room names/images) so the app needn't fetch it separately.
-    const [detail] = await Promise.all([
-      battleModel.getInviteById(invite.id),
-      battleModel.createNotification({
-        userId: toUserId,
-        type: 'battle_invite',
-        title: '⚔️ Battle Invite!',
-        body: `${fromRoom.room_name} has challenged your room to a battle!`,
-        data: { invite_id: invite.id, from_room_id, from_room_name: fromRoom.room_name },
-      }),
-    ]);
+    // The invite reaches the other host only as the live popup above — no
+    // notification is saved for it. Respond with the full invite (room
+    // names/images) so the app needn't fetch it separately.
+    const detail = await battleModel.getInviteById(invite.id);
 
     return res.status(201).json({ success: true, data: detail ?? invite });
   } catch (error) {

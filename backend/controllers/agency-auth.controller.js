@@ -4,6 +4,7 @@ const jwt = require('jsonwebtoken');
 const agencyModel = require('../models/agency.model');
 const userModel = require('../models/user.model');
 const portalModel = require('../models/agency-portal.model');
+const { phoneDigits } = require('../utils/phone');
 
 function signAgencyToken(agencyId, agentCode) {
   return jwt.sign(
@@ -54,11 +55,15 @@ async function loginAgency(req, res, next) {
       return res.status(403).json({ success: false, message: 'This agency account has been suspended. Contact admin.' });
     }
 
-    if (agency.phone !== phone.trim()) {
+    // The number may be typed with +91, a leading 0 or spaces
+    if (phoneDigits(agency.phone) !== phoneDigits(phone)) {
       return res.status(401).json({ success: false, message: 'Invalid credentials.' });
     }
 
-    const valid = await bcrypt.compare(password, agency.password_hash);
+    // Generated passwords never contain spaces, so a pasted one with stray
+    // whitespace around it still counts
+    const valid = await bcrypt.compare(password, agency.password_hash)
+      || (password.trim() !== password && await bcrypt.compare(password.trim(), agency.password_hash));
     if (!valid) {
       return res.status(401).json({ success: false, message: 'Invalid credentials.' });
     }

@@ -1,7 +1,8 @@
-import { Stack, router } from 'expo-router';
+import { Stack } from 'expo-router';
 
 import { ScreenHeader } from '@/components/ui/screen-header';
 import { LanguageSelectionScreen } from '@/screens/language/language-selection-screen';
+import { enterApp } from '@/store/pending-link';
 
 export default function LanguageRoute() {
   return (
@@ -13,7 +14,7 @@ export default function LanguageRoute() {
           headerTransparent: true,
         }}
       />
-      <LanguageSelectionScreen onContinue={() => router.replace('/(tabs)')} />
+      <LanguageSelectionScreen onContinue={enterApp} />
     </>
   );
 }

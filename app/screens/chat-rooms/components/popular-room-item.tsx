@@ -2,6 +2,9 @@ import { Ionicons } from '@expo/vector-icons';
 import { Image as ExpoImage } from 'expo-image';
 import { Image, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
 import { getLevelImage } from '@/screens/room-detail/components/room-level-up';
+import { avatarSource } from '@/utils/default-avatar';
+import type { RoomTag } from '../room-tags';
+import { RoomTagChips } from './room-tag-chips';
 
 export type PopularRoom = {
   id: string;
@@ -9,9 +12,12 @@ export type PopularRoom = {
   onlineCount: number;
   memberCount: number;
   imageUri?: string;
+  /** Picks the default avatar when there's no photo, like the profile does. */
+  hostGender?: string | null;
   category?: string;
   level?: number;
   location?: string;
+  tags?: RoomTag[];
 };
 
 type PopularRoomItemProps = {
@@ -32,13 +38,7 @@ export function PopularRoomItem({ room, onPress }: PopularRoomItemProps) {
     <TouchableOpacity onPress={onPress} activeOpacity={0.8} style={styles.container}>
       {/* Avatar */}
       <View style={styles.imageContainer}>
-        {room.imageUri ? (
-          <Image source={{ uri: room.imageUri }} style={styles.image} />
-        ) : (
-          <View style={styles.imageFallback}>
-            <Ionicons name="chatbubbles" size={20} color="#7A0EED" />
-          </View>
-        )}
+        <Image source={avatarSource(room.imageUri, room.hostGender)} style={styles.image} />
       </View>
 
       {/* Info */}
@@ -56,6 +56,12 @@ export function PopularRoomItem({ room, onPress }: PopularRoomItemProps) {
               <Ionicons name="location" size={12} color="#3B82F6" />
               <Text style={styles.locationText} numberOfLines={1} ellipsizeMode="tail">{room.location}</Text>
             </View>
+          )}
+          {!!room.tags?.length && (
+            <>
+              <Text style={styles.pipe}>|</Text>
+              <RoomTagChips tags={room.tags} />
+            </>
           )}
         </View>
       </View>
@@ -86,14 +92,6 @@ const styles = StyleSheet.create({
     width: 44,
     height: 44,
     borderRadius: 22,
-  },
-  imageFallback: {
-    width: 44,
-    height: 44,
-    borderRadius: 22,
-    backgroundColor: '#EDE8F7',
-    alignItems: 'center',
-    justifyContent: 'center',
   },
   info: {
     flex: 1,
@@ -140,6 +138,7 @@ const styles = StyleSheet.create({
     fontWeight: '500',
     color: '#60626A',
     flexShrink: 1,
+    maxWidth: 90, // long city names end in …
   },
   divider: {
     position: 'absolute',

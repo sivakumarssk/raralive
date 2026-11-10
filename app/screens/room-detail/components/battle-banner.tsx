@@ -286,6 +286,45 @@ function BattleAvatar({
 
 
 
+/**
+ * The banner's sizes at a screen width — the single source for both the
+ * banner and where the room screen places it. `stageLineY` is the height
+ * inside the banner where the audio stage's bottom edge should meet it:
+ *  - normal: the top of the raised centre bridge;
+ *  - gifting (no bridge): just inside the flat strip joining the two
+ *    capsules, so no chat background shows through the open middle.
+ */
+// Gifting: how much lower the banner sits than its natural spot. The flat
+// middle strip grows by the same amount, so the stage edge still lands inside it.
+const GIFTING_DROP = 3;
+// Normal: how far below the stage's bottom edge the bridge's top sits
+const NORMAL_DROP = 0;
+
+export function battleBannerGeometry(width: number, showBridge: boolean) {
+  const scale = Math.max(0.70, Math.min(1.20, width / 1080));
+  const height = 132 * scale;
+  const barHeight = 52 * scale;
+  const barTop = 22 * scale;
+  const neckHeight = barHeight * 0.42 + (showBridge ? 0 : GIFTING_DROP);
+  const bridgeHeight = barHeight * 0.46;
+  const bridgeTop = barTop + (barHeight - neckHeight) - bridgeHeight * 0.62;
+  // Gifting: the whole banner lifts by the empty space above the capsules
+  const lift = showBridge ? 0 : barTop - scale * 4;
+  const stageLineY = showBridge
+    ? bridgeTop - NORMAL_DROP
+    : barTop + (barHeight - neckHeight) - lift + 2 * scale;
+  return { scale, height, barHeight, barTop, neckHeight, lift, stageLineY };
+}
+
+/**
+ * `bottom` for the absolutely-placed banner under the stage, so the stage's
+ * bottom edge lands exactly on `stageLineY` on every screen size.
+ */
+export function battleBannerOverlayBottom(width: number, showBridge: boolean) {
+  const g = battleBannerGeometry(width, showBridge);
+  return g.stageLineY - g.height;
+}
+
 function BattleBannerView({
   leftAvatar,
   rightAvatar,
@@ -304,7 +343,8 @@ function BattleBannerView({
   onOpponentPress,
 }: BattleBannerProps) {
   const { width } = useWindowDimensions();
-  const scale = Math.max(0.70, Math.min(1.20, width / 1080));
+  const geo = battleBannerGeometry(width, showBridge);
+  const scale = geo.scale;
 
   // Local ticking countdown — the parent only gives us a snapshot
   // (re-derived every poll), so tick it down ourselves each second
@@ -324,10 +364,10 @@ function BattleBannerView({
   // Exact client-reference composition: compact full-width strip,
   // circular edge avatars, blue (host) / red (opponent) score bars, center VS and two
   // overlapping small avatars per side.
-  const height = 132 * scale;
+  const height = geo.height;
   const avatar = 64 * scale;
-  const barHeight = 52 * scale;
-  const barTop = 22 * scale;
+  const barHeight = geo.barHeight;
+  const barTop = geo.barTop;
   const edge = 1 * scale;
   const gifterRowSize = 34 * scale; // must match GifterAvatarRow's own circle size
   const barStart = edge + avatar * 0.42; // capsule starts under the avatar, like the reference
@@ -341,7 +381,7 @@ function BattleBannerView({
   // the capsule edges and the bridge.
   const rowWidth = Math.max(1, width - barStart * 2);
   const rowCenter = rowWidth / 2;
-  const neckHeight = barHeight * 0.42;
+  const neckHeight = geo.neckHeight;
   const taper = barHeight * 0.42; // small rounded corner only, top stays flat the rest of the way
 
   const bridgeHeight = barHeight * 0.46; // raised bridge, like the reference
@@ -372,10 +412,11 @@ function BattleBannerView({
   // between the capsule necks (where the bridge sat) and the whole banner
   // lifts up by the now-empty space above the capsules, closer to the stage.
   const timerLineHeight = barHeight * 0.32;
+  const timerPadV = 1.5 * scale;
   const timerTop = showBridge
     ? bridgeOffsetY - barHeight * 0.46
     : capOffsetY + (barHeight - neckHeight - timerLineHeight) / 2;
-  const lift = showBridge ? 0 : barTop - 4 * scale;
+  const lift = geo.lift;
 
   return (
     <Pressable disabled={!onPress} onPress={onPress} style={{ width: '100%', height }}>
@@ -422,6 +463,11 @@ function BattleBannerView({
                 <Stop offset="0.5" stopColor="#FFCB3D" />
                 <Stop offset="1" stopColor="#F5A623" />
               </LinearGradient>
+              <RadialGradient id="boltGlow" cx="50%" cy="50%" r="50%">
+                <Stop offset="0" stopColor="#FFE9A0" stopOpacity={0.8} />
+                <Stop offset="0.45" stopColor="#FFC23D" stopOpacity={0.35} />
+                <Stop offset="1" stopColor="#FFC23D" stopOpacity={0} />
+              </RadialGradient>
               <RadialGradient id="bridgeShadow" cx="50%" cy="50%" r="50%">
                 <Stop offset="0" stopColor="#241A45" stopOpacity={0.32} />
                 <Stop offset="0.7" stopColor="#241A45" stopOpacity={0.14} />
@@ -557,25 +603,61 @@ function BattleBannerView({
                 />
               </>
             )}
+            {/* Gifting (no bridge): a glowing thunder bolt on the flat middle
+                strip, right under the timer */}
+            {!showBridge && (() => {
+              const h = neckHeight;
+              const t = capOffsetY + barHeight - neckHeight;
+              const bolt = `
+                M ${rowCenter + h * 0.10} ${t + h * 0.04}
+                L ${rowCenter - h * 0.22} ${t + h * 0.54}
+                L ${rowCenter - h * 0.02} ${t + h * 0.54}
+                L ${rowCenter - h * 0.13} ${t + h * 0.98}
+                L ${rowCenter + h * 0.27} ${t + h * 0.42}
+                L ${rowCenter + h * 0.05} ${t + h * 0.42}
+                Z
+              `;
+              return (
+                <>
+                  <Ellipse cx={rowCenter} cy={t + h / 2} rx={h * 1.5} ry={h * 0.62} fill="url(#boltGlow)" />
+                  <Path d={bolt} fill="none" stroke="#FF9F1A" strokeOpacity={0.5} strokeWidth={Math.max(2, h * 0.18)} strokeLinejoin="round" />
+                  <Path d={bolt} fill="url(#vsGoldGrad)" stroke="#FFFFFF" strokeWidth={Math.max(1, h * 0.06)} strokeLinejoin="round" />
+                </>
+              );
+            })()}
           </Svg>
-          {/* Battle timer — centered above the bridge */}
-          <Text
-            numberOfLines={1}
-            style={{
-              position: 'absolute',
-              left: 0,
-              width: rowWidth,
-              top: timerTop,
-              textAlign: 'center',
-              color: '#3B2A55',
-              fontSize: barHeight * 0.28,
-              lineHeight: timerLineHeight,
-              fontWeight: '800',
-              includeFontPadding: false,
-            }}
+          {/* Battle timer — centered above the bridge (or in the gap between the
+              capsules). White on a dark pill, so it reads on any stage
+              background: light default, dark image or white. */}
+          <View
+            pointerEvents="none"
+            style={{ position: 'absolute', left: 0, width: rowWidth, top: timerTop - timerPadV, alignItems: 'center' }}
           >
-            {formatTime(secondsLeft)}
-          </Text>
+            <View
+              style={{
+                paddingHorizontal: 6 * scale,
+                paddingVertical: timerPadV,
+                borderRadius: (timerLineHeight + timerPadV * 2) / 2,
+                backgroundColor: 'rgba(24,14,44,0.72)',
+                borderWidth: StyleSheet.hairlineWidth,
+                borderColor: 'rgba(255,255,255,0.18)',
+              }}
+            >
+              <Text
+                numberOfLines={1}
+                style={{
+                  color: '#FFFFFF',
+                  fontSize: barHeight * 0.28,
+                  lineHeight: timerLineHeight,
+                  fontWeight: '800',
+                  includeFontPadding: false,
+                  fontVariant: ['tabular-nums'],
+                }}
+              >
+                {formatTime(secondsLeft)}
+              </Text>
+            </View>
+          </View>
           <Text
             numberOfLines={1}
             adjustsFontSizeToFit

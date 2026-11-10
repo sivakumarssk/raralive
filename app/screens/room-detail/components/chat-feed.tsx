@@ -158,7 +158,7 @@ function GiftNotice({ msg, compact, isPinned, onPress, tapToAct, onAvatarPress }
         </Text>
       </View>
 
-      <View style={[feed.giftCardImgWrap, compact && feed.giftCardImgWrapCompact, { backgroundColor: msg.giftBgColor ?? '#FFE9D4' }]}>
+      <View style={[feed.giftCardImgWrap, compact && feed.giftCardImgWrapCompact]}>
         {giftImgUri ? (
           <Image source={{ uri: giftImgUri }} style={[feed.giftCardImg, compact && feed.giftCardImgCompact]} resizeMode="contain" />
         ) : (

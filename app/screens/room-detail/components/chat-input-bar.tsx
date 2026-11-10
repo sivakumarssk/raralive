@@ -1,6 +1,5 @@
 import { Ionicons } from '@expo/vector-icons';
 import { Image as ExpoImage } from 'expo-image';
-import { LinearGradient } from 'expo-linear-gradient';
 import { useEffect, useRef, useState } from 'react';
 import {
   Keyboard,
@@ -14,12 +13,17 @@ import { SendButton } from '@/components/SendButton';
 
 const COIN_IMG = require('@/assets/tabs/coin.png');
 const BATTLE_IMG = require('@/assets/tabs/chatroom/battle.png');
+const BAG_IMG = require('@/assets/tabs/chatroom/extrabag.png');
+const GIFT_IMG = require('@/assets/tabs/chatroom/gift-box.png');
+const ACTION_SIZE = 30;
 
 type ChatInputBarProps = {
   onSend?: (text: string) => void;
   onGiftOpen?: () => void;
   onCoinPress?: () => void;
   onBattlePress?: () => void;
+  /** The bag button only shows when this is passed. */
+  onBagPress?: () => void;
   onSettingsPress?: () => void;
   hasRoomBg?: boolean;
   showBattle?: boolean;
@@ -31,7 +35,7 @@ type ChatInputBarProps = {
   prefillKey?: number;
 };
 
-export function ChatInputBar({ onSend, onGiftOpen, onCoinPress, onBattlePress, onSettingsPress, hasRoomBg, showBattle = true, showSettings = false, onFocusChange, prefillText, prefillKey }: ChatInputBarProps) {
+export function ChatInputBar({ onSend, onGiftOpen, onCoinPress, onBattlePress, onBagPress, onSettingsPress, hasRoomBg, showBattle = true, showSettings = false, onFocusChange, prefillText, prefillKey }: ChatInputBarProps) {
   const [text, setText] = useState('');
   const [focused, setFocused] = useState(false);
   const inputRef = useRef<TextInput>(null);
@@ -61,7 +65,7 @@ export function ChatInputBar({ onSend, onGiftOpen, onCoinPress, onBattlePress, o
 
   return (
     <View style={[bar.container, hasRoomBg && bar.containerBg]}>
-        {/* Collapsed: input + battle + gift */}
+        {/* Collapsed: input + gift + battle + bag */}
 
         <View style={[bar.inputWrap, hasRoomBg && bar.inputWrapBg]}>
           <TextInput
@@ -82,19 +86,28 @@ export function ChatInputBar({ onSend, onGiftOpen, onCoinPress, onBattlePress, o
           <SendButton onPress={handleSend} size={30} />
         </View>
 
-        {!focused && showBattle && (
-          <TouchableOpacity onPress={onBattlePress} activeOpacity={0.85} style={bar.giftBtn}>
-            <ExpoImage source={BATTLE_IMG} style={bar.battleImg} contentFit="contain" />
-          </TouchableOpacity>
-        )}
-
-
+        {/* Bag → battle → gift: same-size slots, close together */}
         {!focused && (
-          <TouchableOpacity onPress={onGiftOpen} activeOpacity={0.85} style={bar.giftBtn}>
-            <LinearGradient colors={['#F5A623', '#F07A1A']} style={bar.giftGradient}>
-              <Ionicons name="gift-outline" size={20} color="#FFFFFF" />
-            </LinearGradient>
-          </TouchableOpacity>
+          <View style={bar.actions}>
+            {onBagPress && (
+              <TouchableOpacity onPress={onBagPress} activeOpacity={0.85} style={bar.actionBtn} accessibilityLabel="Bag">
+                {/* Line icon in a square outline: white over a room background, dark on the plain bar */}
+                <View style={[bar.bagBox, { borderColor: hasRoomBg ? '#FFFFFF' : '#1C1E22' }]}>
+                  <ExpoImage source={BAG_IMG} style={bar.bagImg} contentFit="contain" tintColor={hasRoomBg ? '#FFFFFF' : '#1C1E22'} />
+                </View>
+              </TouchableOpacity>
+            )}
+
+            {showBattle && (
+              <TouchableOpacity onPress={onBattlePress} activeOpacity={0.85} style={bar.actionBtn} accessibilityLabel="Battle">
+                <ExpoImage source={BATTLE_IMG} style={bar.actionImg} contentFit="contain" />
+              </TouchableOpacity>
+            )}
+
+            <TouchableOpacity onPress={onGiftOpen} activeOpacity={0.85} style={bar.actionBtn} accessibilityLabel="Gifts">
+              <ExpoImage source={GIFT_IMG} style={bar.actionImg} contentFit="contain" />
+            </TouchableOpacity>
+          </View>
         )}
 
         {!focused && showSettings && (
@@ -116,7 +129,7 @@ const bar = StyleSheet.create({
     backgroundColor: '#FFFFFF',
     borderTopWidth: 1,
     borderTopColor: '#F0EDF8',
-    gap: 8,
+    gap: 10,
   },
   containerBg: {
     backgroundColor: 'rgba(0,0,0,0.45)',
@@ -136,9 +149,22 @@ const bar = StyleSheet.create({
     width: 22,
     height: 22,
   },
-  battleImg: {
-    width: 30,
-    height: 30,
+  // The three action slots — one size so they line up evenly
+  actions: { flexDirection: 'row', alignItems: 'center', gap: 6 },
+  actionBtn: { width: ACTION_SIZE, height: ACTION_SIZE, alignItems: 'center', justifyContent: 'center' },
+  actionImg: { width: ACTION_SIZE, height: ACTION_SIZE },
+  // Same outer size as the gift/battle images, bag filling most of it
+  bagBox: {
+    width: ACTION_SIZE,
+    height: ACTION_SIZE,
+    borderRadius: 9,
+    borderWidth: 1.8,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  bagImg: {
+    width: 19,
+    height: 21,
   },
   inputWrap: {
     flex: 1,
@@ -151,19 +177,11 @@ const bar = StyleSheet.create({
     borderColor: '#E7E4F2',
     paddingLeft: 14,
     paddingRight: 4,
-    gap: 8,
+    gap: 10,
   },
   inputWrapBg: { backgroundColor: 'rgba(255,255,255,0.15)', borderColor: 'rgba(255,255,255,0.25)' },
   input: { flex: 1, fontSize: 15, color: '#1C1E22', padding: 0, borderWidth: 0 },
   inputBg: { color: '#FFFFFF' },
-  giftBtn: {
-    width: 36,
-    height: 36,
-    borderRadius: 18,
-    alignItems: 'center',
-    justifyContent: 'center',
-    overflow: 'hidden',
-  },
   settingsBtn: {
     width: 34,
     height: 34,
@@ -174,12 +192,5 @@ const bar = StyleSheet.create({
   },
   settingsBtnLight: {
     backgroundColor: '#F4F5F8',
-  },
-  giftGradient: {
-    width: 36,
-    height: 36,
-    borderRadius: 18,
-    alignItems: 'center',
-    justifyContent: 'center',
   },
 });

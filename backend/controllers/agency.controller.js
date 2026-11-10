@@ -1,16 +1,7 @@
 const bcrypt = require('bcryptjs');
 const agencyModel = require('../models/agency.model');
 const userModel = require('../models/user.model');
-
-/** Generate a unique agent code like AGT-A3F9K2 */
-function generateAgentCode() {
-  const chars = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
-  let code = 'AGT-';
-  for (let i = 0; i < 6; i++) {
-    code += chars[Math.floor(Math.random() * chars.length)];
-  }
-  return code;
-}
+const { phoneDigits, isValidMobile } = require('../utils/phone');
 
 /** Generate a random readable default password like Ra@7xK2p */
 function generateDefaultPassword() {
@@ -51,7 +42,7 @@ function parseServiceAccess(input) {
 async function createAgency(req, res, next) {
   try {
     const {
-      agencyName, personName, age, email, phone, address,
+      agencyName, personName, age, email, phone: rawPhone, address,
       aadharNumber, panNumber, bankAccount, bankIfsc,
       bankHolderName, bankName, serviceAccess,
     } = req.body;
@@ -67,7 +58,7 @@ async function createAgency(req, res, next) {
     if (!personName)     missing.push('Person Name');
     if (!age)            missing.push('Age');
     if (!email)          missing.push('Email');
-    if (!phone)          missing.push('Phone');
+    if (!rawPhone)       missing.push('Phone');
     if (!address)        missing.push('Address');
     if (!aadharNumber)   missing.push('Aadhar Number');
     if (!panNumber)      missing.push('PAN Number');
@@ -81,6 +72,13 @@ async function createAgency(req, res, next) {
         message: `Missing required fields: ${missing.join(', ')}`,
       });
     }
+
+    // The phone is the agency's portal login — must be a real 10-digit mobile,
+    // saved as just those 10 digits
+    if (!isValidMobile(rawPhone)) {
+      return res.status(400).json({ success: false, message: 'Enter a valid 10-digit mobile number.' });
+    }
+    const phone = phoneDigits(rawPhone);
 
     // Documents are mandatory
     const files = req.files || {};
@@ -109,42 +107,43 @@ async function createAgency(req, res, next) {
     const docPanUrl    = files.docPan?.[0]    ? `uploads/agencies/${files.docPan[0].filename}`    : null;
     const docBankUrl   = files.docBank?.[0]   ? `uploads/agencies/${files.docBank[0].filename}`   : null;
 
-    // Generate unique agent code (retry on collision)
-    let agentCode;
-    for (let attempt = 0; attempt < 10; attempt++) {
-      const candidate = generateAgentCode();
-      const existing = await agencyModel.findByAgentCode(candidate);
-      if (!existing) { agentCode = candidate; break; }
-    }
-    if (!agentCode) {
-      return res.status(500).json({ success: false, message: 'Could not generate unique agent code. Try again.' });
-    }
-
     const defaultPassword = generateDefaultPassword();
     const passwordHash = await bcrypt.hash(defaultPassword, 12);
 
-    const agency = await agencyModel.createAgency({
-      agencyName: agencyName.trim(),
-      personName: personName.trim(),
-      age: ageNum,
-      email: email.toLowerCase().trim(),
-      phone: phone.trim(),
-      address: address.trim(),
-      aadharNumber: aadharNumber.trim(),
-      panNumber: panNumber.trim().toUpperCase(),
-      bankAccount: bankAccount.trim(),
-      bankIfsc: bankIfsc?.trim().toUpperCase() || null,
-      bankHolderName: bankHolderName.trim(),
-      bankName: bankName.trim(),
-      docAadharUrl,
-      docPanUrl,
-      docBankUrl,
-      agentCode,
-      passwordHash,
-      plainPassword: defaultPassword,
-      createdBy: req.admin.id,
-      serviceAccess: services,
-    });
+    // Next code in the AGTRARA-001 sequence. Two agencies created at the same
+    // moment can pick the same number — the unique key refuses the second,
+    // which then takes the following number.
+    let agency;
+    for (let attempt = 0; !agency; attempt++) {
+      const agentCode = await agencyModel.nextAgentCode();
+      try {
+        agency = await agencyModel.createAgency({
+          agencyName: agencyName.trim(),
+          personName: personName.trim(),
+          age: ageNum,
+          email: email.toLowerCase().trim(),
+          phone: phone.trim(),
+          address: address.trim(),
+          aadharNumber: aadharNumber.trim(),
+          panNumber: panNumber.trim().toUpperCase(),
+          bankAccount: bankAccount.trim(),
+          bankIfsc: bankIfsc?.trim().toUpperCase() || null,
+          bankHolderName: bankHolderName.trim(),
+          bankName: bankName.trim(),
+          docAadharUrl,
+          docPanUrl,
+          docBankUrl,
+          agentCode,
+          passwordHash,
+          plainPassword: defaultPassword,
+          createdBy: req.admin.id,
+          serviceAccess: services,
+        });
+      } catch (err) {
+        if (err.code === '23505' && err.constraint === 'agencies_agent_code_key' && attempt < 5) continue;
+        throw err;
+      }
+    }
 
     // Give this agency's phone+password a working login in the app itself,
     // not just the agency panel — links an existing users row for that
@@ -206,7 +205,7 @@ async function getAgency(req, res, next) {
 /** PATCH /api/admin/agencies/:id — edit non-KYC details (admin-protected) */
 async function updateAgency(req, res, next) {
   try {
-    const { personName, age, email, phone, address, bankIfsc, serviceAccess } = req.body;
+    const { personName, age, email, phone: rawPhone, address, bankIfsc, serviceAccess } = req.body;
 
     const services = parseServiceAccess(serviceAccess);
     if (services && !services.length) {
@@ -226,6 +225,12 @@ async function updateAgency(req, res, next) {
       }
     }
 
+    // A changed phone is the new portal login — same rule as on create
+    const phone = rawPhone ? phoneDigits(rawPhone) : undefined;
+    if (rawPhone && !isValidMobile(rawPhone)) {
+      return res.status(400).json({ success: false, message: 'Enter a valid 10-digit mobile number.' });
+    }
+
     // Check phone uniqueness if changing
     if (phone) {
       const existing = await agencyModel.findByPhone(phone);
@@ -238,7 +243,7 @@ async function updateAgency(req, res, next) {
       personName,
       age: ageNum,
       email: email?.toLowerCase().trim(),
-      phone: phone?.trim(),
+      phone,
       address,
       bankIfsc: bankIfsc?.toUpperCase(),
       serviceAccess: services,

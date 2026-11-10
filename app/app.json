@@ -34,6 +34,31 @@
             "android.intent.category.DEFAULT",
             "android.intent.category.BROWSABLE"
           ]
+        },
+        {
+          "action": "android.intent.action.VIEW",
+          "autoVerify": true,
+          "data": [
+            {
+              "scheme": "https",
+              "host": "raralive.in",
+              "pathPrefix": "/user/"
+            },
+            {
+              "scheme": "https",
+              "host": "raralive.in",
+              "pathPrefix": "/room/"
+            },
+            {
+              "scheme": "https",
+              "host": "raralive.in",
+              "pathPrefix": "/post/"
+            }
+          ],
+          "category": [
+            "android.intent.category.BROWSABLE",
+            "android.intent.category.DEFAULT"
+          ]
         }
       ],
       "permissions": [

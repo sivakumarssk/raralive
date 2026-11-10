@@ -380,7 +380,7 @@ function emitBattleUpdate(io, live, clientGiftId) {
  * Final result from the tally's confirmed totals. winner is 'from' / 'to', or
  * null when the scores are equal (a draw). Top 3 supporters per side.
  */
-function buildBattleResult(battle, live, { reason, endedBy }) {
+function buildBattleResult(battle, live, { reason, endedBy, endedAt = new Date() }) {
   const top = topBattleGifters(live);
   const side = (prefix, score, supporters) => ({
     room_id: battle[`${prefix}_room_id`],
@@ -393,8 +393,15 @@ function buildBattleResult(battle, live, { reason, endedBy }) {
   });
   return {
     invite_id: battle.id,
+    mode: battle.mode ?? 'normal',
     reason,
     ended_by: endedBy ?? null,
+    ended_at: new Date(endedAt).toISOString(),
+    // How long the battle ran — its timer: the full length, or less if cancelled
+    played_seconds: Math.max(0, Math.round(Math.min(
+      new Date(endedAt).getTime() - new Date(battle.started_at).getTime(),
+      (battle.duration_minutes ?? 0) * 60_000,
+    ) / 1000)),
     winner: live.left > live.right ? 'from' : live.right > live.left ? 'to' : null,
     from: side('from', live.left, top.left),
     to: side('to', live.right, top.right),
@@ -934,6 +941,10 @@ function setupSocket(httpServer) {
         socket.emit('join_blocked', { message: 'You are blocked from this room', kind: 'room_block' });
         return;
       }
+      if (roomInfo?.deleted_at) {
+        socket.emit('join_blocked', { message: 'This chat room has been deleted.', kind: 'room_deleted' });
+        return;
+      }
 
       const userName = userRow?.full_name || userRow?.username || 'Someone';
       const avatarUrl = userRow?.avatar_url || null;
@@ -1022,8 +1033,31 @@ function setupSocket(httpServer) {
       await saveMessage(roomId, userId, 'join', `${userName} joined`);
     });
 
-    // "Refresh Room" from the app menu — re-send this room's state to the caller
-    // only. Unlike join_room, no join notice / welcome toast for everyone.
+    // Profile card (tap someone in the room): their gifts sent / received in
+    // this room, followers, cover, lifetime gifting (→ level) and whether you
+    // follow them — one query over this socket instead of three HTTP calls.
+    socket.on('get_profile_card', async ({ roomId: cardRoomId, userId: targetId } = {}, ack) => {
+      const reply = typeof ack === 'function' ? ack : () => {};
+      if (!targetId) return reply({ ok: false });
+      try {
+        const r = await db.query(
+          `SELECT u.username, u.cover_url,
+                  (SELECT COUNT(*)::int FROM user_follows WHERE following_id = u.id) AS followers_count,
+                  (SELECT COALESCE(SUM(coins * quantity), 0)::int FROM room_gift_events WHERE sender_id = u.id) AS coins_gifted,
+                  (SELECT COALESCE(SUM(coins * quantity), 0)::int FROM room_gift_events WHERE room_id = $2 AND sender_id = u.id) AS room_sent,
+                  (SELECT COALESCE(SUM(coins * quantity), 0)::int FROM room_gift_events WHERE room_id = $2 AND recipient_id = u.id) AS room_received,
+                  EXISTS (SELECT 1 FROM user_follows WHERE follower_id = $3 AND following_id = u.id) AS is_following
+           FROM users u WHERE u.id = $1`,
+          [targetId, cardRoomId || null, userId]
+        );
+        if (!r.rows[0]) return reply({ ok: false });
+        reply({ ok: true, card: r.rows[0] });
+      } catch (e) {
+        console.error('get_profile_card error:', e.message);
+        reply({ ok: false });
+      }
+    });
+
     // Either host cancels a running battle: it ends at once and both rooms get
     // the result, decided by the confirmed gifting totals at this moment.
     socket.on('cancel_battle', async ({ inviteId } = {}, ack) => {
@@ -1046,6 +1080,8 @@ function setupSocket(httpServer) {
       }
     });
 
+    // "Refresh Room" from the app menu — re-send this room's state to the caller
+    // only. Unlike join_room, no join notice / welcome toast for everyone.
     socket.on('refresh_room', async ({ roomId }) => {
       if (!roomId || socket.currentRoomId !== roomId) return;
       const [roomInfo, battleSnapshot] = await Promise.all([
@@ -1640,6 +1676,12 @@ function kickUserFromRoom(roomId, targetUserId, payload = { message: 'You have b
   _io.to(roomId).emit('online_count', { roomId, count: onlineCount(roomId) });
 }
 
+/** Removes everyone currently in a room (e.g. it was just deleted). */
+function removeEveryoneFromRoom(roomId, payload) {
+  const present = new Set([...(roomUsers.get(roomId)?.values() ?? [])].map(u => u.userId));
+  for (const uid of present) kickUserFromRoom(roomId, uid, payload);
+}
+
 /** Rooms the user currently has a socket in. */
 function roomsWithUser(targetUserId) {
   const out = [];
@@ -1678,7 +1720,7 @@ function applyModerationResult(result) {
 
 module.exports = {
   applyModerationResult,
-  setupSocket, setIo, getOnlineCount, getAllOnlineCounts, isRoomHostOnline, getHostSocketId, getRoomMembers, kickUserFromRoom,
+  setupSocket, setIo, getOnlineCount, getAllOnlineCounts, isRoomHostOnline, getHostSocketId, getRoomMembers, kickUserFromRoom, removeEveryoneFromRoom,
   isFriendZoneUserOnline, debugFriendZonePresence, emitToUser, isUserSeatedInRoom, notifyChatroomStatus,
   scheduleBattleEnd,
 };

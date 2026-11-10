@@ -152,6 +152,16 @@ async function migrate() {
       PRIMARY KEY (post_id, user_id)
     );
   `);
+  // Posts a user saved (their profile's Saved tab)
+  await run('post_saves table', `
+    CREATE TABLE IF NOT EXISTS post_saves (
+      post_id    UUID NOT NULL REFERENCES posts(id) ON DELETE CASCADE,
+      user_id    UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      PRIMARY KEY (post_id, user_id)
+    );
+    CREATE INDEX IF NOT EXISTS idx_post_saves_user ON post_saves (user_id, created_at DESC);
+  `);
   await run('post_comments table', `
     CREATE TABLE IF NOT EXISTS post_comments (
       id         UUID PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -328,6 +338,16 @@ async function migrate() {
       slabs            JSONB NOT NULL DEFAULT '[]',
       updated_at       TIMESTAMPTZ NOT NULL DEFAULT NOW(),
       UNIQUE (source, effective_month)
+    );
+  `);
+
+  // ── task_bonus_slab_versions (Daily Task "Bonus Payment" slabs, per month) ──
+  // Extra bonus on Audio Chat Room gems, separate from the earning slabs.
+  await run('task_bonus_slab_versions table', `
+    CREATE TABLE IF NOT EXISTS task_bonus_slab_versions (
+      effective_month  TEXT PRIMARY KEY,
+      slabs            JSONB NOT NULL DEFAULT '[]',
+      updated_at       TIMESTAMPTZ NOT NULL DEFAULT NOW()
     );
   `);
 
@@ -636,6 +656,23 @@ async function migrate() {
   `);
   await run('rooms.room_name_expires_at', `
     ALTER TABLE rooms ADD COLUMN IF NOT EXISTS room_name_expires_at TIMESTAMPTZ;
+  `);
+  // Set when a host deletes their private room (soft delete, status 'closed')
+  await run('rooms.deleted_at', `
+    ALTER TABLE rooms ADD COLUMN IF NOT EXISTS deleted_at TIMESTAMPTZ;
+  `);
+  // Topic tags picked when creating a room, shown in the app's room lists
+  await run('rooms.tags', `
+    ALTER TABLE rooms ADD COLUMN IF NOT EXISTS tags TEXT[] NOT NULL DEFAULT '{}';
+  `);
+  // Room names only clash with active rooms: unique among public rooms, and
+  // per host among private rooms. Replaces the old every-room-ever unique name.
+  await run('rooms name uniqueness', `
+      DROP INDEX IF EXISTS idx_rooms_room_name_unique;
+      CREATE UNIQUE INDEX IF NOT EXISTS idx_rooms_public_room_name
+        ON rooms (lower(room_name)) WHERE visibility = 'public' AND status = 'active' AND deleted_at IS NULL;
+      CREATE UNIQUE INDEX IF NOT EXISTS idx_rooms_private_room_name
+        ON rooms (host_user_id, lower(room_name)) WHERE visibility = 'private' AND status = 'active' AND deleted_at IS NULL;
   `);
 
   // Bumped by "log out of all devices"; app JWTs carry it as `tv`.

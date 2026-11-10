@@ -14,7 +14,7 @@ import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context'
 import { BASE_URL } from '@/services/api';
 import { authStore } from '@/store/auth-store';
 import {
-  SOURCE_BY_KEY, formatCallDuration, formatGemValue, formatInr, formatN, formatTxnTime, gemValue, monthLabel,
+  SOURCE_BY_KEY, formatCallDuration, formatInr, formatN, formatTxnTime, monthLabel,
   type EarningSource,
 } from '@/screens/wallet/earnings-shared';
 
@@ -67,14 +67,12 @@ export function ServiceEarningsScreen() {
   const next = data?.next_slab ?? null;
   const prevTarget = data?.slabs.filter(sl => sl.reached).pop()?.gems ?? 0;
   const progress = next ? Math.min(100, ((gems - prevTarget) / (next.gems - prevTarget)) * 100) : 100;
-  const value = data ? gemValue(data.slabs, data.current_slab) : null;
   const configured = !!data?.configured && (data?.slabs.length ?? 0) > 0;
 
   const showInfo = () => Alert.alert(
     'How slabs work',
     `Gems you earn in ${meta.label} this month count towards these slabs. ` +
     `Reaching a slab pays its amount${data?.slabs.some(sl => sl.bonus > 0) ? ' plus its bonus' : ''} — each slab shows the total for reaching it, so a higher slab replaces the one before. ` +
-    `Gem value is that total divided by the slab's gems. ` +
     'Gems and slabs reset to 0 at the end of every month; money already added stays in your wallet.',
   );
 
@@ -106,9 +104,7 @@ export function ServiceEarningsScreen() {
 
           {configured ? (
             <TouchableOpacity activeOpacity={0.7} onPress={showInfo} style={s.rateRow}>
-              <Text style={s.rateText}>
-                Gem value: <Text style={s.rateVal}>{formatGemValue(value)}</Text>
-              </Text>
+              <Text style={s.rateText}>How slabs work</Text>
               <Ionicons name="information-circle-outline" size={16} color="#8A8A96" />
             </TouchableOpacity>
           ) : (
@@ -271,7 +267,6 @@ const s = StyleSheet.create({
 
   rateRow: { flexDirection: 'row', alignItems: 'center', gap: 6, paddingHorizontal: 4, paddingVertical: 14 },
   rateText: { fontSize: 13, fontWeight: '500', color: '#60626A' },
-  rateVal: { fontWeight: '700', color: '#1C1E22' },
 
   tabRow: { flexDirection: 'row', backgroundColor: '#EDE8F8', borderRadius: 30, padding: 4, marginBottom: 14 },
   tabBtn: { flex: 1, paddingVertical: 9, borderRadius: 26, alignItems: 'center' },

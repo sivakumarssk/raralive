@@ -1,5 +1,4 @@
 import { Ionicons } from '@expo/vector-icons';
-import { useRouter } from 'expo-router';
 import { useEffect, useRef, useState } from 'react';
 import {
   Animated,
@@ -16,14 +15,12 @@ import {
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { BASE_URL, MEDIA_BASE } from '@/services/api';
 import { authStore } from '@/store/auth-store';
-import { RC } from '../room-ui';
-import { avatarSource } from '@/utils/default-avatar';
 
 const COIN_IMG = require('@/assets/tabs/coin.png');
 const { height: SCREEN_H } = Dimensions.get('window');
 const SHEET_HEIGHT = SCREEN_H * 0.55;
 
-type Tab = 'tasks' | 'top-gifters';
+type Tab = 'tasks' | 'bonus';
 
 type TaskItem = {
   task_id: string; title: string; description: string; type: 'daily' | 'weekly';
@@ -188,27 +185,34 @@ function TasksTab({ roomId, refreshKey }: { roomId?: string; refreshKey?: number
   );
 }
 
-// ── Top Gifters Tab ──────────────────────────────────────────────────────────
+// ── Bonus Payment Tab ────────────────────────────────────────────────────────
+// Daily Task bonus slabs (admin → Daily Task Bonus): an extra bonus on Audio
+// Chat Room gems, separate from the earning slabs. Reaching a slab credits its
+// amount to the wallet as Extra Bonus (done on the server).
 
-type TopGifter = {
-  id: string; full_name: string | null; username: string | null;
-  avatar_url: string | null; total_coins: number;
-};
+type BonusSlab = { gems: number; amount: number; reached: boolean; credited_at: string | null };
+type BonusData = { month: string; month_gems: number; slabs: BonusSlab[] };
 
-function TopGiftersTab({ onClose }: { onClose: () => void }) {
-  const router = useRouter();
-  const [gifters, setGifters] = useState<TopGifter[]>([]);
+const BONUS_INFO = 'Once you complete a slab, the corresponding bonus amount will be automatically credited to your Wallet as Extra Bonus.';
+
+function formatInr(n: number) {
+  return `₹${n.toLocaleString('en-IN', { maximumFractionDigits: 2 })}`;
+}
+
+function BonusPaymentTab({ refreshKey }: { refreshKey?: number }) {
+  const [data, setData] = useState<BonusData | null>(null);
   const [loading, setLoading] = useState(true);
+  const [showInfo, setShowInfo] = useState(false);
 
   useEffect(() => {
     const token = authStore.getToken();
     if (!token) { setLoading(false); return; }
-    fetch(`${BASE_URL}/tasks/top-gifters`, { headers: { Authorization: `Bearer ${token}` } })
+    fetch(`${BASE_URL}/tasks/bonus`, { headers: { Authorization: `Bearer ${token}` } })
       .then(r => r.json())
-      .then(j => { if (j.success) setGifters(j.data); })
+      .then(j => { if (j.success) setData(j.data); })
       .catch(() => {})
       .finally(() => setLoading(false));
-  }, []);
+  }, [refreshKey]);
 
   if (loading) return (
     <View style={{ flex: 1, alignItems: 'center', justifyContent: 'center' }}>
@@ -216,55 +220,99 @@ function TopGiftersTab({ onClose }: { onClose: () => void }) {
     </View>
   );
 
-  if (gifters.length === 0) return (
-    <View style={{ flex: 1, alignItems: 'center', justifyContent: 'center', gap: 8 }}>
-      <Text style={{ fontSize: 28 }}>🎁</Text>
-      <Text style={{ color: '#ABADB2', fontSize: 14 }}>No gifters yet this week</Text>
-    </View>
-  );
-
-  const MEDAL = ['🥇', '🥈', '🥉'];
+  const slabs = data?.slabs ?? [];
+  const gems = data?.month_gems ?? 0;
+  const nextIndex = slabs.findIndex(sl => !sl.reached);
 
   return (
-    <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={{ paddingVertical: 12 }}>
-      <Text style={th.sectionLabel}>Top gifters this week</Text>
-      {gifters.map((g, i) => {
-        const name = g.username ?? g.full_name ?? 'User';
-        const uri = g.avatar_url ? `${MEDIA_BASE}/${g.avatar_url.replace(/^\//, '')}` : null;
-        return (
-          <TouchableOpacity
-            key={g.id}
-            style={th.row}
-            activeOpacity={0.7}
-            onPress={() => { onClose(); router.push(`/user/${g.id}` as any); }}>
-            <Text style={th.rank}>{MEDAL[i] ?? `#${i + 1}`}</Text>
-            <View style={th.avatar}>
-              <Image source={avatarSource(uri)} style={th.avatarImg} />
-            </View>
-            <View style={{ flex: 1 }}>
-              <Text style={th.name}>{name}</Text>
-              <Text style={th.sub}>gifted this week</Text>
-            </View>
-            <View style={th.coinsBadge}>
-              <Text style={th.coinsText}>🪙 {formatCoins(Number(g.total_coins))}</Text>
-            </View>
+    <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={tab.scroll}>
+      <View style={bp.section}>
+        {/* Heading + ? (tap for how it works) */}
+        <View style={bp.headRow}>
+          <Text style={bp.title}>Bonus Payment</Text>
+          <TouchableOpacity onPress={() => setShowInfo(v => !v)} hitSlop={10} accessibilityLabel="How Bonus Payment works">
+            <Ionicons name={showInfo ? 'help-circle' : 'help-circle-outline'} size={20} color="#7A0EED" />
           </TouchableOpacity>
-        );
-      })}
+        </View>
+        {showInfo && (
+          <View style={bp.infoBox}>
+            <Ionicons name="information-circle" size={16} color="#7A0EED" style={{ marginTop: 1 }} />
+            <Text style={bp.infoText}>{BONUS_INFO}</Text>
+          </View>
+        )}
+
+        {slabs.length === 0 ? (
+          <View style={bp.empty}>
+            <Text style={{ fontSize: 28 }}>🎁</Text>
+            <Text style={bp.emptyText}>No bonus slabs right now</Text>
+          </View>
+        ) : (
+          <>
+            <Text style={bp.progressLine}>
+              This month: <Text style={bp.progressGems}>💎 {gems.toLocaleString('en-IN')} gems</Text>
+            </Text>
+            {slabs.map((sl, i) => {
+              const isNext = i === nextIndex;
+              return (
+                <View key={sl.gems} style={[bp.slabCard, sl.reached && bp.slabCardDone]}>
+                  <View style={[bp.slabBadge, sl.reached && bp.slabBadgeDone]}>
+                    {sl.reached
+                      ? <Ionicons name="checkmark" size={14} color="#FFFFFF" />
+                      : <Text style={bp.slabBadgeText}>{i + 1}</Text>}
+                  </View>
+                  <View style={bp.slabBody}>
+                    <View style={bp.slabTop}>
+                      <Text style={bp.slabGems}>💎 {sl.gems.toLocaleString('en-IN')} gems</Text>
+                      <Text style={[bp.slabAmount, sl.reached && bp.slabAmountDone]}>{formatInr(sl.amount)}</Text>
+                    </View>
+                    {sl.reached ? (
+                      <Text style={bp.creditedText}>✓ Credited to wallet as Extra Bonus</Text>
+                    ) : isNext ? (
+                      <View style={bp.nextRow}>
+                        <ProgressBar progress={gems} goal={sl.gems} />
+                        <Text style={bp.nextLabel}>{formatCoins(gems)} / {formatCoins(sl.gems)}</Text>
+                      </View>
+                    ) : null}
+                  </View>
+                </View>
+              );
+            })}
+          </>
+        )}
+      </View>
     </ScrollView>
   );
 }
 
-const th = StyleSheet.create({
-  sectionLabel: { fontSize: 12, fontWeight: '700', color: '#ABADB2', paddingHorizontal: 16, paddingBottom: 8, letterSpacing: 0.5 },
-  row: { flexDirection: 'row', alignItems: 'center', gap: 12, paddingHorizontal: 16, paddingVertical: 10, borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: '#F0EFF5' },
-  rank: { fontSize: 18, width: 28, textAlign: 'center' },
-  avatar: { width: 36, height: 36, borderRadius: 18, overflow: 'hidden' },
-  avatarImg: { width: 36, height: 36, borderRadius: 18 },
-  name: { fontSize: 14, fontWeight: '700', color: '#1C1E22' },
-  sub: { fontSize: 12, color: '#ABADB2', marginTop: 1 },
-  coinsBadge: { paddingVertical: 4 },
-  coinsText: { fontSize: 12, fontWeight: '700', color: RC.number },
+const bp = StyleSheet.create({
+  section: { paddingHorizontal: 16, paddingTop: 16 },
+  headRow: { flexDirection: 'row', alignItems: 'center', gap: 6 },
+  title: { fontSize: 14, fontWeight: '800', color: '#1C1E22' },
+  infoBox: {
+    flexDirection: 'row', gap: 6, marginTop: 8, padding: 10, borderRadius: 12,
+    backgroundColor: '#F4EEFF', borderWidth: 1, borderColor: '#E4D6FF',
+  },
+  infoText: { flex: 1, fontSize: 12, lineHeight: 17, color: '#4B3A6B' },
+  progressLine: { marginTop: 10, marginBottom: 4, fontSize: 12, color: '#7A7A8A' },
+  progressGems: { fontWeight: '800', color: '#1C1E22' },
+  empty: { alignItems: 'center', gap: 8, paddingVertical: 32 },
+  emptyText: { color: '#ABADB2', fontSize: 14 },
+  slabCard: {
+    flexDirection: 'row', alignItems: 'center', gap: 12, marginTop: 8,
+    padding: 12, borderRadius: 14, backgroundColor: '#FAF8FF', borderWidth: 1, borderColor: '#EEE8FB',
+  },
+  slabCardDone: { backgroundColor: '#F1FAF2', borderColor: '#D6EFD9' },
+  slabBadge: { width: 28, height: 28, borderRadius: 14, backgroundColor: '#EDE4FF', alignItems: 'center', justifyContent: 'center' },
+  slabBadgeDone: { backgroundColor: '#4CAF50' },
+  slabBadgeText: { fontSize: 12, fontWeight: '800', color: '#7A0EED' },
+  slabBody: { flex: 1, gap: 6 },
+  slabTop: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 8 },
+  slabGems: { fontSize: 13, fontWeight: '700', color: '#1C1E22' },
+  slabAmount: { fontSize: 15, fontWeight: '900', color: '#7A0EED' },
+  slabAmountDone: { color: '#2E7D32' },
+  creditedText: { fontSize: 11, fontWeight: '600', color: '#4CAF50' },
+  nextRow: { flexDirection: 'row', alignItems: 'center', gap: 8 },
+  nextLabel: { fontSize: 11, fontWeight: '700', color: '#7A0EED' },
 });
 
 type Props = { visible: boolean; onClose: () => void; roomId?: string; refreshKey?: number };
@@ -295,7 +343,7 @@ export function DailyTaskModal({ visible, onClose, roomId, refreshKey }: Props) 
 
   const TABS: { key: Tab; label: string }[] = [
     { key: 'tasks', label: 'Tasks' },
-    { key: 'top-gifters', label: 'Top Gifters' },
+    { key: 'bonus', label: 'Bonus Payment' },
   ];
 
   return (
@@ -315,7 +363,7 @@ export function DailyTaskModal({ visible, onClose, roomId, refreshKey }: Props) 
         </View>
         <View style={s.content}>
           {activeTab === 'tasks' && <TasksTab roomId={roomId} refreshKey={refreshKey} />}
-          {activeTab === 'top-gifters' && <TopGiftersTab onClose={onClose} />}
+          {activeTab === 'bonus' && <BonusPaymentTab refreshKey={refreshKey} />}
         </View>
       </Animated.View>
     </Modal>

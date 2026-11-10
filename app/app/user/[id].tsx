@@ -20,6 +20,8 @@ import {
 import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { BASE_URL, MEDIA_BASE } from '@/services/api';
+import { BoldIcon } from '@/components/ui/bold-icon';
+import { shareProfile } from '@/utils/share';
 import { authStore } from '@/store/auth-store';
 import { ImageViewer } from '@/components/ImageViewer';
 import { UserLevelBadge } from '@/components/UserLevel';
@@ -326,10 +328,10 @@ export default function UserProfilePage() {
                   Alert.alert('Could not open chat', 'Network error. Check your connection.');
                 }
               }}>
-              <Ionicons name="chatbubble-ellipses-outline" size={17} color="#7A0EED" />
+              <BoldIcon name="chatbubble-ellipses-outline" size={17} color="#7A0EED" weight={20} />
             </TouchableOpacity>
-            <TouchableOpacity style={s.iconBtn} activeOpacity={0.85}>
-              <Ionicons name="share-social-outline" size={17} color="#7A0EED" />
+            <TouchableOpacity style={s.iconBtn} activeOpacity={0.85} onPress={() => shareProfile({ id: profile.id, name: displayName })} accessibilityLabel="Share profile">
+              <BoldIcon name="arrow-redo-outline" size={18} color="#7A0EED" weight={20} />
             </TouchableOpacity>
             <TouchableOpacity style={[s.iconBtn, s.reportBtn]} activeOpacity={0.85} onPress={() => setReportVisible(true)}>
               <Ionicons name="flag-outline" size={16} color="#E14C57" />
@@ -359,7 +361,7 @@ export default function UserProfilePage() {
                   const uri    = media ? resolveUrl(media.media_url) : null;
                   const isVid  = media?.media_type === 'video';
                   return (
-                    <View style={s.gridItem}>
+                    <TouchableOpacity style={s.gridItem} activeOpacity={0.85} onPress={() => router.push(`/post/${item.id}` as never)}>
                       {uri
                         ? <Image source={{ uri }} style={s.gridImg} resizeMode="cover" />
                         : <View style={s.gridPlaceholder}>
@@ -370,7 +372,7 @@ export default function UserProfilePage() {
                           <Ionicons name="play" size={12} color="#FFF" />
                         </View>
                       )}
-                    </View>
+                    </TouchableOpacity>
                   );
                 }}
               />

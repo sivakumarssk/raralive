@@ -17,9 +17,9 @@ import { ScreenBackground } from '@/components/ui/screen-background';
 import { apiCheckUsername, apiRegister } from '@/services/api';
 import { armSmsOtp, disarmSmsOtp } from '@/services/sms-otp';
 import { authStore, type Gender } from '@/store/auth-store';
+import { USERNAME_MAX, USERNAME_RE, USERNAME_RULE, cleanUsername } from '@/utils/text-limits';
 import { DatePickerModal, displayDob, formatDob } from './dob-picker';
 
-const USERNAME_RE = /^[a-zA-Z0-9_]{3,20}$/;
 
 // Password — disabled, the app signs in with OTP:
 // // Password rules — shown in the "?" checklist and enforced on submit.
@@ -58,7 +58,7 @@ export function RegisterScreen({ onCreateAccount }: RegisterScreenProps) {
     if (!username.trim()) {
       nextErrors.username = 'Username is required.';
     } else if (!USERNAME_RE.test(username.trim())) {
-      nextErrors.username = 'Use 3–20 characters (letters, numbers, underscore).';
+      nextErrors.username = USERNAME_RULE;
     }
 
     if (!gender) {
@@ -153,12 +153,12 @@ export function RegisterScreen({ onCreateAccount }: RegisterScreenProps) {
                     placeholderTextColor="#ABADB2"
                     autoCapitalize="none"
                     autoCorrect={false}
-                    maxLength={20}
+                    maxLength={USERNAME_MAX}
                     underlineColorAndroid="transparent"
                     returnKeyType="next"
                     value={username}
                     onChangeText={(value) => {
-                      setUsername(value.replace(/\s/g, ''));
+                      setUsername(cleanUsername(value));
                       if (errors.username) setErrors((prev) => ({ ...prev, username: undefined }));
                     }}
                   />

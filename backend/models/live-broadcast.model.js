@@ -15,8 +15,8 @@ async function createBroadcastRoom({ hostUserId, roomName, roomImageUrl }) {
     const exists = await db.query('SELECT id FROM rooms WHERE room_code = $1', [roomCode]);
     if (!exists.rows.length) break;
   }
-  // room_name is globally UNIQUE — suffix with the code to avoid collisions
-  // across repeated go-live sessions from the same or different hosts.
+  // A host's active private room names are unique — suffix with the code so
+  // repeated go-live sessions never collide.
   const uniqueName = `${roomName} · ${roomCode}`;
 
   const roomResult = await db.query(

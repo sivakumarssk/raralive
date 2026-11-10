@@ -79,7 +79,6 @@ function CategoryDrawer({ open, editing, onClose, onSaved }: {
 
 // ── Gift drawer ────────────────────────────────────────────────────────────────
 
-const BG_PRESETS = ['#FFE4EE','#E4F0FF','#EDE4FF','#FFF6D6','#E4FFF0','#FFE4D6','#F4E4FF','#E4FFFA'];
 
 function GiftDrawer({ open, editing, categories, onClose, onSaved }: {
   open: boolean; editing: ShopGift | null; categories: Category[];
@@ -87,7 +86,6 @@ function GiftDrawer({ open, editing, categories, onClose, onSaved }: {
 }) {
   const [name, setName] = useState('');
   const [coins, setCoins] = useState('');
-  const [bgColor, setBgColor] = useState('#FFE4EE');
   const [sortOrder, setSortOrder] = useState('0');
   const [categoryId, setCategoryId] = useState<string>('');
   const [file, setFile] = useState<File | null>(null);
@@ -99,11 +97,11 @@ function GiftDrawer({ open, editing, categories, onClose, onSaved }: {
   useEffect(() => {
     if (editing) {
       setName(editing.name); setCoins(String(editing.coins));
-      setBgColor(editing.bg_color); setSortOrder(String(editing.sort_order));
+      setSortOrder(String(editing.sort_order));
       setCategoryId(editing.category_id ?? '');
       setPreview(resolveImg(editing.image_url));
     } else {
-      setName(''); setCoins(''); setBgColor('#FFE4EE'); setSortOrder('0'); setCategoryId('');
+      setName(''); setCoins(''); setSortOrder('0'); setCategoryId('');
       setPreview(null);
     }
     setFile(null); setError('');
@@ -115,7 +113,6 @@ function GiftDrawer({ open, editing, categories, onClose, onSaved }: {
     const form = new FormData();
     form.append('name', name.trim());
     form.append('coins', coins);
-    form.append('bg_color', bgColor);
     form.append('sort_order', sortOrder || '0');
     if (categoryId) form.append('category_id', categoryId);
     if (file) form.append('image', file);
@@ -144,8 +141,7 @@ function GiftDrawer({ open, editing, categories, onClose, onSaved }: {
             <label className="block text-xs font-semibold text-gray-500 mb-2">Image (PNG or GIF)</label>
             <div
               onClick={() => fileRef.current?.click()}
-              className="flex flex-col items-center justify-center border-2 border-dashed border-gray-200 rounded-xl py-5 cursor-pointer hover:border-purple-300 transition-colors"
-              style={{ backgroundColor: bgColor }}>
+              className="flex flex-col items-center justify-center border-2 border-dashed border-gray-200 rounded-xl py-5 cursor-pointer hover:border-purple-300 transition-colors">
               {preview
                 ? <img src={preview} alt="preview" className="w-20 h-20 object-contain rounded-full" />
                 : <span className="text-3xl">🎁</span>
@@ -180,19 +176,6 @@ function GiftDrawer({ open, editing, categories, onClose, onSaved }: {
               <option value="">— No category —</option>
               {categories.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}
             </select>
-          </div>
-
-          <div>
-            <label className="block text-xs font-semibold text-gray-500 mb-2">Background Color</label>
-            <div className="flex flex-wrap gap-2">
-              {BG_PRESETS.map(c => (
-                <button key={c} onClick={() => setBgColor(c)}
-                  className={`w-8 h-8 rounded-full border-2 transition-all ${bgColor === c ? 'border-purple-500 scale-110' : 'border-transparent'}`}
-                  style={{ backgroundColor: c }} />
-              ))}
-              <input type="color" value={bgColor} onChange={e => setBgColor(e.target.value)}
-                className="w-8 h-8 rounded-full border-2 border-gray-200 cursor-pointer" title="Custom color" />
-            </div>
           </div>
 
           <div>
@@ -330,7 +313,7 @@ export function ShopGiftsPage() {
             const imgUrl = resolveImg(gift.image_url);
             return (
               <div key={gift.id} className={`bg-white rounded-2xl border border-gray-100 shadow-sm p-4 flex flex-col items-center gap-3 group ${!gift.is_active ? 'opacity-50' : ''}`}>
-                <div className="w-16 h-16 rounded-full flex items-center justify-center overflow-hidden" style={{ backgroundColor: gift.bg_color }}>
+                <div className="w-16 h-16 rounded-full flex items-center justify-center overflow-hidden">
                   {imgUrl
                     ? <img src={imgUrl} alt={gift.name} className="w-14 h-14 object-contain" />
                     : <span className="text-3xl">🎁</span>

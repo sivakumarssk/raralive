@@ -22,26 +22,6 @@ export function formatInr(n: number): string {
   return `₹ ${n.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
 }
 
-/**
- * Money one gem is worth at a slab: the slab's full amount (payout + bonus —
- * slab amounts are cumulative, this is what reaching it pays in total) divided
- * by its gem target. Uses the slab reached this month, else the first slab.
- */
-export function gemValue(
-  slabs: { name: string; gems: number; payout: number; bonus: number }[],
-  currentSlab: string | null,
-): number | null {
-  const slab = slabs.find(sl => sl.name === currentSlab) ?? slabs[0];
-  if (!slab || slab.gems <= 0) return null;
-  return (slab.payout + slab.bonus) / slab.gems;
-}
-
-/** "₹0.025 / gem" — one format everywhere a gem value is shown. */
-export function formatGemValue(value: number | null): string {
-  if (value == null) return '—';
-  return `₹${value >= 0.01 ? value.toFixed(3) : value.toFixed(4)} / gem`;
-}
-
 export function formatN(n: number): string {
   return n.toLocaleString('en-IN');
 }

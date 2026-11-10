@@ -8,6 +8,7 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { RingLoader } from '@/components/RingLoader';
 import { authStore } from '@/store/auth-store';
 import { friendZoneSocketStore } from '@/store/friend-zone-socket-store';
+import { enterApp } from '@/store/pending-link';
 
 const SPLASH_IMG = require('@/assets/images/splash-rara.jpg');
 
@@ -25,7 +26,9 @@ export default function SplashScreen() {
       if (hasToken) friendZoneSocketStore.connect();
       // A logged-in account that quit before picking a language gets the
       // picker now; otherwise Home.
-      router.replace(!hasToken ? '/login' as never : authStore.needsLanguage() ? '/language' : '/(tabs)');
+      // (enterApp also opens a shared link the app was launched with.)
+      if (hasToken) enterApp();
+      else router.replace('/login' as never);
     }, 2200);
 
     return () => clearTimeout(timeout);

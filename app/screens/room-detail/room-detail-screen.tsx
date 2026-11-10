@@ -12,7 +12,6 @@ import {
   Modal,
   Platform,
   ScrollView,
-  Share,
   StyleSheet,
   Text,
   TouchableOpacity,
@@ -27,6 +26,7 @@ import { socketStore, onGiftError, onLiveGift, onUserJoined, onPinnedCommentUpda
 import { type IncomingSeatRequest, type IncomingStageInvite, useBattleResult, useRoomBattle, useRoomSocket } from '@/hooks/useRoomSocket';
 import { BASE_URL, MEDIA_BASE, resolveImageUrl } from '@/services/api';
 import { authStore } from '@/store/auth-store';
+import { shareRoom } from '@/utils/share';
 import { getUserLevel } from '@/utils/userLevel';
 import { roomStore } from '@/store/room-store';
 import { ChatFeed, messagePreviewText } from './components/chat-feed';
@@ -43,7 +43,7 @@ import { GiftFullscreenAnim } from './components/gift-fullscreen-anim';
 import { GiftBar, GiftPickerBar, type GiftTarget } from './components/gift-tray';
 import { GiftFlyAnimation, type GiftFlyHandle, type SlotPosition } from './components/gift-fly-animation';
 import { BANNER_GIFT_CENTER, BANNER_ROW_STEP, GiftComboBanners, type GiftBannersHandle } from './components/gift-combo-banner';
-import { BattleBanner } from './components/battle-banner';
+import { BattleBanner, battleBannerOverlayBottom } from './components/battle-banner';
 import { BattleOverlay } from './components/battle-result';
 import { RoomHeader } from './components/room-header';
 import { RoomStage, STAGE_GRADIENT, type HostInfo, type BattleStageInfo } from './components/room-stage';
@@ -115,19 +115,6 @@ export function RoomDetailScreen({ roomId = '', onBack, openBattle }: RoomDetail
   const insets = useSafeAreaInsets();
   const scrollRef = useRef<ScrollView>(null);
   const { width: screenWidth } = useWindowDimensions();
-  // BattleBanner scales its internal layout off a 1080px reference (see
-  // battle-banner.tsx REF/scale) — its bridge sits `progressTop` px down
-  // from the banner's own top edge, out of a total `cardHeight` px tall
-  // banner. Mirroring that same math here (instead of a fixed pixel
-  // offset) keeps the bridge line flush with the stage's bottom edge
-  // across every screen width, not just the device it was eyeballed on.
-  const battleBannerScale = Math.min(1.15, screenWidth / 1080);
-  const battleBannerCardHeight = 270 * battleBannerScale;
-  const battleBannerBridgeTop = 110 * battleBannerScale;
-  // Extra downward nudge so the banner sits clear of the audio stage above
-  // it instead of overlapping its bottom edge.
-  const battleOverlayExtraDrop = 24 * battleBannerScale;
-  const battleOverlayBottom = battleBannerBridgeTop - battleBannerCardHeight - battleOverlayExtraDrop;
   const [showDailyTask, setShowDailyTask] = useState(false);
   const [showCoinBox, setShowCoinBox] = useState(false);
   const { data: giftSlab, reload: reloadGiftSlab } = useGiftSlabProgress();
@@ -379,23 +366,31 @@ export function RoomDetailScreen({ roomId = '', onBack, openBattle }: RoomDetail
   // follows how fast the sender taps — their next gift launches a short gap after
   // the previous one takes off, without waiting for it to land. When a sender's
   // gifts pile up, the gap and flight time shrink so the animation keeps up.
-  type SenderQueue = { items: ChatMessage[]; timer: ReturnType<typeof setTimeout> | null };
+  //
+  // Speed follows the sender's tap rhythm: a gift arriving within
+  // GIFT_COMBO_WINDOW_MS of that sender's previous one is continuous tapping
+  // and flies fast; a single tap flies at normal speed.
+  type QueuedGift = { msg: ChatMessage; quick: boolean };
+  type SenderQueue = { items: QueuedGift[]; timer: ReturnType<typeof setTimeout> | null };
+  const GIFT_COMBO_WINDOW_MS = 700;
   const giftBannersRef = useRef<GiftBannersHandle>(null);
   const giftQueues = useRef<Map<string, SenderQueue>>(new Map());
+  const lastGiftAt = useRef<Map<string, number>>(new Map());
   // Senders waiting for a banner slot (all 3 busy), first come first served
   const giftWaiting = useRef<string[]>([]);
 
   const playNextGift = useCallback((senderKey: string) => {
     const q = giftQueues.current.get(senderKey);
     if (!q) return;
-    const msg = q.items.shift();
-    if (!msg) { giftQueues.current.delete(senderKey); return; }
+    const next = q.items.shift();
+    if (!next) { giftQueues.current.delete(senderKey); return; }
+    const { msg, quick } = next;
 
     const shown = giftBannersRef.current ? giftBannersRef.current.show(msg) : { isNew: true, row: 0 };
     if (!shown) {
       // All slots busy with other senders: hold this gift (and the rest of this
       // sender's line) until a slot frees up, see handleGiftSlotFree.
-      q.items.unshift(msg);
+      q.items.unshift(next);
       q.timer = null;
       if (!giftWaiting.current.includes(senderKey)) giftWaiting.current.push(senderKey);
       return;
@@ -403,9 +398,11 @@ export function RoomDetailScreen({ roomId = '', onBack, openBattle }: RoomDetail
     const { isNew: isNewBox, row } = shown;
     // A new box needs a moment to slide in before the gift flies out of it
     const startDelay = isNewBox ? 250 : 0;
+    // Continuous tapping (or a pile-up) → fast; a single tap → normal speed
     const backlog = q.items.length;
-    const duration = backlog >= 3 ? 300 : backlog >= 1 ? 400 : 500;
-    const gap = backlog >= 3 ? 40 : backlog >= 1 ? 70 : 100;
+    const fast = quick || backlog >= 3;
+    const duration = fast ? 280 : backlog >= 1 ? 400 : 500;
+    const gap = fast ? 40 : backlog >= 1 ? 70 : 100;
     const targetId = msg.giftForId ?? msg.giftRecipientId;
     giftFlyRef.current?.launch(
       {
@@ -436,9 +433,13 @@ export function RoomDetailScreen({ roomId = '', onBack, openBattle }: RoomDetail
 
   const enqueueGift = useCallback((msg: ChatMessage) => {
     const senderKey = String(msg.user?.id ?? msg.user?.name ?? 'unknown');
+    // Within the combo window of this sender's previous gift = tapping continuously
+    const now = Date.now();
+    const quick = now - (lastGiftAt.current.get(senderKey) ?? 0) < GIFT_COMBO_WINDOW_MS;
+    lastGiftAt.current.set(senderKey, now);
     const existing = giftQueues.current.get(senderKey);
-    if (existing) { existing.items.push(msg); return; }  // already playing — joins the line
-    giftQueues.current.set(senderKey, { items: [msg], timer: null });
+    if (existing) { existing.items.push({ msg, quick }); return; }  // already playing — joins the line
+    giftQueues.current.set(senderKey, { items: [{ msg, quick }], timer: null });
     playNextGift(senderKey);  // new sender starts immediately, alongside others
   }, [playNextGift]);
 
@@ -528,7 +529,7 @@ export function RoomDetailScreen({ roomId = '', onBack, openBattle }: RoomDetail
     // this ID or room (the server's exact message, plus when access returns)
     const leaveRoom = () => { agoraStore.leave(); socketStore.leave(); roomStore.clear(); onBack?.(); };
     const titleFor = (kind?: string, fallback = 'Blocked') =>
-      kind === 'user_ban' ? 'Access Restricted' : kind === 'room_ban' ? 'Chat Room Unavailable' : fallback;
+      kind === 'user_ban' ? 'Access Restricted' : kind === 'room_ban' || kind === 'room_deleted' ? 'Chat Room Unavailable' : fallback;
     const unsub1 = onJoinBlocked((message, info) => {
       Alert.alert(titleFor(info.kind), formatRestriction(message || 'You are blocked from this room.', info.expiresAt), [
         { text: 'OK', onPress: leaveRoom },
@@ -803,9 +804,16 @@ export function RoomDetailScreen({ roomId = '', onBack, openBattle }: RoomDetail
 
   // ── Running battle: status sheet (Battle icon) + result after it ends ──
   const liveBattle = useRoomBattle();
+  // Gifting battles have no raised bridge — the banner sits a little differently
+  const bannerShowsBridge = liveBattle.battle?.mode !== 'gifting';
   const battleResult = useBattleResult();
   const [showBattleStatus, setShowBattleStatus] = useState(false);
   const [cancellingBattle, setCancellingBattle] = useState(false);
+  // The battle is over: forget the status sheet, so it doesn't pop up again
+  // by itself when the next battle starts
+  useEffect(() => {
+    if (!liveBattle.battle) setShowBattleStatus(false);
+  }, [liveBattle.battle]);
 
   const handleCancelBattle = async () => {
     setCancellingBattle(true);
@@ -900,13 +908,9 @@ export function RoomDetailScreen({ roomId = '', onBack, openBattle }: RoomDetail
     coinBalanceRef.current = Math.max(0, coinBalanceRef.current - totalCost);
   };
 
+  // Link opens this room in the app (code when known, else the room id)
   const handleShare = () => {
-    const code = roomInfo?.room_code;
-    const name = roomInfo?.room_name ?? 'Chat Room';
-    if (!code) return;
-    Share.share({
-      message: `Join me in "${name}" on RaRa Live!\n\nRoom Code: ${code}\n\nOpen RaRa Live → Live tab → Join by Code → enter ${code}`,
-    });
+    shareRoom({ idOrCode: roomInfo?.room_code ?? roomId, name: roomInfo?.room_name ?? 'Chat Room' });
   };
 
   const handleAvatarPress = (
@@ -1048,9 +1052,10 @@ export function RoomDetailScreen({ roomId = '', onBack, openBattle }: RoomDetail
         />
 
         {/* Battle banner overlays the bottom of the stage, on top of the seat grid.
-            bottom is computed (not hardcoded) so the banner's internal bridge line
-            lands flush on the stage's bottom edge across all screen widths. */}
-        <View style={[styles.battleOverlay, { bottom: battleOverlayBottom }]} pointerEvents="box-none">
+            Placed from the banner's own geometry, so the stage's bottom edge meets
+            it at the same point on every screen size: the bridge top (normal), or
+            inside the flat middle strip (gifting — nothing shows through). */}
+        <View style={[styles.battleOverlay, { bottom: battleBannerOverlayBottom(screenWidth, bannerShowsBridge) }]} pointerEvents="box-none">
           <BattleBanner
             roomId={roomId}
             coinsByUserId={coinsByUserId}
@@ -1155,6 +1160,8 @@ export function RoomDetailScreen({ roomId = '', onBack, openBattle }: RoomDetail
           onSend={handleSend}
           onGiftOpen={() => setShowGiftShop(true)}
           onBattlePress={handleBattlePress}
+          // Placeholder until the bag (inventory) screen exists
+          onBagPress={() => Alert.alert('Bag', 'Coming soon.')}
           hasRoomBg={!!rewardBgUrl}
           showBattle={isHost && roomInfo?.visibility !== 'private'}
         />
@@ -1252,7 +1259,10 @@ export function RoomDetailScreen({ roomId = '', onBack, openBattle }: RoomDetail
         roomId={roomId}
         myUserId={currentUserId}
         onCloseStatus={() => setShowBattleStatus(false)}
-        onCloseResult={() => { setShowBattleStatus(false); socketStore.dismissBattleResult(); }}
+        onCloseResult={() => {
+          setShowBattleStatus(false);
+          socketStore.dismissBattleResult();
+        }}
       />
 
       <BattleModal
@@ -1285,7 +1295,11 @@ export function RoomDetailScreen({ roomId = '', onBack, openBattle }: RoomDetail
             return;
           }
 
-          setFullscreenGift({ imageUrl: gift.image_url, bgColor: gift.bg_color });
+          // Same gift already showing → keep the same state object, so repeat
+          // taps don't re-render the whole room (that slowed the flying gifts)
+          setFullscreenGift(prev => (prev && prev.imageUrl === gift.image_url && prev.bgColor === gift.bg_color
+            ? prev
+            : { imageUrl: gift.image_url, bgColor: gift.bg_color }));
           const hostUserId = roomInfo?.host_user_id ?? '';
 
           targets.forEach(({ userId: targetUserId, name: targetName }) => {

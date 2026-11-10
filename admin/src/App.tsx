@@ -17,6 +17,7 @@ import { BattleTargetsPage } from './pages/battle-targets/BattleTargetsPage';
 import { SupportPage } from './pages/support/SupportPage';
 import { ReportsPage } from './pages/reports/ReportsPage';
 import { EarningSlabsPage } from './pages/earning-slabs/EarningSlabsPage';
+import { TaskBonusPage } from './pages/task-bonus/TaskBonusPage';
 import { UserHistoryPage } from './pages/users/UserHistoryPage';
 import { UserRechargeHistoryPage } from './pages/users/UserRechargeHistoryPage';
 import { RoomGiftHistoryPage } from './pages/rooms/RoomGiftHistoryPage';
@@ -59,6 +60,7 @@ function App() {
               <Route path="/support" element={<SupportPage />} />
               <Route path="/reports" element={<ReportsPage />} />
               <Route path="/earning-slabs" element={<EarningSlabsPage />} />
+              <Route path="/task-bonus" element={<TaskBonusPage />} />
               <Route path="/users/:userId/history" element={<UserHistoryPage />} />
               <Route path="/users/:userId/recharge" element={<UserRechargeHistoryPage />} />
               <Route path="/rooms/:roomId/gifts" element={<RoomGiftHistoryPage />} />

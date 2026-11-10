@@ -11,7 +11,6 @@ import {
   Dimensions,
   FlatList,
   Image,
-  Linking,
   Modal,
   Platform,
   ScrollView,
@@ -31,6 +30,9 @@ import { socketStore } from '@/store/socket-store';
 import { ImageViewer } from '@/components/ImageViewer';
 import { ProfileTags } from '@/components/ProfileTags';
 import { GradientButton } from '@/components/ui/gradient-button';
+import { BoldIcon } from '@/components/ui/bold-icon';
+import { shareProfile } from '@/utils/share';
+import { ExitIcon } from '@/components/ui/exit-icon';
 import { MenuIcon } from '@/components/ui/menu-icon';
 import { useProfileScroll } from '@/hooks/use-profile-scroll';
 import { LANGUAGE_PICKER_BG, LanguageGrid, LanguagePickerHeading } from '@/screens/language/language-grid';
@@ -91,13 +93,18 @@ function StatBox({ value, label }: { value: number; label: string }) {
   );
 }
 
-function PostGrid({ posts }: { posts: FeedPost[] }) {
+function PostGrid({ posts, emptyIcon = 'images-outline', emptyText = 'No posts yet' }: {
+  posts: FeedPost[];
+  emptyIcon?: keyof typeof Ionicons.glyphMap;
+  emptyText?: string;
+}) {
+  const router = useRouter();
   const SIZE = (SCREEN_W - 4) / 3;
   if (posts.length === 0) {
     return (
       <View style={s.emptyGrid}>
-        <Ionicons name="images-outline" size={48} color="#D0C8F0" />
-        <Text style={s.emptyGridText}>No posts yet</Text>
+        <Ionicons name={emptyIcon} size={48} color="#D0C8F0" />
+        <Text style={s.emptyGridText}>{emptyText}</Text>
       </View>
     );
   }
@@ -114,7 +121,10 @@ function PostGrid({ posts }: { posts: FeedPost[] }) {
         const uri = media ? resolveUrl(media.media_url) : null;
         const isVideo = media?.media_type === 'video';
         return (
-          <View style={{ width: SIZE, height: SIZE, backgroundColor: '#EDE8FF' }}>
+          <TouchableOpacity
+            activeOpacity={0.85}
+            onPress={() => router.push(`/post/${item.id}` as never)}
+            style={{ width: SIZE, height: SIZE, backgroundColor: '#EDE8FF' }}>
             {uri ? (
               <Image source={{ uri }} style={{ width: SIZE, height: SIZE }} resizeMode="cover" />
             ) : (
@@ -127,7 +137,7 @@ function PostGrid({ posts }: { posts: FeedPost[] }) {
                 <Ionicons name="play" size={14} color="#FFFFFF" />
               </View>
             )}
-          </View>
+          </TouchableOpacity>
         );
       }}
     />
@@ -162,10 +172,14 @@ function BottomSheet({ visible, onClose, children, style }: {
 }
 
 // ── Menu sheet (three dots) ───────────────────────────────────────────────────
+// Posts / Saved tab icons: as thick on screen as the bottom tab bar's at this size
+const TAB_ICON_WEIGHT = 16;
+
+// Opened inside the app (screens/legal), not on the website
 const LEGAL_LINKS = [
-  { label: 'Privacy Policy',   icon: 'shield-checkmark', color: '#16A34A', url: 'https://raralive.in/privacy-policy' },
-  { label: 'Terms of Service', icon: 'document-text',    color: '#0D9488', url: 'https://raralive.in/terms' },
-  { label: 'Delete Account',   icon: 'trash',            color: '#E14C57', url: 'https://raralive.in/delete-account' },
+  { label: 'Privacy Policy',   icon: 'shield-checkmark', color: '#16A34A', route: '/legal/privacy-policy' },
+  { label: 'Terms of Service', icon: 'document-text',    color: '#0D9488', route: '/legal/terms' },
+  { label: 'Delete Account',   icon: 'trash',            color: '#E14C57', route: '/legal/delete-account' },
 ] as const;
 
 
@@ -175,6 +189,7 @@ function MenuSheet({ visible, onClose, onEditProfile, onChangeLanguage, onLogout
   /** Only passed for agency accounts. */
   onAgencyWallet?: () => void;
 }) {
+  const router = useRouter();
   return (
     <BottomSheet visible={visible} onClose={onClose}>
       <Text style={s.sheetTitle}>More Options</Text>
@@ -197,19 +212,19 @@ function MenuSheet({ visible, onClose, onEditProfile, onChangeLanguage, onLogout
       )}
       <View style={s.menuDivider} />
       {LEGAL_LINKS.map(link => (
-        <TouchableOpacity key={link.url} style={s.menuItem} onPress={() => { onClose(); Linking.openURL(link.url).catch(() => {}); }} activeOpacity={0.8}>
+        <TouchableOpacity key={link.route} style={s.menuItem} onPress={() => { router.push(link.route as never); onClose(); }} activeOpacity={0.8}>
           <MenuIcon name={link.icon} color={link.color} />
           <Text style={s.menuItemText}>{link.label}</Text>
-          <Ionicons name="open-outline" size={15} color="#ABADB2" />
+          <Ionicons name="chevron-forward" size={15} color="#ABADB2" />
         </TouchableOpacity>
       ))}
       <View style={s.menuDivider} />
       <TouchableOpacity style={s.menuItem} onPress={() => { onClose(); onLogout(); }} activeOpacity={0.8}>
-        <MenuIcon name="log-out" color="#E14C57" />
+        <View style={s.menuIconSlot}><ExitIcon size={22} /></View>
         <Text style={[s.menuItemText, { color: '#E14C57' }]}>Log Out</Text>
       </TouchableOpacity>
       <TouchableOpacity style={s.menuItem} onPress={() => { onClose(); onLogoutAll(); }} activeOpacity={0.8}>
-        <MenuIcon name="phone-portrait" color="#E14C57" />
+        <MenuIcon name="power" color="#E14C57" />
         <Text style={[s.menuItemText, { color: '#E14C57' }]}>Log Out of All Devices</Text>
       </TouchableOpacity>
     </BottomSheet>
@@ -342,7 +357,8 @@ export default function ProfileScreen() {
   const [posts, setPosts] = useState<FeedPost[]>([]);
   const [loading, setLoading] = useState(true);
   const [redirecting, setRedirecting] = useState(false);
-  const [activeTab, setActiveTab] = useState<'posts' | 'liked'>('posts');
+  const [activeTab, setActiveTab] = useState<'posts' | 'saved'>('posts');
+  const [savedPosts, setSavedPosts] = useState<FeedPost[]>([]);
   const [showMenu, setShowMenu] = useState(false);
   const [showLang, setShowLang] = useState(false);
   const [currentLang, setCurrentLang] = useState('en');
@@ -384,6 +400,18 @@ export default function ProfileScreen() {
     const res = await apiChatUnreadCount(token);
     if (res.ok) setUnreadChatCount(res.data.count);
   }, []);
+
+  // Saved tab: fetched each time it's opened or the profile regains focus
+  // (re-runs on tab change too, since the callback changes with activeTab)
+  const loadSavedPosts = useCallback(() => {
+    const token = authStore.getToken();
+    if (!token) return;
+    fetch(`${BASE_URL}/posts/saved`, { headers: { Authorization: `Bearer ${token}` } })
+      .then(r => r.json())
+      .then(j => { if (j.success) setSavedPosts(j.data); })
+      .catch(() => {});
+  }, []);
+  useFocusEffect(useCallback(() => { if (activeTab === 'saved') loadSavedPosts(); }, [activeTab, loadSavedPosts]));
 
   // Initial load with spinner
   useEffect(() => { fetchData(true); fetchUnreadChatCount(); }, []);
@@ -553,34 +581,31 @@ export default function ProfileScreen() {
             <Text style={s.editBtnText}>Edit Profile</Text>
           </TouchableOpacity>
           <TouchableOpacity style={s.shareBtn} onPress={() => router.push('/chat' as any)} activeOpacity={0.85}>
-            <Ionicons name="chatbubble-ellipses-outline" size={17} color="#7A0EED" />
+            <BoldIcon name="chatbubble-ellipses-outline" size={17} color="#7A0EED" weight={20} />
             {unreadChatCount > 0 && (
               <View style={s.chatBadge}>
                 <Text style={s.chatBadgeText}>{unreadChatCount > 10 ? '10+' : unreadChatCount}</Text>
               </View>
             )}
           </TouchableOpacity>
-          <TouchableOpacity style={s.shareBtn} activeOpacity={0.85}>
-            <Ionicons name="share-social-outline" size={17} color="#7A0EED" />
+          <TouchableOpacity style={s.shareBtn} activeOpacity={0.85} onPress={() => shareProfile({ id: profile.id, name: displayName })} accessibilityLabel="Share profile">
+            <BoldIcon name="arrow-redo-outline" size={18} color="#7A0EED" weight={20} />
           </TouchableOpacity>
         </View>
 
         {/* Tabs */}
         <View style={s.tabRow}>
           <TouchableOpacity style={[s.tab, activeTab === 'posts' && s.tabActive]} onPress={() => setActiveTab('posts')} activeOpacity={0.8}>
-            <Ionicons name="grid-outline" size={19} color={activeTab === 'posts' ? '#7A0EED' : '#ABADB2'} />
+            <BoldIcon name="grid-outline" size={19} color={activeTab === 'posts' ? '#7A0EED' : '#ABADB2'} weight={TAB_ICON_WEIGHT} />
           </TouchableOpacity>
-          <TouchableOpacity style={[s.tab, activeTab === 'liked' && s.tabActive]} onPress={() => setActiveTab('liked')} activeOpacity={0.8}>
-            <Ionicons name="heart-outline" size={19} color={activeTab === 'liked' ? '#7A0EED' : '#ABADB2'} />
+          <TouchableOpacity style={[s.tab, activeTab === 'saved' && s.tabActive]} onPress={() => setActiveTab('saved')} activeOpacity={0.8}>
+            <BoldIcon name={activeTab === 'saved' ? 'bookmark' : 'bookmark-outline'} size={19} color={activeTab === 'saved' ? '#7A0EED' : '#ABADB2'} weight={TAB_ICON_WEIGHT} />
           </TouchableOpacity>
         </View>
 
-        {activeTab === 'posts' ? <PostGrid posts={posts} /> : (
-          <View style={s.emptyGrid}>
-            <Ionicons name="heart-outline" size={48} color="#D0C8F0" />
-            <Text style={s.emptyGridText}>No liked posts</Text>
-          </View>
-        )}
+        {activeTab === 'posts'
+          ? <PostGrid posts={posts} />
+          : <PostGrid posts={savedPosts} emptyIcon="bookmark-outline" emptyText="No saved posts" />}
       </View>
       </Animated.ScrollView>
 
@@ -682,6 +707,8 @@ const s = StyleSheet.create({
   sheetTitle:  { fontSize: 16, fontWeight: '800', color: '#1C1E22', paddingHorizontal: 16, marginBottom: 6 },
 
   // Menu items
+  // Same 32px slot as MenuIcon, for the drawn icons
+  menuIconSlot: { width: 32, height: 32, alignItems: 'center', justifyContent: 'center' },
   menuItem:     { flexDirection: 'row', alignItems: 'center', gap: 12, paddingHorizontal: 16, paddingVertical: 10 },
   menuItemText: { flex: 1, fontSize: 14, fontWeight: '600', color: '#1C1E22' },
   menuDivider:  { height: StyleSheet.hairlineWidth, backgroundColor: '#F0EDF8', marginHorizontal: 16, marginVertical: 4 },

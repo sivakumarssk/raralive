@@ -48,7 +48,7 @@ router.get('/top-gifted', async (req, res, next) => {
               COALESCE(SUM(e.coins * e.quantity), 0)::int AS total_coins
        FROM room_gift_events e
        JOIN rooms r ON r.id = e.room_id
-       WHERE 1=1 ${dateFilter}
+       WHERE r.deleted_at IS NULL ${dateFilter}
        GROUP BY r.id, r.room_name, r.room_image_url
        HAVING COALESCE(SUM(e.coins * e.quantity), 0) > 0
        ORDER BY total_coins DESC
@@ -346,5 +346,6 @@ router.get('/:id/users/:userId/gift-stats', async (req, res, next) => {
 router.get('/:id', roomController.getRoom);
 router.post('/', authenticate, roomController.createRoom);
 router.post('/:id/rename', authenticate, roomController.renameRoom);
+router.delete('/:id', authenticate, roomController.deleteRoom);
 
 module.exports = router;

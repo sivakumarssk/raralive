@@ -24,6 +24,7 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import { BASE_URL, MEDIA_BASE } from '@/services/api';
 import { authStore } from '@/store/auth-store';
 import { avatarSource } from '@/utils/default-avatar';
+import { BIO_MAX, FULL_NAME_MAX, USERNAME_MAX, USERNAME_RE, USERNAME_RULE, cleanUsername, limitChars } from '@/utils/text-limits';
 
 const SCREEN_W = Dimensions.get('window').width;
 const COVER_H = 200;
@@ -145,6 +146,7 @@ export function EditProfileScreen() {
   // editable fields
   const [fullName, setFullName] = useState('');
   const [username, setUsername] = useState('');
+  const [originalUsername, setOriginalUsername] = useState('');
   const [bio, setBio] = useState('');
   const [location, setLocation] = useState('');
   const [gender, setGender] = useState('');
@@ -173,6 +175,7 @@ export function EditProfileScreen() {
         setProfile(p);
         setFullName(p.full_name || '');
         setUsername(p.username || '');
+        setOriginalUsername(p.username || '');
         setBio(p.bio || '');
         setLocation(p.location || '');
         setGender(p.gender ? p.gender.charAt(0).toUpperCase() + p.gender.slice(1) : '');
@@ -204,6 +207,8 @@ export function EditProfileScreen() {
 
   const handleSave = async () => {
     if (!username.trim()) { setError('Username is required.'); return; }
+    // An existing username from before the current rules is kept as is
+    if (username.trim() !== originalUsername && !USERNAME_RE.test(username.trim())) { setError(USERNAME_RULE); return; }
     const missing: { gender?: string; dob?: string } = {};
     if (!gender) missing.gender = 'Please select your gender.';
     if (!dob) missing.dob = 'Please select your date of birth.';
@@ -314,15 +319,15 @@ export function EditProfileScreen() {
           {/* Fields */}
           <View style={st.form}>
             <Field label="Full name" icon="person-outline">
-              <TextInput style={st.input} value={fullName} onChangeText={setFullName} placeholder="Your full name" placeholderTextColor="#C4C5CC" />
+              <TextInput style={st.input} value={fullName} onChangeText={v => setFullName(limitChars(v, FULL_NAME_MAX))} placeholder="Your full name" placeholderTextColor="#C4C5CC" />
             </Field>
 
             <Field label="Username *" icon="at-outline">
-              <TextInput style={st.input} value={username} onChangeText={setUsername} placeholder="username" placeholderTextColor="#C4C5CC" autoCapitalize="none" />
+              <TextInput style={st.input} value={username} onChangeText={v => setUsername(cleanUsername(v))} placeholder="username" placeholderTextColor="#C4C5CC" autoCapitalize="none" autoCorrect={false} maxLength={USERNAME_MAX} />
             </Field>
 
             <Field label={`Bio (optional) · ${bio.length}/150`} icon="document-text-outline">
-              <TextInput style={[st.input, { height: 72, textAlignVertical: 'top', paddingTop: 10 }]} value={bio} onChangeText={setBio} placeholder="Tell people about yourself…" placeholderTextColor="#C4C5CC" multiline maxLength={150} />
+              <TextInput style={[st.input, { height: 72, textAlignVertical: 'top', paddingTop: 10 }]} value={bio} onChangeText={v => setBio(limitChars(v, BIO_MAX))} placeholder="Tell people about yourself…" placeholderTextColor="#C4C5CC" multiline />
             </Field>
 
             <Field label="Location" icon="location-outline">

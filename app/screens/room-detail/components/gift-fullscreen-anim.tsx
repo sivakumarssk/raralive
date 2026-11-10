@@ -40,7 +40,8 @@ export function GiftFullscreenAnim({ visible, imageUrl, bgColor = '#FFE4EE', onD
   return (
     <Modal visible={visible} transparent animationType="none" statusBarTranslucent>
       <Animated.View style={[s.overlay, { opacity }]}>
-        <Animated.View style={[s.imgWrap, { backgroundColor: bgColor, transform: [{ scale }] }]}>
+        {/* Gifts are shown on their own — no coloured circle behind them */}
+        <Animated.View style={[s.imgWrap, { transform: [{ scale }] }]}>
           {imgUri
             ? <Image source={{ uri: imgUri }} style={s.img} resizeMode="contain" />
             : <View style={s.fallback} />

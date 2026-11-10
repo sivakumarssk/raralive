@@ -202,7 +202,7 @@ function usernameCandidate(seed) {
     .replace(/[^a-z0-9]/g, '_')
     .replace(/_+/g, '_')
     .replace(/^_|_$/g, '')
-    .slice(0, 14);
+    .slice(0, 10); // + "_1234" = 15, the username limit (utils/text-limits.js)
   return `${base || 'agency'}_${Math.floor(1000 + Math.random() * 9000)}`;
 }
 

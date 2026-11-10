@@ -2,8 +2,8 @@
 // export const BASE_URL = 'https://api.raralive.in/api';
 // export const MEDIA_BASE = 'https://api.raralive.in';
 
-export const BASE_URL = 'http://192.168.1.42:5000/api';
-export const MEDIA_BASE = 'http://192.168.1.42:5000';
+export const BASE_URL = 'http://192.168.0.7:5000/api';
+export const MEDIA_BASE = 'http://192.168.0.7:5000';
 
 export type ApiResult<T = unknown> =
   | { ok: true; data: T }
@@ -459,12 +459,24 @@ export type MyRoom = {
   district: string | null;
   agency_name: string;
   current_level: number;
+  /** Topic tags picked at creation (labels from ROOM_TAGS). */
+  tags?: string[];
+  /** Host's gender — picks the default avatar when room_image_url is null. */
+  host_gender?: string | null;
   created_at: string;
 };
 
 export async function apiMyRooms(token: string) {
   return request<MyRoom[]>('/rooms/my', {
     method: 'GET',
+    headers: { Authorization: `Bearer ${token}` },
+  });
+}
+
+/** Host deletes their own private room (soft delete on the server). */
+export async function apiDeleteRoom(roomId: string, token: string) {
+  return request<unknown>(`/rooms/${roomId}`, {
+    method: 'DELETE',
     headers: { Authorization: `Bearer ${token}` },
   });
 }
@@ -479,6 +491,8 @@ export type PublicRoom = {
   district: string | null;
   /** The host's current app language (rooms follow their host). */
   language?: string;
+  tags?: string[];
+  host_gender?: string | null;
 };
 
 /**
